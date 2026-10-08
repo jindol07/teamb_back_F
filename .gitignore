@@ -1,21 +1,138 @@
-.gradle
+
+# ==========================================
+# APCMS Backend - Git Ignore
+# apcms_a : 관리자 Spring Boot
+# apcms_u : 사용자 Spring Boot
+# ==========================================
+
+
+# ==========================================
+# 1. Gradle
+# ==========================================
+.gradle/
+**/.gradle/
 **/build/
 !**/src/**/build/
 
-# Ignore Gradle GUI config
 gradle-app.setting
-
-# Avoid ignoring Gradle wrapper jar file (.jar files are usually ignored)
-!gradle-wrapper.jar
-
-# Avoid ignore Gradle wrapper properties
-!gradle-wrapper.properties
-
-# Cache of project
 .gradletasknamecache
 
-# Eclipse Gradle plugin generated files
-# Eclipse Core
+# Gradle Wrapper JAR 허용
+!gradle-wrapper.jar
+!gradle-wrapper.properties
+
+
+# ==========================================
+# 2. STS / Eclipse
+# ==========================================
 .project
-# JDT-specific (Eclipse Java Development Tools)
 .classpath
+.settings/
+**/.settings/
+.springBeans
+.sts4-cache/
+**/.sts4-cache/
+.factorypath
+.metadata/
+.recommenders/
+
+# IDE 컴파일 결과물
+bin/
+**/bin/
+
+
+# ==========================================
+# 3. IntelliJ IDEA
+# ==========================================
+.idea/
+**/.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+
+# ==========================================
+# 4. Java
+# ==========================================
+*.class
+*.log
+hs_err_pid*
+replay_pid*
+
+# 빌드 산출물
+*.jar
+*.war
+*.ear
+
+# Gradle Wrapper JAR는 제외하지 않음
+!**/gradle/wrapper/gradle-wrapper.jar
+
+
+# ==========================================
+# 5. Spring Boot Main Application
+# ==========================================
+# 관리자 메인 클래스
+/apcms_a/src/main/java/kr/co/alpharking/ApcmsAApplication.java
+
+# 사용자 메인 클래스
+/apcms_u/src/main/java/kr/co/alpharking/ApcmsUApplication.java
+
+
+# ==========================================
+# 6. Spring Boot 환경설정
+# ==========================================
+# 개인 개발 환경설정
+**/application-local.yml
+**/application-local.yaml
+**/application-local.properties
+
+# 민감정보 설정
+**/application-secret.yml
+**/application-secret.yaml
+**/application-secret.properties
+
+# 환경변수 파일
+.env
+.env.*
+**/.env
+**/.env.*
+
+# 예제 환경변수 파일 허용
+!.env.example
+!**/.env.example
+
+
+# ==========================================
+# 7. Log
+# ==========================================
+logs/
+**/logs/
+log/
+**/log/
+*.log
+
+
+# ==========================================
+# 8. OS
+# ==========================================
+# Windows
+Thumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+
+# ==========================================
+# 9. Temporary Files
+# ==========================================
+*.tmp
+*.temp
+*.bak
+*.swp
+*.swo
+*~
