@@ -1,0 +1,18 @@
+# FastAPI 서버
+fastapi # AI 서버의 API를 만드는 프레임워크
+uvicorn # FastAPI 서버를 실제로 실행
+python-multipart # Spring Boot에서 보내는 이미지 파일 multipart/form-data 처리
+
+# YOLO 차량 / 번호판 탐지
+ultralytics # YOLO를 이용한 차량 및 번호판 탐지
+
+# PaddleOCR
+paddleocr # 번호판 이미지의 문자 OCR
+paddlepaddle # PaddleOCR가 실제 연산을 수행하는 엔진 (프레임워크)
+
+# 이미지 처리
+opencv-python # cv2를 사용한 이미지 자르기, 확대, grayscale, CLAHE 등의 전처리
+numpy
+
+# 이미지 관련
+Pillow # Python 이미지 관련 처리를 위한 라이브러리이며 여러 이미지 라이브러리와 함께 사용됨
