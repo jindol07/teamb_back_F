@@ -9,13 +9,13 @@ import pandas as pd
 from ultralytics import YOLO
 from paddleocr import PaddleOCR
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+sys.path.insert(0, Path(__file__).resolve().parents[2])
 from paths import MODEL_DIR, RESULT_DIR, TEST_IMAGE_DIR
 
 
 # 1. 모델 경로
-VEHICLE_MODEL_PATH = str(MODEL_DIR / "yolo11n.pt")
-PLATE_MODEL_PATH = str(MODEL_DIR / "license_plate_yolov8n.pt")
+VEHICLE_MODEL_PATH = MODEL_DIR / "yolo11n.pt"
+PLATE_MODEL_PATH = MODEL_DIR / "license_plate_yolov8n.pt"
 
 
 # 2. 테스트 이미지 정답
