@@ -8,7 +8,7 @@ from fastapi import HTTPException
 import cv2
 import numpy as np
 
-from recognizer import recognize_image
+from recognition.recognizer import recognize_image
 
 
 # =========================================================

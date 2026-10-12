@@ -1,3 +1,9 @@
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import MODEL_DIR, DATA_DIR, RESULT_DIR, TEST_IMAGE_DIR
+
 import unicodedata # 유니코드 문자 데이터베이스를 다루는 라이브러리
 from PIL import Image # Image : 이미지 파일을 불러오고, 이미지 데이터를 다루는 라이브러리
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
@@ -15,7 +21,7 @@ processor = TrOCRProcessor.from_pretrained(model_name)
 model = VisionEncoderDecoderModel.from_pretrained(model_name)
 
 # 번호판 이미지 경로
-image_path = "results/plates/plate_1.jpg"
+image_path = RESULT_DIR / "plates" / "plate_1.jpg"
 
 image = Image.open(image_path).convert("RGB")
 
