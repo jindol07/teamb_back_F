@@ -3,6 +3,7 @@
 # APCMS Backend - Git Ignore
 # apcms_a : 관리자 Spring Boot
 # apcms_u : 사용자 Spring Boot
+# apcms_ai : AI Python
 # ==========================================
 
 
@@ -136,3 +137,41 @@ $RECYCLE.BIN/
 *.swp
 *.swo
 *~
+
+
+# ==========================================
+# 10. AI / Python
+# ==========================================
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+
+# Test/cache
+.pytest_cache/
+
+# Jupyter Notebook 체크포인트
+.ipynb_checkpoints/
+
+# AI 실행 결과
+results/
+
+# 모델 파일 (대용량 파일 방지)
+models/
+weights/
+*.pt
+*.pth
+*.h5
+*.ckpt
+*.onnx
+*.pkl
+*.joblib
