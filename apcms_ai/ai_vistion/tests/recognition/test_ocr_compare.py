@@ -1,3 +1,10 @@
+from pathlib import Path
+import os
+import sys
+
+AI_DIR = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(AI_DIR))
+os.chdir(AI_DIR)
 
 from pathlib import Path
 import re

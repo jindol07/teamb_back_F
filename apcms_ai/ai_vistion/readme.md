@@ -5,7 +5,10 @@ pip install -r requirements.txt
 python -m uvicorn main:app --reload --port 8000
 
 =====================================================================================================
-[YOLO]
+[YOLO,COCO]
+
+YOLO : 이미지 전체를 단 한 번만 보고 그 안에 있는 객체의 종류와 위치를 찾아내는 실시간 객체 탐지 모델
+(You Only Look Once)
 
 pip install ultralytics
 
@@ -22,8 +25,11 @@ matplotlib : 결과 시각화
 
 Python 코드 -> Ultralytics -> PyTorch (ultralytics가 내부적으로 PyTorch를 사용) -> CPU 또는 GPU 연산
 
-yolo11n.pt : 이미 학습되어 있는 YOLO 모델 파일
+yolo11n.pt : COCO 데이터셋으로 사전 학습된 YOLO11 nano 모델 가중치 파일
 
+COCO : 이미지 속 사물을 인식하도록 학습시키기 위해 만들어진 데이터셋
+(Common Objects in Context)
+다양한 사물의 이미지와 정답 정보를 모아놓은 학습 자료
 =====================================================================================================
 [OCR]
 

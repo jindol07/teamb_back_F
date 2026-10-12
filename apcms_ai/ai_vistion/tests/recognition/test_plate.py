@@ -1,13 +1,19 @@
 from ultralytics import YOLO
-import cv2, os
+from pathlib import Path
+import os
+import sys
+import cv2
 
-os.makedirs("results/plates", exist_ok=True)
+sys.path.insert(0, Path(__file__).resolve().parents[2])
+from paths import MODEL_DIR, RESULT_DIR
+
+os.makedirs(RESULT_DIR / "plates", exist_ok=True)
 
 # 번호판 탐지 모델
-model = YOLO("models/license_plate_yolov8n.pt")
+model = YOLO(MODEL_DIR / "license_plate_yolov8n.pt")
 
 # 앞 단계에서 잘라낸 차량 이미지
-image_path = "results/vehicle_2.jpg"
+image_path = RESULT_DIR / "vehicle_2.jpg"
 
 # 번호판 탐지
 results = model(image_path, conf=0.25)
@@ -34,12 +40,12 @@ for result in results:
         plate_crop = image[y1:y2, x1:x2]
 
         cv2.imwrite(
-            f"results/plates/plate_{plate_count}.jpg",
+            RESULT_DIR / "plates" / f"plate_{plate_count}.jpg",
             plate_crop
         )
 
     result.save(
-        filename="results/plates/result_plate.jpg"
+        filename=RESULT_DIR / "plates" / "result_plate.jpg"
     )
 
 print("번호판 탐지 완료")

@@ -1,11 +1,17 @@
+from pathlib import Path
+import os
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import RESULT_DIR
+
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 from PIL import Image
 import cv2
 import unicodedata
-import os
 
 # 결과 저장 폴더 생성
-os.makedirs("results/trocr_compare", exist_ok=True)
+os.makedirs(RESULT_DIR / "trocr_compare", exist_ok=True)
 
 # 사용할 Ko-TrOCR 모델
 model_name = "ddobokki/ko-trocr"
@@ -14,7 +20,7 @@ processor = TrOCRProcessor.from_pretrained(model_name)
 model = VisionEncoderDecoderModel.from_pretrained(model_name)
 
 # 원본 번호판 이미지
-image_path = "results/plates/plate_1.jpg"
+image_path = str(RESULT_DIR / "plates" / "plate_1.jpg")
 
 # OpenCV로 이미지 읽기
 image = cv2.imread(image_path)
@@ -55,7 +61,7 @@ def run_trocr(image_path, label):
 # 1. 원본 이미지
 # -----------------------------------------
 
-original_path = "results/trocr_compare/01_original.jpg"
+original_path = str(RESULT_DIR / "trocr_compare" / "01_original.jpg")
 
 cv2.imwrite(
     original_path,
@@ -75,7 +81,7 @@ upscaled = cv2.resize(
     interpolation=cv2.INTER_CUBIC
 )
 
-upscaled_path = "results/trocr_compare/02_upscaled.jpg"
+upscaled_path = str(RESULT_DIR / "trocr_compare" / "02_upscaled.jpg")
 
 cv2.imwrite(
     upscaled_path,
@@ -92,7 +98,7 @@ gray = cv2.cvtColor(
     cv2.COLOR_BGR2GRAY
 )
 
-gray_path = "results/trocr_compare/03_gray.jpg"
+gray_path = str(RESULT_DIR / "trocr_compare" / "03_gray.jpg")
 
 cv2.imwrite(
     gray_path,
@@ -111,7 +117,7 @@ clahe = cv2.createCLAHE(
 
 clahe_image = clahe.apply(gray)
 
-clahe_path = "results/trocr_compare/04_clahe.jpg"
+clahe_path = str(RESULT_DIR / "trocr_compare" / "04_clahe.jpg")
 
 cv2.imwrite(
     clahe_path,

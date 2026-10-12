@@ -16,3 +16,7 @@ numpy
 
 # 이미지 관련
 Pillow # Python 이미지 관련 처리를 위한 라이브러리이며 여러 이미지 라이브러리와 함께 사용됨
+
+# 주피터 노트북 관련
+ipympl # Matplotlib 그래프를 마우스로 조작할 수 있도록 해주는 라이브러리
+ipykernel # Python 환경을 Jupyter의 실행 커널로 사용할 수 있게 해주는 라이브러리
