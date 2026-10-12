@@ -1,0 +1,26 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# Test/cache
+.pytest_cache/
+
+# AI 실행 결과
+results/
+# RAG 빌드 / 개발용 대화 DB
+ai_inquiry/chroma_db/
+ai_inquiry/mocks/*.sqlite3
