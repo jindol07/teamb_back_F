@@ -1,18 +1,14 @@
 from pathlib import Path
-import os
 import sys
-
-AI_DIR = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(AI_DIR))
-os.chdir(AI_DIR)
-
-from pathlib import Path
 import re
 import unicodedata
-
 from PIL import Image
 from paddleocr import PaddleOCR
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from paths import MODEL_DIR, DATA_DIR, RESULT_DIR, TEST_IMAGE_DIR
+
 
 # 1. 실제 정답 데이터
 GROUND_TRUTH = {
@@ -26,11 +22,11 @@ GROUND_TRUTH = {
 # 2. 비교 대상 번호판 이미지
 # car2의 모자이크 차량은 제외
 PLATE_IMAGES = {
-    "car": "results/pipeline/car/plate_2_1.jpg",
-    "car2": "results/pipeline/car2/plate_2_1.jpg",
-    "car3": "results/pipeline/car3/plate_1_1.jpg",
-    "car4": "results/pipeline/car4/plate_1_1.jpg",
-    "car5": "results/pipeline/car5/plate_1_1.jpg",
+    "car": RESULT_DIR / "pipeline" / "car" / "plate_2_1.jpg",
+    "car2": RESULT_DIR / "pipeline" / "car2" / "plate_2_1.jpg",
+    "car3": RESULT_DIR / "pipeline" / "car3" / "plate_1_1.jpg",
+    "car4": RESULT_DIR / "pipeline" / "car4" / "plate_1_1.jpg",
+    "car5": RESULT_DIR / "pipeline" / "car5" / "plate_1_1.jpg",
 }
 
 # 3. 결과 비교를 위한 문자열 정규화 (한글 Unicode를 정규화하고 공백을 제거하며 영문을 대문자로 통일)
