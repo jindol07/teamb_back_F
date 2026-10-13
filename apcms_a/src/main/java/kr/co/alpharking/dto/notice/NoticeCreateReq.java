@@ -22,5 +22,8 @@ public class NoticeCreateReq {
 	private String deletedAt;
 	//1:N 즉 collection관계 
     private List<NoticeFiles> getfilelist;
+    //10/13
+    private String importantYn = "N"; // 중요 공지 여부
+    private String pinnedYn = "N";    // 상단 고정 여부
 	
 }
