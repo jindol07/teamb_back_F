@@ -4,45 +4,66 @@
 <mapper namespace="kr.co.alpharking.dao.notice.NoticeDao">
 
 <insert id="add" parameterType="nidto">
-	insert into notice
-		(notice_id
-		,writer_admin_id
-		,notice_type_code
-		,title
-		,CONTENT
-		,created_at
-		,updated_at)
-	  values(
-		seq_notice.NEXTVAL
-		,#{writerAdminId}
-		,#{noticeTypeCode}
-		,#{title}
-		,#{content}
-		,sysdate
-		,sysdate)
+
+    <selectKey keyProperty="noticeId" resultType="int" order="BEFORE">
+        SELECT seq_notice.NEXTVAL FROM dual
+    </selectKey>
+
+    INSERT INTO NOTICE
+        (notice_id
+        ,writer_admin_id
+        ,notice_type_code
+        ,title
+        ,content
+        ,important_yn
+        ,pinned_yn
+        ,created_at
+        ,updated_at)
+    VALUES
+        (#{noticeId}
+        ,#{writerAdminId}
+        ,#{noticeTypeCode}
+        ,#{title}
+        ,#{content}
+        ,#{importantYn}
+        ,#{pinnedYn}
+        ,SYSDATE
+        ,SYSDATE)
+
 </insert>
 
+<!-- 첨부파일 고유번호 생성 -->
+<select id="nextAttachmentId" resultType="int">
+    SELECT seq_notice_attachment.NEXTVAL FROM dual
+</select>
+
+<!-- 첨부파일 등록 -->
 <insert id="addfile" parameterType="java.util.List">
-	<!-- 현재 시퀀스 값 가져오기 -->
-	<selectKey keyProperty="id" resultType="int" order="BEFORE">
-		SELECT seq_notice.currVal FROM dual
-	</selectKey>
-	<foreach collection="list" item="file" separator=" " open="insert all"
-		close="select * from dual"
-	>
-		INTO NOTICE_ATTACHMENT 
-			(notice_attachment_id
-			,notice_id
-			,original_name
-			,file_path
-			,created_at) 
-		  VALUES
-		  	(seq_notice_attachment.NEXTVAL
-		  	,#{id}
-		  	,#{file.originalName}
-		  	,#{file.filePath}
-		  	,sysdate)
-	</foreach>
-</insert>
 
+    <foreach collection="list"
+             item="file"
+             separator=" "
+             open="INSERT ALL"
+             close="SELECT 1 FROM dual">
+
+        INTO NOTICE_ATTACHMENT
+            (notice_attachment_id
+            ,notice_id
+            ,original_name
+            ,stored_name
+            ,file_path
+            ,file_size
+            ,created_at)
+        VALUES
+            (#{file.noticeAttachmentId}
+            ,#{file.noticeId}
+            ,#{file.originalName}
+            ,#{file.storedName}
+            ,#{file.filePath}
+            ,#{file.fileSize}
+            ,SYSDATE)
+
+    </foreach>
+
+</insert>
 </mapper>

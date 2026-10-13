@@ -14,4 +14,6 @@ public interface NoticeDao {
 	
 	void addfile(List<NoticeFiles> nfvo);
 	
+	// 첨부파일 고유번호 생성
+    Integer nextAttachmentId();
 }
