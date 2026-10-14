@@ -13,7 +13,12 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.PutMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -21,115 +26,252 @@ import org.springframework.web.multipart.MultipartFile;
 
 import kr.co.alpharking.dto.notice.NoticeCreateReq;
 import kr.co.alpharking.dto.notice.NoticeFiles;
+import kr.co.alpharking.dto.notice.NoticeHistory;
 import kr.co.alpharking.service.notice.NoticeService;
 
 @RestController
 @RequestMapping("/api/notice")
 public class NoticeController {
 
-	@Autowired
-	private NoticeService noticeService;
+    @Autowired
+    private NoticeService noticeService;
 
-	@Value("${spring.servlet.multipart.location}")
-	private String filePath;
+    // application.properties에 설정된 파일 저장 경로
+    @Value("${spring.servlet.multipart.location}")
+    private String filePath;
 
-	@PostMapping("/add")
-	public ResponseEntity<?> addNotice(NoticeCreateReq galleryVO,
-			@RequestParam(value = "files", required = false) MultipartFile[] images) {
+    // ========================================
+    // 1. 공지사항 등록 + 첨부파일 등록
+    // ========================================
+    @PostMapping("/add")
+    public ResponseEntity<?> addNotice(
+            NoticeCreateReq galleryVO,
+            @RequestParam(value = "files", required = false)
+            MultipartFile[] images) {
 
-		// 1. 첨부파일 정보를 저장할 목록
-		List<NoticeFiles> imageList = new ArrayList<>();
+        // 첨부파일 정보를 저장할 목록
+        List<NoticeFiles> imageList = new ArrayList<>();
 
-		// DB 등록 실패 시 저장된 파일을 정리하기 위한 목록
-		List<Path> savedPaths = new ArrayList<>();
+        // DB 등록 실패 시 저장된 파일을 정리하기 위한 목록
+        List<Path> savedPaths = new ArrayList<>();
 
-		try {
-			// 2. 파일 저장 폴더 생성
-			Path uploadDir = Paths.get(filePath, "notice").toAbsolutePath().normalize();
+        try {
 
-			Files.createDirectories(uploadDir);
+            // 파일 저장 폴더 생성
+            Path uploadDir = Paths.get(filePath, "notice")
+                    .toAbsolutePath()
+                    .normalize();
 
-			// 3. 첨부파일이 있을 경우 처리
-			if (images != null) {
+            Files.createDirectories(uploadDir);
 
-				for (MultipartFile file : images) {
+            // 첨부파일이 있을 경우 처리
+            if (images != null) {
 
-					if (file.isEmpty()) {
-						continue;
-					}
+                for (MultipartFile file : images) {
 
-					// 4. 원본 파일명 가져오기
-					String originalFilename = file.getOriginalFilename();
+                    if (file.isEmpty()) {
+                        continue;
+                    }
 
-					if (originalFilename == null || originalFilename.isBlank()) {
-						throw new IllegalArgumentException("파일명이 올바르지 않습니다.");
-					}
+                    // 원본 파일명 가져오기
+                    String originalFilename = file.getOriginalFilename();
 
-					// 경로 문자열 제거
-					originalFilename = originalFilename.replace("\\", "/");
+                    if (originalFilename == null
+                            || originalFilename.isBlank()) {
 
-					originalFilename = originalFilename.substring(originalFilename.lastIndexOf("/") + 1);
+                        throw new IllegalArgumentException(
+                                "파일명이 올바르지 않습니다."
+                        );
+                    }
 
-					if (originalFilename.isBlank() || originalFilename.length() > 100) {
-						throw new IllegalArgumentException("파일명은 100자 이하여야 합니다.");
-					}
+                    // 경로 문자열 제거
+                    originalFilename = originalFilename.replace("\\", "/");
 
-					// 5. 서버 저장 파일명 생성
-					String storedName = UUID.randomUUID().toString() + "_" + originalFilename;
+                    originalFilename = originalFilename.substring(
+                            originalFilename.lastIndexOf("/") + 1
+                    );
 
-					if (storedName.length() > 100) {
-						throw new IllegalArgumentException("저장 파일명이 100자를 초과합니다.");
-					}
+                    // 원본 파일명 길이 검사
+                    if (originalFilename.isBlank()
+                            || originalFilename.length() > 100) {
 
-					// 6. 저장 경로 생성
-					Path savePath = uploadDir.resolve(storedName).normalize();
+                        throw new IllegalArgumentException(
+                                "파일명은 100자 이하여야 합니다."
+                        );
+                    }
 
-					// 파일 크기 확인
-					int fileSize = Math.toIntExact(file.getSize());
+                    // UUID 기반 저장 파일명 생성
+                    String storedName =
+                            UUID.randomUUID().toString()
+                            + "_"
+                            + originalFilename;
 
-					// 7. 실제 파일 저장
-					file.transferTo(savePath);
-					savedPaths.add(savePath);
+                    // 저장 파일명 길이 검사
+                    if (storedName.length() > 100) {
 
-					// 8. 첨부파일 DTO 생성
-					NoticeFiles imageVO = new NoticeFiles();
-					
-					imageVO.setOriginalName(originalFilename);
-					imageVO.setStoredName(storedName);
-					imageVO.setFilePath(savePath.toString());
-					imageVO.setFileSize(fileSize);
+                        throw new IllegalArgumentException(
+                                "저장 파일명이 100자를 초과합니다."
+                        );
+                    }
 
-					// 9. 목록에 추가
-					imageList.add(imageVO);
-				}
-			}
+                    // 실제 파일 저장 경로
+                    Path savePath = uploadDir.resolve(storedName)
+                            .normalize();
 
-			// 10. 기존 팀장님 코드 유지
-			galleryVO.setGetfilelist(imageList);
+                    // 파일 크기 확인
+                    int fileSize = Math.toIntExact(file.getSize());
 
-			// 11. 공지사항 + 첨부파일 DB 등록
-			noticeService.transcationProcess(galleryVO, imageList);
+                    // 실제 파일 저장
+                    file.transferTo(savePath);
+                    savedPaths.add(savePath);
 
-			return ResponseEntity.ok("공지사항 등록(파일포함) 성공!");
+                    // 첨부파일 DTO 생성
+                    NoticeFiles imageVO = new NoticeFiles();
 
-		} catch (Exception e) {
+                    imageVO.setOriginalName(originalFilename);
+                    imageVO.setStoredName(storedName);
+                    imageVO.setFilePath(savePath.toString());
+                    imageVO.setFileSize(fileSize);
 
-			e.printStackTrace();
+                    // 첨부파일 목록에 추가
+                    imageList.add(imageVO);
+                }
+            }
 
-			// 실패 시 이번 요청에서 저장한 파일 정리
-			for (Path savedPath : savedPaths) {
-				try {
-					Files.deleteIfExists(savedPath);
-				} catch (IOException cleanupError) {
-					cleanupError.printStackTrace();
-				}
-			}
+            // 공지사항 DTO에 첨부파일 목록 설정
+            galleryVO.setGetfilelist(imageList);
 
-			if (e instanceof IllegalArgumentException || e instanceof ArithmeticException) {
-				return ResponseEntity.badRequest().body("첨부파일 정보가 올바르지 않습니다.");
-			}
+            // 공지사항 + 첨부파일 DB 등록
+            noticeService.transcationProcess(galleryVO, imageList);
 
-			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("공지사항 등록(파일포함) 실패...");
-		}
-	}
+            return ResponseEntity.ok(
+                    "공지사항 등록(파일포함) 성공!"
+            );
+
+        } catch (Exception e) {
+
+            e.printStackTrace();
+
+            // 등록 실패 시 저장한 파일 정리
+            for (Path savedPath : savedPaths) {
+
+                try {
+                    Files.deleteIfExists(savedPath);
+
+                } catch (IOException cleanupError) {
+                    cleanupError.printStackTrace();
+                }
+            }
+
+            if (e instanceof IllegalArgumentException
+                    || e instanceof ArithmeticException) {
+
+                return ResponseEntity.badRequest()
+                        .body("첨부파일 정보가 올바르지 않습니다.");
+            }
+
+            return ResponseEntity
+                    .status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body("공지사항 등록(파일포함) 실패...");
+        }
+    }
+
+    // ========================================
+    // 2. 공지사항 목록 조회
+    // ========================================
+    @GetMapping
+    public ResponseEntity<List<NoticeCreateReq>> getNoticeList() {
+
+        List<NoticeCreateReq> noticeList =
+                noticeService.getNoticeList();
+
+        return ResponseEntity.ok(noticeList);
+    }
+
+    // ========================================
+    // 3. 공지사항 상세 조회
+    // ========================================
+    @GetMapping("/{noticeId}")
+    public ResponseEntity<NoticeCreateReq> getNoticeDetail(
+            @PathVariable("noticeId") Integer noticeId) {
+
+        // 해당 공지사항 조회
+        NoticeCreateReq notice =
+                noticeService.getNoticeDetail(noticeId);
+
+        // 공지사항이 없으면 404 반환
+        if (notice == null) {
+            return ResponseEntity.notFound().build();
+        }
+
+        // 공지사항 및 첨부파일 목록 반환
+        return ResponseEntity.ok(notice);
+    }
+
+    // ========================================
+    // 4. 공지사항 수정 + 수정 이력 저장
+    // ========================================
+    @PutMapping("/{noticeId}")
+    public ResponseEntity<?> updateNotice(
+            @PathVariable("noticeId") Integer noticeId,
+            @RequestParam("changedByAdminId") Long changedByAdminId,
+            @RequestBody NoticeCreateReq nidto) {
+
+        // URL의 공지사항 번호 설정
+        nidto.setNoticeId(noticeId);
+
+        // 공지사항 수정 및 이력 저장
+        boolean result = noticeService.updateNotice(
+                nidto,
+                changedByAdminId
+        );
+
+        // 해당 공지사항이 없으면 404 반환
+        if (!result) {
+            return ResponseEntity.notFound().build();
+        }
+
+        return ResponseEntity.ok(
+                "공지사항 수정 및 이력 저장 성공!"
+        );
+    }
+
+    // ========================================
+    // 5. 공지사항 소프트 삭제 + 삭제 이력 저장
+    // ========================================
+    @DeleteMapping("/{noticeId}")
+    public ResponseEntity<?> deleteNotice(
+            @PathVariable("noticeId") Integer noticeId,
+            @RequestParam("changedByAdminId") Long changedByAdminId) {
+
+        // 공지사항 삭제 및 이력 저장
+        boolean result = noticeService.deleteNotice(
+                noticeId,
+                changedByAdminId
+        );
+
+        // 해당 공지사항이 없으면 404 반환
+        if (!result) {
+            return ResponseEntity.notFound().build();
+        }
+
+        return ResponseEntity.ok(
+                "공지사항 삭제 및 이력 저장 성공!"
+        );
+    }
+
+    // ========================================
+    // 6. 공지사항 변경 이력 조회
+    // ========================================
+    @GetMapping("/{noticeId}/history")
+    public ResponseEntity<List<NoticeHistory>> getNoticeHistoryList(
+            @PathVariable("noticeId") Integer noticeId) {
+
+        // NOTICE_HISTORY 테이블에서 이력 조회
+        List<NoticeHistory> historyList =
+                noticeService.getNoticeHistoryList(noticeId);
+
+        // 변경 이력 목록 반환
+        return ResponseEntity.ok(historyList);
+    }
 }
