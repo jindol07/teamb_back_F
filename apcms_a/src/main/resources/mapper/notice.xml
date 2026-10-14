@@ -1,69 +1,187 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
- "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="kr.co.alpharking.dao.notice.NoticeDao">
 
-<insert id="add" parameterType="nidto">
+	<insert id="add" parameterType="nidto">
 
-    <selectKey keyProperty="noticeId" resultType="int" order="BEFORE">
-        SELECT seq_notice.NEXTVAL FROM dual
-    </selectKey>
+		<selectKey keyProperty="noticeId" resultType="int" order="BEFORE">
+			SELECT seq_notice.NEXTVAL FROM dual
+		</selectKey> INSERT INTO
+		NOTICE (notice_id ,writer_admin_id ,notice_type_code ,title ,content
+		,important_yn ,pinned_yn ,created_at ,updated_at) VALUES (#{noticeId}
+		,#{writerAdminId} ,#{noticeTypeCode} ,#{title} ,#{content}
+		,#{importantYn} ,#{pinnedYn} ,SYSDATE ,SYSDATE) </insert>
 
-    INSERT INTO NOTICE
-        (notice_id
-        ,writer_admin_id
-        ,notice_type_code
-        ,title
-        ,content
-        ,important_yn
-        ,pinned_yn
-        ,created_at
-        ,updated_at)
-    VALUES
-        (#{noticeId}
-        ,#{writerAdminId}
-        ,#{noticeTypeCode}
-        ,#{title}
-        ,#{content}
-        ,#{importantYn}
-        ,#{pinnedYn}
-        ,SYSDATE
-        ,SYSDATE)
+	<!-- 첨부파일 고유번호 생성 -->
+	<select id="nextAttachmentId" resultType="int">
+		SELECT seq_notice_attachment.NEXTVAL FROM dual
+	</select>
 
-</insert>
+	<!-- 첨부파일 등록 -->
+	<insert id="addfile" parameterType="java.util.List">
 
-<!-- 첨부파일 고유번호 생성 -->
-<select id="nextAttachmentId" resultType="int">
-    SELECT seq_notice_attachment.NEXTVAL FROM dual
-</select>
+		<foreach collection="list"
+			item="file"
+			separator=" "
+			open="INSERT ALL"
+			close="SELECT 1 FROM dual">
 
-<!-- 첨부파일 등록 -->
-<insert id="addfile" parameterType="java.util.List">
+			INTO NOTICE_ATTACHMENT
+			(notice_attachment_id
+			,notice_id
+			,original_name
+			,stored_name
+			,file_path
+			,file_size
+			,created_at)
+			VALUES
+			(#{file.noticeAttachmentId}
+			,#{file.noticeId}
+			,#{file.originalName}
+			,#{file.storedName}
+			,#{file.filePath}
+			,#{file.fileSize}
+			,SYSDATE)
+		</foreach>
+	</insert>
 
-    <foreach collection="list"
-             item="file"
-             separator=" "
-             open="INSERT ALL"
-             close="SELECT 1 FROM dual">
+	<!-- 공지사항 목록 조회 -->
+	<select id="findAll" resultType="nidto">
+		SELECT
+		notice_id AS noticeId,
+		writer_admin_id AS writerAdminId,
+		notice_type_code AS noticeTypeCode,
+		title,
+		content,
+		view_count AS viewCount,
+		TO_CHAR(created_at, 'YYYY-MM-DD HH24:MI:SS') AS createdAt,
+		TO_CHAR(updated_at, 'YYYY-MM-DD HH24:MI:SS') AS updatedAt,
+		TO_CHAR(deleted_at, 'YYYY-MM-DD HH24:MI:SS') AS deletedAt,
+		important_yn AS importantYn,
+		pinned_yn AS pinnedYn
+		FROM NOTICE
+		WHERE deleted_at IS NULL
+		ORDER BY
+		CASE WHEN pinned_yn = 'Y' THEN 0 ELSE 1 END,
+		created_at DESC,
+		notice_id DESC
+	</select>
 
-        INTO NOTICE_ATTACHMENT
-            (notice_attachment_id
-            ,notice_id
-            ,original_name
-            ,stored_name
-            ,file_path
-            ,file_size
-            ,created_at)
-        VALUES
-            (#{file.noticeAttachmentId}
-            ,#{file.noticeId}
-            ,#{file.originalName}
-            ,#{file.storedName}
-            ,#{file.filePath}
-            ,#{file.fileSize}
-            ,SYSDATE)
+	<!-- 공지사항 상세 조회 -->
+	<select id="findById" parameterType="int" resultType="nidto">
+		SELECT
+		notice_id AS noticeId,
+		writer_admin_id AS writerAdminId,
+		notice_type_code AS noticeTypeCode,
+		title,
+		content,
+		view_count AS viewCount,
+		TO_CHAR(created_at, 'YYYY-MM-DD HH24:MI:SS') AS createdAt,
+		TO_CHAR(updated_at, 'YYYY-MM-DD HH24:MI:SS') AS updatedAt,
+		TO_CHAR(deleted_at, 'YYYY-MM-DD HH24:MI:SS') AS deletedAt,
+		important_yn AS importantYn,
+		pinned_yn AS pinnedYn
+		FROM NOTICE
+		WHERE notice_id = #{noticeId}
+		AND deleted_at IS NULL
+	</select>
 
-    </foreach>
 
-</insert>
+	<!-- 공지사항 첨부파일 조회 -->
+	<select id="findFilesByNoticeId" parameterType="int" resultType="nfdto">
+		SELECT
+		notice_attachment_id AS noticeAttachmentId,
+		notice_id AS noticeId,
+		original_name AS originalName,
+		stored_name AS storedName,
+		file_path AS filePath,
+		file_size AS fileSize,
+		TO_CHAR(created_at, 'YYYY-MM-DD HH24:MI:SS') AS createdAt
+		FROM NOTICE_ATTACHMENT
+		WHERE notice_id = #{noticeId}
+		ORDER BY notice_attachment_id ASC
+	</select>
+
+
+	<!-- 공지사항 수정 -->
+	<update id="updateNotice">
+		UPDATE NOTICE
+		SET
+		notice_type_code = #{nidto.noticeTypeCode},
+		title = #{nidto.title},
+		content = #{nidto.content},
+		important_yn = #{nidto.importantYn},
+		pinned_yn = #{nidto.pinnedYn},
+		updated_at = TO_DATE(#{changedAt}, 'YYYY-MM-DD HH24:MI:SS')
+		WHERE notice_id = #{nidto.noticeId}
+		AND deleted_at IS NULL
+	</update>
+
+
+	<!-- 공지사항 소프트 삭제 -->
+	<update id="deleteNotice" parameterType="int">
+		UPDATE NOTICE
+		SET deleted_at = SYSDATE,
+		updated_at = SYSDATE
+		WHERE notice_id = #{noticeId}
+		AND deleted_at IS NULL
+	</update>
+
+	<!-- 공지사항 변경 이력 저장 -->
+	<insert id="insertNoticeHistory" parameterType="nhdto">
+		<selectKey keyProperty="noticeHistoryId"
+			resultType="long"
+			order="BEFORE">
+			SELECT SEQ_NOTICE_HISTORY.NEXTVAL FROM dual
+		</selectKey> INSERT
+		INTO NOTICE_HISTORY ( notice_history_id, notice_id, writer_admin_id,
+		notice_type_code, title, content, view_count, created_at, updated_at,
+		deleted_at, changed_by_admin_id, actor_type_code, actor_id,
+		change_type_code, change_reason, valid_from, valid_to, important_yn,
+		pinned_yn ) VALUES ( #{noticeHistoryId}, #{noticeId}, #{writerAdminId},
+		#{noticeTypeCode}, #{title}, #{content}, #{viewCount},
+		TO_DATE(#{createdAt}, 'YYYY-MM-DD HH24:MI:SS'), TO_DATE(#{updatedAt},
+		'YYYY-MM-DD HH24:MI:SS'), TO_DATE(#{deletedAt}, 'YYYY-MM-DD
+		HH24:MI:SS'), #{changedByAdminId}, #{actorTypeCode}, #{actorId},
+		#{changeTypeCode}, #{changeReason}, TO_DATE(#{validFrom}, 'YYYY-MM-DD
+		HH24:MI:SS'), TO_DATE(#{validTo}, 'YYYY-MM-DD HH24:MI:SS'),
+		#{importantYn}, #{pinnedYn} ) </insert>
+
+	<!-- 특정 공지사항의 변경 이력 조회 -->
+	<select id="findNoticeHistoryByNoticeId"
+		parameterType="int"
+		resultType="nhdto">
+		SELECT
+		notice_history_id AS noticeHistoryId,
+		notice_id AS noticeId,
+		writer_admin_id AS writerAdminId,
+		notice_type_code AS noticeTypeCode,
+		title,
+		content,
+		view_count AS viewCount,
+		TO_CHAR(created_at, 'YYYY-MM-DD HH24:MI:SS') AS createdAt,
+		TO_CHAR(updated_at, 'YYYY-MM-DD HH24:MI:SS') AS updatedAt,
+		TO_CHAR(deleted_at, 'YYYY-MM-DD HH24:MI:SS') AS deletedAt,
+		changed_by_admin_id AS changedByAdminId,
+		actor_type_code AS actorTypeCode,
+		actor_id AS actorId,
+		change_type_code AS changeTypeCode,
+		change_reason AS changeReason,
+		TO_CHAR(valid_from, 'YYYY-MM-DD HH24:MI:SS') AS validFrom,
+		TO_CHAR(valid_to, 'YYYY-MM-DD HH24:MI:SS') AS validTo,
+		important_yn AS importantYn,
+		pinned_yn AS pinnedYn
+		FROM NOTICE_HISTORY
+		WHERE notice_id = #{noticeId}
+		ORDER BY notice_history_id DESC
+	</select>
+
+
+	<!-- DB 현재 날짜 및 시간 조회 -->
+	<select id="getCurrentDateTime" resultType="string">
+		SELECT TO_CHAR(SYSDATE, 'YYYY-MM-DD HH24:MI:SS')
+		FROM dual
+	</select>
+
+
 </mapper>
