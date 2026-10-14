@@ -15,5 +15,8 @@ public class ParkingSpacePublicRow {
     private String spaceStatusCode;
     private BigDecimal xPosition;
     private BigDecimal yPosition;
+    private BigDecimal width;
+    private BigDecimal height;
+    private String spaceCode;
     private String updatedAt;
 }
