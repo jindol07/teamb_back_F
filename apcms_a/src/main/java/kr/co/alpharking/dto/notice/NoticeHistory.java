@@ -46,4 +46,13 @@ public class NoticeHistory {
 	private String importantYn;
 	// 상단 고정 여부
 	private String pinnedYn;
+
+	// 첨부파일 변경 전 정보
+	//int 대신 Integer인 이유는 첨부파일이 없는 경우 null일 수 있기 때문
+	private Integer noticeAttachmentId; // 첨부파일 고유번호 
+	private String originalName; // 원본 파일명
+	private String storedName; // 서버 저장 파일명
+	private String filePath; // 실제 파일 저장 경로
+	private int fileSize; // 파일 크기
+
 }
