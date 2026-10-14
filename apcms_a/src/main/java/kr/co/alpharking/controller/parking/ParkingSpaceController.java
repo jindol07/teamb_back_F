@@ -4,10 +4,14 @@ import java.util.List;
 import jakarta.servlet.http.HttpSession;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
 import kr.co.alpharking.dto.parking.ParkingSpaceRow;
+import kr.co.alpharking.dto.parking.ParkingSpaceUpdateRequest;
 import kr.co.alpharking.dto.parking.ParkingSpacePublicRow;
 import kr.co.alpharking.service.parking.ParkingSpaceService;
 
@@ -17,6 +21,18 @@ import kr.co.alpharking.service.parking.ParkingSpaceService;
 public class ParkingSpaceController {
     private final ParkingSpaceService service;
     public ParkingSpaceController(ParkingSpaceService service) { this.service = service; }
+
+    /** 관리자 강제 변경: 로그인 세션의 관리자 PK로만 저장한다. */
+    @PatchMapping("/{parkingSpaceId}")
+    public ParkingSpaceRow updateSpace(@PathVariable Long parkingSpaceId,
+                                       @RequestBody ParkingSpaceUpdateRequest request,
+                                       HttpSession session) {
+        Object adminId = session.getAttribute("adminId");
+        if (!(adminId instanceof Number)) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "관리자 로그인이 필요합니다.");
+        }
+        return service.updateSpace(parkingSpaceId, request, ((Number) adminId).longValue());
+    }
 
     /** 공개 화면. 메모/차량번호를 노출하지 않음. */
     @GetMapping("/public")
