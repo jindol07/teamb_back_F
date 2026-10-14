@@ -12,6 +12,9 @@
         s.SPACE_STATUS_CODE AS "spaceStatusCode",
         s.X_POSITION AS "xPosition",
         s.Y_POSITION AS "yPosition",
+        s.WIDTH AS "width",
+        s.HEIGHT AS "height",
+        (TO_CHAR(f.FLOOR_NO) || 'F-' || z.ZONE_CODE || s.SPACE_NUMBER) AS "spaceCode",
         TO_CHAR(s.UPDATED_AT, 'YYYY-MM-DD"T"HH24:MI:SS') AS "updatedAt"
     </sql>
     <!-- 3 x 3 x 5 = 45건; 실DB 코드 AVAILABLE 그대로 반환 -->
