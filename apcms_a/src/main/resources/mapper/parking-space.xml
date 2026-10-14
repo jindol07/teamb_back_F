@@ -32,4 +32,57 @@
           JOIN PARKING_FLOOR f ON f.PARKING_FLOOR_ID = z.PARKING_FLOOR_ID
          ORDER BY f.FLOOR_NO, z.ZONE_CODE, s.SPACE_NUMBER
     </select>
+
+    <!-- 관리자 전용 수정 중 행 잠금. -->
+    <select id="lockForUpdate" resultType="kr.co.alpharking.dto.parking.ParkingSpaceRow">
+        SELECT s.PARKING_SPACE_ID AS "parkingSpaceId",
+               s.SPACE_STATUS_CODE AS "spaceStatusCode",
+               s.SPACE_TYPE_CODE AS "spaceTypeCode",
+               s.MEMO AS "memo"
+          FROM PARKING_SPACE s
+         WHERE s.PARKING_SPACE_ID = #{id}
+         FOR UPDATE
+    </select>
+
+    <update id="updateAdminSpace">
+        UPDATE PARKING_SPACE
+           SET SPACE_STATUS_CODE = #{status},
+               SPACE_TYPE_CODE = #{type},
+               MEMO = #{memo},
+               UPDATED_AT = SYSDATE
+         WHERE PARKING_SPACE_ID = #{id}
+    </update>
+
+    <!-- 이미 열린 이력이 있으면 닫는다. -->
+    <update id="closeOpenHistory">
+        UPDATE PARKING_SPACE_HISTORY
+           SET VALID_TO = SYSDATE
+         WHERE PARKING_SPACE_ID = #{id}
+           AND VALID_TO IS NULL
+    </update>
+
+    <!-- 변경된 주차구획의 전체 스냅샷 기록. 이력/상태는 같은 트랜잭션. -->
+    <insert id="insertAdminHistory">
+        INSERT INTO PARKING_SPACE_HISTORY (
+          PARKING_SPACE_HISTORY_ID, PARKING_SPACE_ID, PARKING_ZONE_ID,
+          SPACE_NUMBER, SPACE_TYPE_CODE, SPACE_STATUS_CODE,
+          X_POSITION, Y_POSITION, MEMO,
+          CHANGED_BY_ADMIN_ID, VALID_FROM, VALID_TO,
+          CHANGE_SOURCE_CODE, CHANGE_REASON, AI_DETECTION_EVENT_ID
+        )
+        SELECT SEQ_PARKING_SPACE_HISTORY.NEXTVAL, s.PARKING_SPACE_ID, s.PARKING_ZONE_ID,
+               s.SPACE_NUMBER, s.SPACE_TYPE_CODE, s.SPACE_STATUS_CODE,
+               s.X_POSITION, s.Y_POSITION, s.MEMO,
+               #{adminId}, SYSDATE, NULL, 'ADMIN', #{reason}, NULL
+          FROM PARKING_SPACE s
+         WHERE s.PARKING_SPACE_ID = #{id}
+    </insert>
+
+    <select id="findById" resultType="kr.co.alpharking.dto.parking.ParkingSpaceRow">
+        SELECT <include refid="publicColumns" />, s.MEMO AS "memo"
+          FROM PARKING_SPACE s
+          JOIN PARKING_ZONE z ON z.PARKING_ZONE_ID = s.PARKING_ZONE_ID
+          JOIN PARKING_FLOOR f ON f.PARKING_FLOOR_ID = z.PARKING_FLOOR_ID
+         WHERE s.PARKING_SPACE_ID = #{id}
+    </select>
 </mapper>
