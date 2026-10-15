@@ -18,6 +18,8 @@ public class ParkingSpaceRow {
     private BigDecimal width;
     private BigDecimal height;
     private String spaceCode;
+    /** 관리자 전용 차량번호. 미출차 기록이 정확히 한 건 매칭될 때만 제공. */
+    private String vehicleNumber;
     private String memo;
     private String updatedAt;
 }
