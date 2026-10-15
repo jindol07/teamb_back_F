@@ -1,0 +1,58 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+  "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="kr.co.alpharking.dao.parking.AiOccupancyDao">
+    <!-- 주차구획 잠금으로 동일 구획의 동시 이벤트 처리를 직렬화 -->
+    <select id="lockByCode" resultType="kr.co.alpharking.dto.parking.ParkingSpaceRow">
+        SELECT s.PARKING_SPACE_ID AS "parkingSpaceId",
+               s.SPACE_STATUS_CODE AS "spaceStatusCode"
+          FROM PARKING_SPACE s
+          JOIN PARKING_ZONE z ON z.PARKING_ZONE_ID = s.PARKING_ZONE_ID
+          JOIN PARKING_FLOOR f ON f.PARKING_FLOOR_ID = z.PARKING_FLOOR_ID
+         WHERE (TO_CHAR(f.FLOOR_NO) || 'F-' || z.ZONE_CODE || s.SPACE_NUMBER) = #{spaceCode}
+         FOR UPDATE OF s.SPACE_STATUS_CODE
+    </select>
+    <!-- 전용 EVENT_UUID 컬럼이 없으므로 기존 CLOB의 고유 event_id 필드 탐색 -->
+    <select id="countEventId" resultType="int">
+        SELECT COUNT(*) FROM AI_DETECTION_EVENT
+         WHERE PARKING_SPACE_ID = #{parkingSpaceId}
+           AND DBMS_LOB.INSTR(RAW_PAYLOAD, #{needle}) &gt; 0
+    </select>
+    <select id="latestOccupancyDetectedAt" resultType="java.time.LocalDateTime">
+        SELECT MAX(DETECTED_AT) FROM AI_DETECTION_EVENT
+         WHERE PARKING_SPACE_ID = #{parkingSpaceId}
+           AND DBMS_LOB.INSTR(RAW_PAYLOAD, '"event_type":"PARKING_OCCUPANCY"') &gt; 0
+    </select>
+    <insert id="insertEvent" parameterType="map">
+        <selectKey keyProperty="aiDetectionEventId" resultType="long" order="BEFORE">
+            SELECT SEQ_AI_DETECTION_EVENT.NEXTVAL FROM DUAL
+        </selectKey>
+        INSERT INTO AI_DETECTION_EVENT
+          (AI_DETECTION_EVENT_ID, PARKING_SPACE_ID, DETECTED_AT, CREATED_AT, RAW_PAYLOAD)
+        VALUES
+          (#{aiDetectionEventId}, #{parkingSpaceId}, #{detectedAt,jdbcType=TIMESTAMP},
+           SYSDATE, #{rawPayload,jdbcType=CLOB})
+    </insert>
+    <update id="updateStatus">
+        UPDATE PARKING_SPACE
+           SET SPACE_STATUS_CODE = #{status}, UPDATED_AT = SYSDATE
+         WHERE PARKING_SPACE_ID = #{parkingSpaceId}
+    </update>
+    <update id="closeHistory">
+        UPDATE PARKING_SPACE_HISTORY SET VALID_TO = SYSDATE
+         WHERE PARKING_SPACE_ID = #{parkingSpaceId} AND VALID_TO IS NULL
+    </update>
+    <insert id="insertHistory">
+        INSERT INTO PARKING_SPACE_HISTORY
+          (PARKING_SPACE_HISTORY_ID, PARKING_SPACE_ID, PARKING_ZONE_ID,
+           SPACE_NUMBER, SPACE_TYPE_CODE, SPACE_STATUS_CODE,
+           X_POSITION, Y_POSITION, MEMO, CHANGED_BY_ADMIN_ID,
+           VALID_FROM, VALID_TO, CHANGE_SOURCE_CODE, CHANGE_REASON, AI_DETECTION_EVENT_ID)
+        SELECT SEQ_PARKING_SPACE_HISTORY.NEXTVAL, s.PARKING_SPACE_ID, s.PARKING_ZONE_ID,
+               s.SPACE_NUMBER, s.SPACE_TYPE_CODE, s.SPACE_STATUS_CODE,
+               s.X_POSITION, s.Y_POSITION, s.MEMO, NULL,
+               SYSDATE, NULL, 'AI', 'AI occupancy state confirmed', #{aiDetectionEventId}
+          FROM PARKING_SPACE s
+         WHERE s.PARKING_SPACE_ID = #{parkingSpaceId}
+    </insert>
+</mapper>

@@ -26,10 +26,21 @@
          ORDER BY f.FLOOR_NO, z.ZONE_CODE, s.SPACE_NUMBER
     </select>
     <select id="findAllAdmin" resultType="kr.co.alpharking.dto.parking.ParkingSpaceRow">
-        SELECT <include refid="publicColumns" />, s.MEMO AS "memo"
+        SELECT <include refid="publicColumns" />,
+               s.MEMO AS "memo",
+               CASE WHEN s.SPACE_STATUS_CODE = 'OCCUPIED'
+                    THEN active_usage.VEHICLE_NUMBER ELSE NULL END AS "vehicleNumber"
           FROM PARKING_SPACE s
           JOIN PARKING_ZONE z ON z.PARKING_ZONE_ID = s.PARKING_ZONE_ID
           JOIN PARKING_FLOOR f ON f.PARKING_FLOOR_ID = z.PARKING_FLOOR_ID
+          LEFT JOIN (
+               /* 동일 구획에 미출차 사용기록이 2건 이상이면 번호를 잘못 표시하지 않습니다. */
+               SELECT PARKING_SPACE_ID, MAX(VEHICLE_NUMBER) AS VEHICLE_NUMBER
+                 FROM PARKING_USAGE
+                WHERE EXIT_AT IS NULL AND PARKING_SPACE_ID IS NOT NULL
+                GROUP BY PARKING_SPACE_ID
+               HAVING COUNT(*) = 1
+          ) active_usage ON active_usage.PARKING_SPACE_ID = s.PARKING_SPACE_ID
          ORDER BY f.FLOOR_NO, z.ZONE_CODE, s.SPACE_NUMBER
     </select>
 
