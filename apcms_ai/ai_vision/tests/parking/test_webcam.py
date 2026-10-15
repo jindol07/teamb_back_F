@@ -2,7 +2,6 @@ from pathlib import Path
 import cv2
 
 BASE_DIR = Path(__file__).resolve().parents[2]
-# BASE_DIR : D:\finalProjectB\back\ai
 
 SAVE_DIR = BASE_DIR / "results" / "parking"
 SAVE_DIR.mkdir(parents=True, exist_ok=True)
