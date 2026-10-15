@@ -32,7 +32,7 @@ public class Notice {
 	@GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "seq_notice_gen")
 	@SequenceGenerator(name = "seq_notice_gen", sequenceName = "seq_notice", allocationSize = 1)
 	private Integer noticeId;
-	@Column(length = 19, nullable = false)
+	@Column(length = 19, nullable = false) //length 문자열 컬럼의 길이를 지정할 대 사용해서 지우는게 좋다 지워야하나?
 	private Integer writerAdminId;
 	@Column(length = 50, nullable = false)
 	private String noticeTypeCode;
@@ -41,7 +41,7 @@ public class Notice {
 	@Lob
 	@Column(nullable = false)
 	private String content;
-	@Column(length = 10, nullable = false)
+	@Column(length = 10, nullable = false)//length 문자열 컬럼의 길이를 지정할 대 사용해서 지우는게 좋다 지워야하나?
 	private int viewCount;
 	@CreationTimestamp
 	private LocalDateTime createdAt;
@@ -49,7 +49,12 @@ public class Notice {
 	private LocalDateTime updatedAt;
 	
 	private LocalDateTime deletedAt;
-	
+	//중요 공지
+	@Column(name = "IMPORTANT_YN", length = 1)
+	private String importantYn;
+	//상단 고정 여부
+	@Column(name = "PINNED_YN", length = 1)
+	private String pinnedYn;
 	//1:N 즉 collection관계 
 	@OneToMany(mappedBy = "notice", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
 	private List<NoticeAttachment> fileList = new ArrayList<>();
