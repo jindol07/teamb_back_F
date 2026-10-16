@@ -59,7 +59,7 @@ API 예시 POST `http://localhost:8000/api/inquiry/chat`
 
 & "D:\finalProjectB\app\Python312\python.exe" -m venv .venv312
 
-.venv312\Scripts\Activate 
+.venv312\Scripts\Activate
 
 python -m pip install --upgrade pip
 
