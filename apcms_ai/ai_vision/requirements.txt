@@ -1,0 +1,39 @@
+# APCMS AI 프로젝트 requirements.txt
+
+# 1. FastAPI 서버
+fastapi # AI 서버의 API를 만드는 프레임워크
+uvicorn[standard] # FastAPI 서버를 실제로 실행
+python-multipart # Spring Boot에서 보내는 이미지 파일 multipart/form-data 처리
+
+# 2. YOLO 차량 / 번호판 탐지
+ultralytics==8.4.177 # YOLO를 이용한 차량 및 번호판 탐지
+
+# 3. PaddleOCR
+paddleocr==3.7.0 # 번호판 이미지의 문자 OCR
+paddlepaddle==3.3.1 # PaddleOCR가 실제 연산을 수행하는 엔진 (프레임워크)
+
+# 4. 이미지 처리
+opencv-contrib-python==4.10.0.84 # cv2를 사용한 이미지 자르기, 확대, grayscale, CLAHE 등의 전처리
+numpy==2.3.5 # 이미지 픽셀 및 배열 연산
+
+# 5. 이미지 관련
+Pillow # Python 이미지 관련 처리를 위한 라이브러리이며 여러 이미지 라이브러리와 함께 사용됨
+
+# 6. Jupyter Notebook 및 주차면 좌표 지정
+ipykernel # Jupyter에서 Python 커널 실행
+matplotlib # 이미지 표시 및 좌표 시각화
+ipympl # %matplotlib widget 지원
+ipywidgets # Jupyter 대화형 위젯
+
+# 7. OCR 성능 평가
+pandas # OCR 인식 결과를 DataFrame으로 정리하고 정확도 계산
+openpyxl # OCR 평가 결과를 Excel(.xlsx) 파일로 저장
+
+# 8. Spring Boot REST API 연동
+requests # AI 점유 감지 이벤트를 Spring Boot로 HTTP POST 전송
+
+# 9. 환경변수 설정
+python-dotenv # .env 파일의 API URL, API KEY 및 전송 활성화 설정 로딩
+
+# 10. AI Inquiry (RAG)
+# ai_inquiry 모듈에서 사용하는 패키지는 별도 확인 후 추가

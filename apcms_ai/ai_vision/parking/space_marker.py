@@ -8,7 +8,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 IMAGE_PATH = BASE_DIR / "results" / "parking" / "first_frame.jpg"
 
 # 이미지 읽기
-image = cv2.imread(str(IMAGE_PATH))
+image = cv2.imread(IMAGE_PATH)
 
 # OpenCV는 BGR, Matplotlib은 RGB 사용
 image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
