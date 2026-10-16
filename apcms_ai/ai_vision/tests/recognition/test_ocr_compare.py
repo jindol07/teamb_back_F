@@ -54,7 +54,7 @@ trocr_model.eval()
 
 # 6. 각각의 모델에 동일한 번호판 이미지를 전달하고 인식 문자열을 반환
 def run_paddleocr(image_path):
-    results = paddle_ocr.predict(str(image_path))
+    results = paddle_ocr.predict(image_path)
 
     texts = []
 

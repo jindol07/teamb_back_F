@@ -21,7 +21,7 @@ if __name__ == "__main__":
 
     # 영상 열기
     # cv2.VideoCapture() : OpenCV에서 영상 파일을 열고, 프레임 단위로 읽을 수 있는 객체를 생성하는 함수
-    cap = cv2.VideoCapture(str(VIDEO_PATH)) 
+    cap = cv2.VideoCapture(VIDEO_PATH)
 
     if not cap.isOpened():
         print("영상을 열 수 없습니다.")
@@ -46,7 +46,7 @@ if __name__ == "__main__":
     if ret:
         # 첫 프레임 저장
         save_path = RESULT_DIR/"first_frame.jpg"
-        cv2.imwrite(str(save_path), frame)
+        cv2.imwrite(save_path, frame)
 
         print("첫 번째 프레임 저장 완료")
         print(save_path)

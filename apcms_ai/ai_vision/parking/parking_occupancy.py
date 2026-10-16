@@ -17,14 +17,10 @@
 # OCCUPIED : 변화율 5% 이상
 import json
 import os
-import sys
 import cv2
 import numpy as np
 
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from paths import DATA_DIR, RESULT_DIR
+from ai_vision.paths import DATA_DIR, RESULT_DIR
 
 SAVE_DIR = RESULT_DIR / "parking" # 결과를 저장할 폴더
 REFERENCE_PATH = DATA_DIR / "parking_spaces" / "empty_reference.jpg" # 빈 주차장 기준 사진
