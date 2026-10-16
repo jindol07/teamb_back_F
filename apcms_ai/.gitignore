@@ -8,6 +8,7 @@ __pycache__/
 .venv/
 venv/
 env/
+.venv312/
 
 # Environment variables
 .env
@@ -28,3 +29,8 @@ ai_inquiry/mocks/*.sqlite3
 # Temporary local embedding index builds
 ai_inquiry/chroma_db_new_*/
 ai_inquiry/chroma_db_backup_*/
+
+# ai_recmn 10/14 (source CSV demo remains trackable)
+ai_recmn/models/*.joblib
+ai_recmn/models/metrics.json
+ai_recmn/notebooks/.ipynb_checkpoints/
