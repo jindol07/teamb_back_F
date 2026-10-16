@@ -25,8 +25,8 @@ from ai_recmn.service.router import router as recmn_router
 app.include_router(recmn_router)
 
 # 모듈 초기화 시 YOLO/PaddleOCR 모델 로딩(원본 동작 유지).
-#from ai_vision.main import router as vision_router
-#app.include_router(vision_router)
+from ai_vision.main import router as vision_router
+app.include_router(vision_router)
 
 @app.get('/')
 def root(): return {'message':'APCMS AI Server is running'}
