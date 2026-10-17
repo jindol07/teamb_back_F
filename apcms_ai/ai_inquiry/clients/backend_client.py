@@ -26,5 +26,33 @@ class BackendClient:
   if category not in self.PATH: raise BackendError('지원하지 않는 조회 유형')
   return await self.request('GET',self.cfg[self.PATH[category]],token)
  async def add_conversation(self,token,payload):
-  # 필드 매핑은 서버 DTO가 확정되면 변경. 현재 contract.md 참조
+     # 필드 매핑은 서버 DTO가 확정되면 변경. 현재 contract.md 참조
   return await self.request('POST',self.cfg['inquiry_add_path'],token,payload=payload)
+   
+   #"""개발용 테스트 예약 조회""" 로그인 구현시 --------삭제
+ async def get_test_reservations(self):
+  if (
+    self.cfg['env'] != 'development'
+    or self.cfg['mode'] != 'MOCK'
+    or not self.cfg['test_reservation_enabled']
+):
+    raise PermissionError('개발용 예약 조회가 비활성화되어 있습니다.')
+  try:
+   async with httpx.AsyncClient(
+    base_url=self.cfg['base_url'],
+    timeout=15
+   ) as client:
+    response = await client.get(
+     'api/chatbot/reservations/1'
+    )
+    response.raise_for_status()
+    return response.json()
+
+  except httpx.HTTPError as e:
+   raise BackendError(
+    '테스트 예약 조회 실패'
+   ) from e
+  #-------------------------------------
+  
+  
+

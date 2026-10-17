@@ -53,3 +53,20 @@ API 예시 POST `http://localhost:8000/api/inquiry/chat`
 
 ### 기존 vision 스크립트
 기존 테스트 스크립트는 `ai_vision/`으로 이동했습니다. 원본에 상대경로/개발환경 가정이 남은 개별 실험 스크립트는 추가 수정이 필요할 수 있으며, 원본 README를 `ai_vision/ORIGINAL_README.md`로 보존했습니다.
+
+### AI 프로젝트 3개 파이썬 버전 3.12 통일!
+3.12 설치
+
+& "D:\finalProjectB\app\Python312\python.exe" -m venv .venv312
+
+.venv312\Scripts\Activate
+
+python -m pip install --upgrade pip
+
+python -m pip install -r requirements.txt
+
+-- 기존 가상환경 제거
+Remove-Item -Recurse -Force .venv
+
+-- 제거 완료: False
+Test-Path .venv

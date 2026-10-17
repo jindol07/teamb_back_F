@@ -2,6 +2,7 @@
 package kr.co.alpharking.controller.notice;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -11,7 +12,12 @@ import java.util.UUID;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.Resource;
+import org.springframework.core.io.UrlResource;
+import org.springframework.http.ContentDisposition;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -23,14 +29,6 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
-
-import java.nio.charset.StandardCharsets;
-
-import org.springframework.core.io.Resource;
-import org.springframework.core.io.UrlResource;
-import org.springframework.http.ContentDisposition;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
 
 import kr.co.alpharking.dto.notice.NoticeCreateReq;
 import kr.co.alpharking.dto.notice.NoticeFiles;
@@ -241,9 +239,9 @@ public class NoticeController {
 		return ResponseEntity.ok(historyList);
 	}
 
-	/**
-	 * 공지사항 첨부파일 다운로드
-	 */
+	// ========================================
+	// 7. 공지사항 첨부파일 다운로드 (관리자)
+	// ========================================
 	@GetMapping("/{noticeId}/file/download")
 	public ResponseEntity<Resource> downloadNoticeFile(@PathVariable("noticeId") Integer noticeId) {
 
@@ -265,6 +263,7 @@ public class NoticeController {
 		NoticeFiles file = files.get(0);
 
 		try {
+
 			// 서버에 저장된 파일 확인
 			Path uploadDir = Paths.get(filePath, "notice").toAbsolutePath().normalize();
 
@@ -272,6 +271,7 @@ public class NoticeController {
 
 			// 지정된 업로드 폴더 밖의 파일 접근 방지
 			if (!path.startsWith(uploadDir) || !Files.isRegularFile(path) || !Files.isReadable(path)) {
+
 				return ResponseEntity.notFound().build();
 			}
 
@@ -287,10 +287,10 @@ public class NoticeController {
 					.header(HttpHeaders.CONTENT_DISPOSITION, disposition.toString()).body(resource);
 
 		} catch (Exception e) {
+
 			e.printStackTrace();
 
 			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
 		}
 	}
-
 }
