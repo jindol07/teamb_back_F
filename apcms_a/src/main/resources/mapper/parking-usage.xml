@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+  "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="kr.co.alpharking.dao.parking.ParkingUsageDao">
+    <sql id="usageCols">
+        u.PARKING_USAGE_ID AS "parkingUsageId",
+        u.VEHICLE_ID AS "vehicleId",
+        u.VEHICLE_NUMBER AS "vehicleNumber",
+        u.PARKING_SPACE_ID AS "parkingSpaceId",
+        u.PARKING_TYPE_CODE AS "parkingTypeCode",
+        TO_CHAR(u.ENTRY_AT, 'YYYY-MM-DD"T"HH24:MI:SS') AS "entryAt",
+        TO_CHAR(u.EXIT_AT, 'YYYY-MM-DD"T"HH24:MI:SS') AS "exitAt",
+        CASE WHEN f.FLOOR_NO IS NULL THEN NULL
+          ELSE TO_CHAR(f.FLOOR_NO) || 'F-' || z.ZONE_CODE || s.SPACE_NUMBER
+        END AS "spaceCode"
+    </sql>
+    <select id="lockRegisteredVehicle" resultType="long">
+        SELECT VEHICLE_ID FROM VEHICLE
+        WHERE VEHICLE_NUMBER = #{number}
+          AND REGISTRATION_STATUS_CODE = 'REGISTERED'
+          AND DELETED_AT IS NULL
+        FOR UPDATE
+    </select>
+    <select id="findOpenUsageByPlate" resultType="long">
+        SELECT PARKING_USAGE_ID FROM PARKING_USAGE
+        WHERE VEHICLE_NUMBER = #{number} AND EXIT_AT IS NULL
+    </select>
+    <insert id="insertEntry">
+        INSERT INTO PARKING_USAGE (
+            PARKING_USAGE_ID, OFFICE_ID, VEHICLE_ID, PARKING_SPACE_ID,
+            PARKING_RESERVATION_ID, VEHICLE_NUMBER, PARKING_TYPE_CODE,
+            ENTRY_AT, EXIT_AT, CHARGE_AMOUNT, CREATED_AT
+        ) VALUES (
+            SEQ_PARKING_USAGE.NEXTVAL,
+            (SELECT OFFICE_ID FROM VEHICLE WHERE VEHICLE_ID = #{vehicleId,jdbcType=NUMERIC}),
+            #{vehicleId,jdbcType=NUMERIC}, NULL, NULL, #{number},
+            #{parkingType},
+            #{eventTime}, NULL, 0, SYSDATE
+        )
+    </insert>
+    <select id="findLatestExitByPlate" resultType="java.sql.Timestamp">
+        SELECT MAX(EXIT_AT) FROM PARKING_USAGE WHERE VEHICLE_NUMBER = #{number}
+    </select>
+    <select id="findSpaceIdByCode" resultType="long">
+        SELECT s.PARKING_SPACE_ID FROM PARKING_SPACE s
+        JOIN PARKING_ZONE z ON z.PARKING_ZONE_ID = s.PARKING_ZONE_ID
+        JOIN PARKING_FLOOR f ON f.PARKING_FLOOR_ID = z.PARKING_FLOOR_ID
+        WHERE TO_CHAR(f.FLOOR_NO) || 'F-' || z.ZONE_CODE || s.SPACE_NUMBER = #{spaceCode}
+    </select>
+    <select id="insertedUsageId" resultType="long">
+        SELECT SEQ_PARKING_USAGE.CURRVAL FROM DUAL
+    </select>
+    <sql id="usageFrom">
+        FROM PARKING_USAGE u
+        LEFT JOIN PARKING_SPACE s ON s.PARKING_SPACE_ID = u.PARKING_SPACE_ID
+        LEFT JOIN PARKING_ZONE z ON z.PARKING_ZONE_ID = s.PARKING_ZONE_ID
+        LEFT JOIN PARKING_FLOOR f ON f.PARKING_FLOOR_ID = z.PARKING_FLOOR_ID
+    </sql>
+    <select id="findById" resultType="kr.co.alpharking.dto.parking.ParkingUsageRow">
+        SELECT <include refid="usageCols" /> <include refid="usageFrom" />
+        WHERE u.PARKING_USAGE_ID = #{id}
+    </select>
+    <select id="lockOpenUsage" resultType="kr.co.alpharking.dto.parking.ParkingUsageRow">
+        SELECT u.PARKING_USAGE_ID AS "parkingUsageId", u.VEHICLE_ID AS "vehicleId",
+               u.VEHICLE_NUMBER AS "vehicleNumber", u.PARKING_SPACE_ID AS "parkingSpaceId"
+          FROM PARKING_USAGE u
+         WHERE u.PARKING_USAGE_ID = #{id} AND u.EXIT_AT IS NULL FOR UPDATE
+    </select>
+    <select id="findActive" resultType="kr.co.alpharking.dto.parking.ParkingUsageRow">
+        SELECT <include refid="usageCols" /> <include refid="usageFrom" />
+        WHERE u.EXIT_AT IS NULL ORDER BY u.ENTRY_AT DESC, u.PARKING_USAGE_ID DESC
+    </select>
+    <select id="findRecent" resultType="kr.co.alpharking.dto.parking.ParkingUsageRow">
+        SELECT * FROM (
+            SELECT <include refid="usageCols" /> <include refid="usageFrom" />
+            ORDER BY u.ENTRY_AT DESC, u.PARKING_USAGE_ID DESC
+        ) WHERE ROWNUM &lt;= 200
+    </select>
+    <select id="lockSpaceStatus" resultType="string">
+        SELECT SPACE_STATUS_CODE FROM PARKING_SPACE WHERE PARKING_SPACE_ID = #{spaceId} FOR UPDATE
+    </select>
+    <select id="countOtherActiveOnSpace" resultType="int">
+        SELECT COUNT(*) FROM PARKING_USAGE
+         WHERE PARKING_SPACE_ID = #{spaceId} AND EXIT_AT IS NULL AND PARKING_USAGE_ID != #{usageId}
+    </select>
+    <update id="assignSpace">
+        UPDATE PARKING_USAGE SET PARKING_SPACE_ID = #{spaceId}
+         WHERE PARKING_USAGE_ID = #{usageId} AND EXIT_AT IS NULL
+    </update>
+    <update id="exitUsage">
+        UPDATE PARKING_USAGE SET EXIT_AT = #{eventTime}
+         WHERE PARKING_USAGE_ID = #{usageId} AND EXIT_AT IS NULL
+    </update>
+</mapper>
