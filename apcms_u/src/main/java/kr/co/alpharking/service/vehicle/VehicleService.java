@@ -10,16 +10,22 @@ import kr.co.alpharking.repository.vehicle.VehicleRepository;
 
 @Service
 public class VehicleService {
-
+	
 	@Autowired
 	private VehicleRepository vehicleRepository;
-
+	
+	// 1. 차량번호 조회 (기존 기능)
 	public Optional<Vehicle> findByVehicleNumber(String vehicleNumber) {
-
+		
 		System.out.println("===== VehicleService =====");
 		System.out.println("조회 번호 : " + vehicleNumber);
-
+		
 		return vehicleRepository.findByVehicleNumber(vehicleNumber);
 	}
-
+	
+	// 2. 승인된 등록 차량 조회 (추가)
+	public Optional<Vehicle> findRegisteredVehicleByNumber(String vehicleNumber) {
+		return vehicleRepository.findByVehicleNumberAndRegistrationStatusCodeAndDeletedAtIsNull(vehicleNumber,"REGISTERED");
+	}
+	
 }

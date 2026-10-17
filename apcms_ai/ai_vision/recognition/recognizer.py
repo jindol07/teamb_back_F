@@ -482,10 +482,13 @@ def recognize_plate(plate_crop):
     final_text = first_text
     final_type = first_type
 
-    # 12-3. 결과가 불확실하거나 실패한 경우 재시도
+    # 12-3. 1차 OCR 결과가 불확실하면 이미지 전처리 후 재인식
     if first_type in {"REVIEW", "OCR_FAILED"}:
 
-        # 특수문자로 인해 REVIEW로 분류된 결과도 재검토
+        # 번호판 이미지를 확대하고 대비를 조정하여 OCR 재시도
+        retry_text, retry_type = retry_ocr(plate_crop)
+
+        # 재인식 문자열의 특수문자를 정리하고 형식을 다시 판정
         retry_text = cleanup_plate_text(retry_text)
         retry_type = classify_plate_format(retry_text)
 
