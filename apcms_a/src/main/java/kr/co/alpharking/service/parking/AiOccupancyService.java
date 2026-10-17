@@ -10,6 +10,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.UUID;
 import java.util.regex.Pattern;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,14 +19,19 @@ import kr.co.alpharking.dao.parking.AiOccupancyDao;
 import kr.co.alpharking.dto.parking.AiOccupancyRequest;
 import kr.co.alpharking.dto.parking.AiOccupancyResponse;
 import kr.co.alpharking.dto.parking.ParkingSpaceRow;
+import kr.co.alpharking.websocket.parking.ParkingSpaceChangedEvent;
 
 @Service
 public class AiOccupancyService {
     private static final Pattern CODE = Pattern.compile("[1-9][0-9]*F-[A-Z][0-9]{2,}");
     private static final ZoneId KST = ZoneId.of("Asia/Seoul");
     private final AiOccupancyDao dao;
+    private final ApplicationEventPublisher events;
 
-    public AiOccupancyService(AiOccupancyDao dao) { this.dao = dao; }
+    public AiOccupancyService(AiOccupancyDao dao, ApplicationEventPublisher events) {
+        this.dao = dao;
+        this.events = events;
+    }
 
     @Transactional
     public AiOccupancyResponse receive(AiOccupancyRequest req) {
@@ -82,6 +88,7 @@ public class AiOccupancyService {
         if (dao.updateStatus(id, req.status()) != 1) throw new IllegalStateException("주차 상태 변경 실패");
         dao.closeHistory(id);
         if (dao.insertHistory(id, eventId) != 1) throw new IllegalStateException("AI 변경 이력 기록 실패");
+        events.publishEvent(new ParkingSpaceChangedEvent());
         return new AiOccupancyResponse(req.eventId(), req.spaceCode(), "UPDATED", previous, req.status(), eventId);
     }
 }
