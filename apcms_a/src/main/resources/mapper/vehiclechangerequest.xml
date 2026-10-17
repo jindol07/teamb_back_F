@@ -7,23 +7,26 @@
 	<select id="list"
 		resultType="kr.co.alpharking.dto.vehicle.VehicleChangeRequestDTO">
 		SELECT
-		vehicle_change_request_id AS vehiclechangerequestid,
-		office_id AS officeid,
-		target_vehicle_id AS targetvehicleid,
-		request_type_code AS requesttypecode,
-		requested_vehicle_number AS requestedvehiclenumber,
-		requested_vehicle_model AS requestedvehiclemodel,
-		requested_owner_name AS requestedownername,
-		requested_vehicle_type_code AS requestedvehicletypecode,
-		request_reason AS requestreason,
-		request_status_code AS requeststatuscode,
-		reviewer_admin_id AS revieweradminid,
-		review_reason AS reviewreason,
-		requested_at AS requestedat,
-		reviewed_at AS reviewedat,
-		applied_at AS appliedat
-		FROM vehicle_change_request
-		ORDER BY requested_at DESC
+		vcr.vehicle_change_request_id AS vehiclechangerequestid,
+		vcr.office_id AS officeid,
+		o.office_number AS officenumber,
+		vcr.target_vehicle_id AS targetvehicleid,
+		vcr.request_type_code AS requesttypecode,
+		vcr.requested_vehicle_number AS requestedvehiclenumber,
+		vcr.requested_vehicle_model AS requestedvehiclemodel,
+		vcr.requested_owner_name AS requestedownername,
+		vcr.requested_vehicle_type_code AS requestedvehicletypecode,
+		vcr.request_reason AS requestreason,
+		vcr.request_status_code AS requeststatuscode,
+		vcr.reviewer_admin_id AS revieweradminid,
+		vcr.review_reason AS reviewreason,
+		vcr.requested_at AS requestedat,
+		vcr.reviewed_at AS reviewedat,
+		vcr.applied_at AS appliedat
+		FROM vehicle_change_request vcr
+		LEFT JOIN office o
+		ON vcr.office_id = o.office_id
+		ORDER BY vcr.requested_at DESC
 	</select>
 	<!-- 차량 변경 요청 등록
         - 최초 요청 상태는 DB DEFAULT 값인 REQUESTED 사용

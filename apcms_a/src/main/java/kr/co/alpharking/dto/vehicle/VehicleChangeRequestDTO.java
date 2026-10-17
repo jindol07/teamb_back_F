@@ -15,6 +15,7 @@ import lombok.Setter;
 public class VehicleChangeRequestDTO {
     private Long vehiclechangerequestid;       // 차량 변경 요청 ID
     private Long officeid;                    // 지사 ID
+    private String officenumber;			
     private Long targetvehicleid;             // 대상 차량 ID
     private String requesttypecode;           // 요청 유형 코드 (ADD, UPDATE, DELETE)
     private String requestedvehiclenumber;    // 요청된 차량 번호
