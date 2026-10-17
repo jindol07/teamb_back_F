@@ -1,0 +1,6 @@
+diff a/apcms_a/src/main/java/kr/co/alpharking/dao/notice/NoticeDao.java b/apcms_a/src/main/java/kr/co/alpharking/dao/notice/NoticeDao.java	(rejected hunks)
+@@ -1,4 +0,3 @@
+-
+ package kr.co.alpharking.dao.notice;
+ 
+ import java.util.List;
