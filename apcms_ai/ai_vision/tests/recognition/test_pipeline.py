@@ -1,6 +1,4 @@
-from pathlib import Path
 import os
-import sys
 import cv2
 import glob
 import re
@@ -9,9 +7,7 @@ import pandas as pd
 from ultralytics import YOLO
 from paddleocr import PaddleOCR
 
-sys.path.insert(0, Path(__file__).resolve().parents[2])
-from paths import MODEL_DIR, RESULT_DIR, TEST_IMAGE_DIR
-
+from ai_vision.paths import MODEL_DIR, RESULT_DIR, TEST_IMAGE_DIR
 
 # 1. 모델 경로
 VEHICLE_MODEL_PATH = MODEL_DIR / "yolo11n.pt"
@@ -381,15 +377,15 @@ def retry_ocr(
 image_paths = []
 
 image_paths.extend(
-    glob.glob(TEST_IMAGE_DIR / "*.jpg")
+    glob.glob(str(TEST_IMAGE_DIR / "*.jpg"))
 )
 
 image_paths.extend(
-    glob.glob(TEST_IMAGE_DIR / "*.jpeg")
+    glob.glob(str(TEST_IMAGE_DIR / "*.jpeg"))
 )
 
 image_paths.extend(
-    glob.glob(TEST_IMAGE_DIR / "*.png")
+    glob.glob(str(TEST_IMAGE_DIR / "*.png"))
 )
 
 
@@ -802,6 +798,13 @@ for image_path in image_paths:
 
                 print(f"2차 번호판 형식 : {retry_type}")
 
+
+                # 2차 OCR 결과를 선택하기 전에 후처리
+                # 특수문자 때문에 REVIEW가 된 경우를 보완
+                retry_text = cleanup_plate_text(retry_text)
+
+                # 후처리한 2차 OCR 결과로 번호판 형식 다시 판정
+                retry_type = classify_plate_format(retry_text)
 
                 # 2차 OCR 결과가 정상 형식이면 채택
                 if retry_type in {

@@ -27,7 +27,7 @@ for i in range(30):
 # 사진 저장
 save_path = SAVE_DIR / "webcam_frame.jpg"
 
-success = cv2.imwrite(str(save_path), frame)
+success = cv2.imwrite(save_path, frame)
 
 cap.release()
 
