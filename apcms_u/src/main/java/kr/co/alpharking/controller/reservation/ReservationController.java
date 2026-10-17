@@ -5,7 +5,9 @@ import java.util.List;
 import jakarta.validation.Valid;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -17,7 +19,7 @@ import kr.co.alpharking.service.reservation.ReservationService;
 import lombok.RequiredArgsConstructor;
 
 @RestController
-@RequestMapping("/api/reservation")
+@RequestMapping("/api/reservation") 
 @RequiredArgsConstructor
 public class ReservationController {
 
@@ -25,7 +27,7 @@ public class ReservationController {
 
     /**
      * 예약 등록
-     * POST /api/reservation
+     * POST /alpharking/api/reservation
      */
     @PostMapping
     public ResponseEntity<ReservationRes> createReservation(
@@ -46,11 +48,21 @@ public class ReservationController {
 
     /**
      * 전체 예약 조회
-     * GET /api/reservation
+     * GET /alpharking/api/reservation
      */
     @GetMapping
     public ResponseEntity<List<ReservationRes>> getAllReservations() {
         return ResponseEntity.ok(
                 reservationService.getAllReservations());
+    }
+
+    /**
+     * 🛑 예약 취소 (삭제)
+     * DELETE /alpharking/api/reservation/{id}
+     */
+    @DeleteMapping("/{id}")
+    public ResponseEntity<Void> cancelReservation(@PathVariable("id") Long id) {
+        reservationService.cancelReservation(id);
+        return ResponseEntity.ok().build();
     }
 }

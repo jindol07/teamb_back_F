@@ -102,6 +102,7 @@ public class ReservationHistory {
             String changeReason,
             LocalDateTime validFrom) {
 
+        LocalDateTime now = LocalDateTime.now();
         ReservationHistory history = new ReservationHistory();
 
         history.reservation = reservation;
@@ -114,15 +115,19 @@ public class ReservationHistory {
         history.reservationEndAt = reservation.getReservationEndAt();
         history.statusCode = reservation.getStatusCode();
         history.recommendedYn = reservation.getRecommendedYn();
-        history.createdAt = reservation.getCreatedAt();
-        history.updatedAt = reservation.getUpdatedAt();
+        
+        history.createdAt = now;
+        history.updatedAt = now;
         history.cancelledAt = reservation.getCancelledAt();
 
         history.actorTypeCode = actorTypeCode;
-        history.actorId = actorId;
+        
+        // actorId가 null로 들어올 경우 제약조건 위반을 막기 위해 기본값(0L) 처리
+        history.actorId = actorId != null ? actorId : 0L; 
+        
         history.changeTypeCode = changeTypeCode;
         history.changeReason = changeReason;
-        history.validFrom = validFrom;
+        history.validFrom = validFrom != null ? validFrom : now;
         history.validTo = null;
 
         return history;
