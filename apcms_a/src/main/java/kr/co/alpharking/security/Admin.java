@@ -1,4 +1,5 @@
 package kr.co.alpharking.security;
+import java.sql.Date;
 import java.util.Collection;
 import java.util.List;
 
@@ -25,38 +26,39 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 @Entity
-@Table(name = "users") // 테이블 이름을 "users"로 변경
+@Table(name = "ADMIN")
 //Spring Security가 관리 하는 Entity : UserDetails 인터페이스를 구현하고 , 추상메서드를 재정의 해놔야
 //시큐리티가 추상메서드를 가져가서 인증관련 호출 
-public class User implements UserDetails{
+public class Admin implements UserDetails {
 	@Id
-	@GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "user_seq_gen")
-	@SequenceGenerator(name = "user_seq_gen", sequenceName = "users_seq", allocationSize = 1)
-	private Long id;
-    private String firstName; // 이름
-    private String lastName; // 성
-    @Column(unique = true, nullable = false) 
+	private Long admin_id;
+	private String admin_name;
+	private String email;
+	private String status_code;
+	private Date created_at;
+	private Date updated_at;
+	
+    @Column(unique = true, nullable = false, name = "login_id") 
     private String username; // 아이디 값을 이메일로 넣어서 사영
+    @Column(name = "password_hash")
     private String password; // 비밀번호
     
-    //롤을 check제약조건으로 지정 해놓는다.
-    @Enumerated(EnumType.STRING)
-    @Column(nullable = false, columnDefinition = "VARCHAR(10) CHECK (ROLE IN ('ADMIN', 'USER', 'TEACHER'))")
-    private Role role;
+//    //롤을 check제약조건으로 지정 해놓는다.
+//    @Enumerated(EnumType.STRING)
+//    @Column(nullable = false, columnDefinition = "VARCHAR(10) CHECK (ROLE IN ('ADMIN', 'OFFICE'))")
+//    private Role role;
+    
     //생성자 
-	public User(String firstName, String lastName, String username, String password, Role role) {
-		this.firstName = firstName;
-		this.lastName = lastName;
-		this.username = username;
-		this.password = password;
-		this.role = role;
+	public Admin(Long floor_no, String office_number, String login_id, String password_hash, Role role) {
+		this.username = login_id;
+		this.password = password_hash;
+//		this.role = role;
 	}
 	
-	//Role에서 권한(ADMIN, USER , TEACHER)을 지정했는데 그 권한을 읽어오기 위한 객체(GrantedAuthority) SimpleGrantedAuthority로 반환 
+//	//Role에서 권한(ADMIN, USER)을 지정했는데 그 권한을 읽어오기 위한 객체(GrantedAuthority) SimpleGrantedAuthority로 반환 
 	@Override
 	public Collection<? extends GrantedAuthority> getAuthorities() {
-
-		return List.of(new SimpleGrantedAuthority(role.name()));
+		return List.of(new SimpleGrantedAuthority("ADMIN"));
 	}
 	// 사용자의 아이디를 반환, 사용자를 식별 할 때 사용하는 메서드를 만들자.
 	public String getUsername() {
@@ -86,6 +88,7 @@ public class User implements UserDetails{
 	public boolean isEnabled() {
 		return true;
 	}
+
     
 }
 

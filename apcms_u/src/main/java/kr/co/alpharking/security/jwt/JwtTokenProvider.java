@@ -39,7 +39,7 @@ public class JwtTokenProvider {
 		String role = authentication.getAuthorities().stream()
 				.map(GrantedAuthority::getAuthority)
 				.findFirst()
-				.orElse("USER");// 기본 Role 설정
+				.orElse("OFFICE");// 기본 Role 설정
 		
 		 System.out.println("UserDetails =>"+userDetails.getUsername() +",Role => "+role);
 		//---------------------------------------------------------------------------------

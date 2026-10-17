@@ -18,6 +18,8 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import jakarta.annotation.PostConstruct;
+
 @EnableWebSecurity
 @Configuration
 public class SecurityConfig {
@@ -33,7 +35,6 @@ public class SecurityConfig {
 	public PasswordEncoder passwordEncoder() {
 		return new BCryptPasswordEncoder();
 	}
-	
 	
     @Bean
     public DaoAuthenticationProvider daoAuthenticationProvider() {
@@ -52,12 +53,13 @@ public class SecurityConfig {
     }
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        http
+        		http
                 .csrf((csrf) -> csrf.disable())
                 //리액트와 크로스 통신 및 리액트의 view를 사용 
                 .cors((cors) -> cors.configurationSource(corsConfigurationSource()))
                 .formLogin((login) -> login.disable())
                 .httpBasic((basic) -> basic.disable())
+            	//.authenticationProvider(daoAuthenticationProvider())
                 .authorizeHttpRequests((auth) -> auth
 
                         .requestMatchers("/api/auth/**").permitAll() // /api/auth/** 에서 오는 모든 요청은 허용
