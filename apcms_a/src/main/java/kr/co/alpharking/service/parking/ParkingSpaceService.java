@@ -2,6 +2,7 @@ package kr.co.alpharking.service.parking;
 
 import java.util.List;
 import java.util.Set;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
 import kr.co.alpharking.dto.parking.ParkingSpaceUpdateRequest;
@@ -10,11 +11,16 @@ import org.springframework.transaction.annotation.Transactional;
 import kr.co.alpharking.dao.parking.ParkingSpaceDao;
 import kr.co.alpharking.dto.parking.ParkingSpaceRow;
 import kr.co.alpharking.dto.parking.ParkingSpacePublicRow;
+import kr.co.alpharking.websocket.parking.ParkingSpaceChangedEvent;
 
 @Service
 public class ParkingSpaceService {
     private final ParkingSpaceDao dao;
-    public ParkingSpaceService(ParkingSpaceDao dao) { this.dao = dao; }
+    private final ApplicationEventPublisher events;
+    public ParkingSpaceService(ParkingSpaceDao dao, ApplicationEventPublisher events) {
+        this.dao = dao;
+        this.events = events;
+    }
 
     @Transactional(readOnly = true)
     public List<ParkingSpaceRow> findAllAdmin() { return dao.findAllAdmin(); }
@@ -52,6 +58,7 @@ public class ParkingSpaceService {
         if (dao.insertAdminHistory(id, adminId, reason) != 1) {
             throw new IllegalStateException("구획 변경 이력 저장 실패");
         }
+        events.publishEvent(new ParkingSpaceChangedEvent());
         return dao.findById(id);
     }
 }
