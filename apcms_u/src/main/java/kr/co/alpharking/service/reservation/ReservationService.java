@@ -170,11 +170,12 @@ public class ReservationService {
         Reservation savedReservation =
                 reservationRepository.save(reservation);
 
+        // ✅ 예약 쪽은 정상 작동하는 "INSERT" 유지
         ReservationHistory history = ReservationHistory.create(
                 savedReservation,
                 "USER",
                 null,
-                "CREATE",
+                "INSERT", 
                 "예약 등록",
                 LocalDateTime.now()
         );
@@ -185,8 +186,41 @@ public class ReservationService {
     }
 
     /**
-     * 전체 예약 최신순 조회
+     * 🛑 예약 취소 (Soft Delete 방식: status_code를 CANCELED로 변경 및 이력 생성)
      */
+    @Transactional
+    public void cancelReservation(Long reservationId) {
+        Reservation reservation = reservationRepository.findById(reservationId)
+                .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 예약입니다."));
+
+        // 이미 취소된 예약인지 확인
+        if ("CANCELED".equals(reservation.getStatusCode())) {
+            throw new IllegalArgumentException("이미 취소된 예약입니다.");
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+
+        // 1. 상태 변경 (Soft Delete)
+        reservation.setStatusCode("CANCELED");
+        reservation.setCancelledAt(now);
+        reservation.setUpdatedAt(now);
+        
+        Reservation updatedReservation = reservationRepository.save(reservation);
+
+        // ✅ 취소 쪽은 제약조건 충돌을 막기 위해 "CANCEL" 대신 안전하게 "UPDATE"로 변경
+        ReservationHistory history = ReservationHistory.create(
+                updatedReservation,
+                "USER", 
+                null, 
+                "UPDATE", // "CANCEL" 대신 "UPDATE"를 사용하여 CK_RH_CHG 제약조건 우회 및 안정성 확보
+                "사용자 예약 취소", 
+                now
+        );
+
+        reservationHistoryRepository.save(history);
+    }
+
+    // 전체 예약 최신순 조회
     public List<ReservationRes> getAllReservations() {
         return reservationRepository
                 .findAllByOrderByParkingReservationIdDesc()
