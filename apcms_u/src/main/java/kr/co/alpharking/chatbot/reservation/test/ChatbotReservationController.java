@@ -1,5 +1,5 @@
 
-package kr.co.alpharking.chatbot.reservation;
+package kr.co.alpharking.chatbot.reservation.test;
 
 import java.util.List;
 
