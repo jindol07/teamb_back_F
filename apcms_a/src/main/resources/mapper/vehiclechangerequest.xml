@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="kr.co.alpharking.dao.vehicle.VehicleChangeRequestDao">
+
+	<!--차량 요청 전체 조회-->
+	<select id="list"
+		resultType="kr.co.alpharking.dto.vehicle.VehicleChangeRequestDTO">
+		SELECT
+		vehicle_change_request_id AS vehiclechangerequestid,
+		office_id AS officeid,
+		target_vehicle_id AS targetvehicleid,
+		request_type_code AS requesttypecode,
+		requested_vehicle_number AS requestedvehiclenumber,
+		requested_vehicle_model AS requestedvehiclemodel,
+		requested_owner_name AS requestedownername,
+		requested_vehicle_type_code AS requestedvehicletypecode,
+		request_reason AS requestreason,
+		request_status_code AS requeststatuscode,
+		reviewer_admin_id AS revieweradminid,
+		review_reason AS reviewreason,
+		requested_at AS requestedat,
+		reviewed_at AS reviewedat,
+		applied_at AS appliedat
+		FROM vehicle_change_request
+		ORDER BY requested_at DESC
+	</select>
+	<!-- 차량 변경 요청 등록
+        - 최초 요청 상태는 DB DEFAULT 값인 REQUESTED 사용
+        - 요청 일시는 SYSDATE로 저장
+        - 실제 차량 테이블 반영은 별도 승인 처리에서 수행 -->
+	<insert id="add">
+		INSERT INTO vehicle_change_request (
+		vehicle_change_request_id,
+		office_id,
+		target_vehicle_id,
+		request_type_code,
+		requested_vehicle_number,
+		requested_vehicle_model,
+		requested_owner_name,
+		requested_vehicle_type_code,
+		request_reason,
+		requested_at
+		) VALUES (
+		seq_vchange_req.NEXTVAL,
+		#{officeid},
+		#{targetvehicleid},
+		#{requesttypecode},
+		#{requestedvehiclenumber},
+		#{requestedvehiclemodel},
+		#{requestedownername},
+		#{requestedvehicletypecode},
+		#{requestreason},
+		SYSDATE
+		)
+	</insert>
+
+
+	<!-- 차량 변경 요청 검토 처리
+        - 승인 또는 반려 상태 저장
+        - 검토자 및 검토 사유 저장
+        - 검토 일시 기록
+        - 실제 적용 일시는 여기서 기록하지 않음
+        - 요청 중인 건만 검토 가능 -->
+	<update id="update">
+		UPDATE vehicle_change_request
+		SET request_status_code = #{requeststatuscode},
+		reviewer_admin_id = #{revieweradminid},
+		review_reason = #{reviewreason},
+		reviewed_at = SYSDATE
+		WHERE vehicle_change_request_id = #{vehiclechangerequestid}
+		AND request_status_code = 'REQUESTED'
+	</update>
+
+
+	<!-- 차량 변경 요청 취소
+        - 실제 행을 삭제하지 않고 상태만 CANCELLED로 변경
+        - 아직 검토되지 않은 요청만 취소 가능 -->
+	<update id="delete">
+		UPDATE vehicle_change_request
+		SET request_status_code = 'CANCELLED'
+		WHERE vehicle_change_request_id = #{vehicle_change_request_id}
+		AND request_status_code = 'REQUESTED'
+	</update>
+
+	<!--차량 변경 요청 적용 완료 처리
+        - 실제 vehicle 테이블 변경이 성공한 뒤 호출
+        - 승인된 요청만 적용 완료 처리 -->
+	<update id="markApplied">
+		UPDATE vehicle_change_request
+		SET applied_at = SYSDATE
+		WHERE vehicle_change_request_id = #{vehiclechangerequestid}
+		AND request_status_code = 'APPROVED'
+		AND applied_at IS NULL
+	</update>
+
+</mapper>

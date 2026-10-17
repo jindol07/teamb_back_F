@@ -1,0 +1,99 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="kr.co.alpharking.dao.vehicle.VehiceDao">
+	<!-- 차량번호 중복 확인  => 추후 구현 예정-->
+	<!--<select id="countByVehicleNumber" resultType="int">
+    SELECT COUNT(*)
+    FROM vehicle
+    WHERE office_id = #{officeid}
+      AND vehicle_number = #{vehiclenumber}
+      AND deleted_at IS NULL
+</select> -->
+	<insert id="add">
+		INSERT INTO vehicle (
+		vehicle_id,
+		office_id,
+		vehicle_number,
+		vehicle_model,
+		owner_name,
+		vehicle_type_code,
+		registration_type_code,
+		registration_status_code,
+		registered_at,
+		rejected_reason,
+		created_at,
+		updated_at
+		) VALUES (
+		SEQ_VEHICLE.NEXTVAL,
+		#{officeid},
+		#{vehiclenumber},
+		#{vehiclemodel},
+		#{ownername},
+		#{vehicletypecode},
+		#{registrationtypecode},
+		#{registrationstatuscode},
+		#{registeredat},
+		#{rejectedreason},
+		SYSDATE,
+		SYSDATE
+		)
+	</insert>
+	<resultMap id="vehicleResultMap"
+		type="kr.co.alpharking.dto.vehicle.VehicleDTO">
+
+		<id property="vehicleid" column="vehicle_id" />
+		<result property="officeid" column="office_id" />
+		<result property="vehiclenumber" column="vehicle_number" />
+		<result property="vehiclemodel" column="vehicle_model" />
+		<result property="ownername" column="owner_name" />
+		<result property="vehicletypecode" column="vehicle_type_code" />
+		<result property="registrationtypecode" column="registration_type_code" />
+		<result property="registrationstatuscode"
+			column="registration_status_code" />
+		<result property="registeredat" column="registered_at" />
+		<result property="rejectedreason" column="rejected_reason" />
+		<result property="createdat" column="created_at" />
+		<result property="updatedat" column="updated_at" />
+		<result property="deletedat" column="deleted_at" />
+
+	</resultMap>
+
+	<select id="list" resultMap="vehicleResultMap">
+		SELECT
+		vehicle_id,
+		office_id,
+		vehicle_number,
+		vehicle_model,
+		owner_name,
+		vehicle_type_code,
+		registration_type_code,
+		registration_status_code,
+		registered_at,
+		rejected_reason,
+		created_at,
+		updated_at,
+		deleted_at
+		FROM vehicle
+		WHERE deleted_at IS NULL
+	</select>
+
+	<update id="update">
+		UPDATE vehicle
+		SET vehicle_number = #{vehiclenumber},
+		vehicle_model = #{vehiclemodel},
+		owner_name = #{ownername},
+		vehicle_type_code = #{vehicletypecode},
+		registration_type_code = #{registrationtypecode},
+		registration_status_code = #{registrationstatuscode},
+		rejected_reason = #{rejectedreason},
+		updated_at = SYSDATE
+		WHERE vehicle_id = #{vehicleid}
+	</update>
+
+	<update id="delete">
+		UPDATE vehicle
+		SET deleted_at = SYSDATE
+		WHERE vehicle_id = #{vehicleid}
+	</update>
+
+</mapper>
