@@ -60,8 +60,8 @@ public class ReservationHistory {
     @Column(name = "STATUS_CODE", nullable = false, length = 50)
     private String statusCode;
 
-    @Column(name = "RECOMMENDED_YN", nullable = false, length = 1)
-    private String recommendedYn;
+    @Column(name = "RECOMMENDED_YN", nullable = false, columnDefinition = "char(1)")
+    private String recommendedYn = "N";
 
     @Column(name = "CREATED_AT", nullable = false)
     private LocalDateTime createdAt;

@@ -322,9 +322,9 @@ def run_realtime():
 
     # 4-6. 웹캠 연결
 
-    # 0: 기본 웹캠
-    # CAP_DSHOW: Windows의 DirectShow 백엔드
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    # 1번 : 기존 주차면 감지용 웹캠
+    # CAP_DSHOW : Windows의 DirectShow 백엔드
+    cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)
 
     if not cap.isOpened():
         print("웹캠을 연결할 수 없습니다.")
