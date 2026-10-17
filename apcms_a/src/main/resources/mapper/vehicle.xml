@@ -1,14 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
 <mapper namespace="kr.co.alpharking.dao.vehicle.VehiceDao">
-	<!-- 차량번호 중복 확인  => 추후 구현 예정-->
-	<!--<select id="countByVehicleNumber" resultType="int">
-    SELECT COUNT(*)
-    FROM vehicle
-    WHERE office_id = #{officeid}
-      AND vehicle_number = #{vehiclenumber}
-      AND deleted_at IS NULL
-</select> -->
+
+	<!-- 차량 등록 -->
 	<insert id="add">
 		INSERT INTO vehicle (
 		vehicle_id,
@@ -38,11 +33,14 @@
 		SYSDATE
 		)
 	</insert>
+
+	<!-- 차량 조회 결과 매핑 -->
 	<resultMap id="vehicleResultMap"
 		type="kr.co.alpharking.dto.vehicle.VehicleDTO">
 
 		<id property="vehicleid" column="vehicle_id" />
 		<result property="officeid" column="office_id" />
+		<result property="officenumber" column="office_number" />
 		<result property="vehiclenumber" column="vehicle_number" />
 		<result property="vehiclemodel" column="vehicle_model" />
 		<result property="ownername" column="owner_name" />
@@ -58,28 +56,35 @@
 
 	</resultMap>
 
+	<!-- 차량 목록 + 기존 호수 정보 조회 -->
 	<select id="list" resultMap="vehicleResultMap">
 		SELECT
-		vehicle_id,
-		office_id,
-		vehicle_number,
-		vehicle_model,
-		owner_name,
-		vehicle_type_code,
-		registration_type_code,
-		registration_status_code,
-		registered_at,
-		rejected_reason,
-		created_at,
-		updated_at,
-		deleted_at
-		FROM vehicle
-		WHERE deleted_at IS NULL
+		v.vehicle_id,
+		v.office_id,
+		o.office_number,
+		v.vehicle_number,
+		v.vehicle_model,
+		v.owner_name,
+		v.vehicle_type_code,
+		v.registration_type_code,
+		v.registration_status_code,
+		v.registered_at,
+		v.rejected_reason,
+		v.created_at,
+		v.updated_at,
+		v.deleted_at
+		FROM vehicle v
+		LEFT JOIN office o
+		ON v.office_id = o.office_id
+		WHERE v.deleted_at IS NULL
+		ORDER BY v.vehicle_id DESC
 	</select>
 
+	<!-- 차량 수정 -->
 	<update id="update">
 		UPDATE vehicle
-		SET vehicle_number = #{vehiclenumber},
+		SET
+		vehicle_number = #{vehiclenumber},
 		vehicle_model = #{vehiclemodel},
 		owner_name = #{ownername},
 		vehicle_type_code = #{vehicletypecode},
@@ -90,6 +95,7 @@
 		WHERE vehicle_id = #{vehicleid}
 	</update>
 
+	<!-- 차량 삭제: 논리 삭제 -->
 	<update id="delete">
 		UPDATE vehicle
 		SET deleted_at = SYSDATE
