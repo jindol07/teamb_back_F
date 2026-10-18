@@ -8,6 +8,7 @@
 | `/vision/runs?offset=0&limit=20` | 저장된 실행 목록, 1~100개씩 조회 |
 | `/vision/runs/{run_id}` | 추적·OCR·통합 실행의 요약과 상태 |
 | `/vision/runs/{run_id}/passages?offset=0&limit=20` | 차량별 방향·영상 시각·번호판 판정 |
+| `/vision/runs/{run_id}/audit` | 저장 로그·추적/OCR 연결 일관성 진단 |
 
 예시 실행 ID는 `traffic_pipeline_fresh`, `traffic_pipeline_reuse`,
 `traffic_botsort_full`, `traffic_ocr_local`입니다. 추적만 수행한 실행은
@@ -19,10 +20,47 @@
 결과 없음은 404, 손상되거나 검증되지 않는 결과는 503입니다.
 목록에서는 손상된 실행을 `UNAVAILABLE`로 표시하고 다른 실행은 계속 제공합니다.
 
+진단 경로는 손상된 실행도 HTTP 200의 `status=FAILED`와 고정 검사 코드로 설명합니다.
+진단 대상 없음은 404입니다. PASS는 인식 정확도 합격을 뜻하지 않습니다.
+세부 범위와 CLI 사용법은 `RESULT_AUDIT.md`를 참고하세요.
+
 조회는 모델 초기화·웹캠 접근·재전송·파일 저장을 수행하지 않습니다.
 POST/DELETE 등 변경 경로는 없습니다. 실시간 분석을 시작하는 API가 아닙니다.
 번호판 판정은 저장된 OCR 표본으로 다시 계산해 저장 내용과 다르면 제공을 중단합니다.
 보이는 CONFIRMED는 반복 인식 정책 통과를 뜻하며 실제 정답 확인을 뜻하지 않습니다.
+
+## 차량 결과 검색과 CSV 내보내기
+
+`/vision/runs/{run_id}/passages`에 다음 선택 조건을 함께 사용할 수 있습니다.
+
+| 조건 | 허용 값 |
+|---|---|
+| `direction` | `UP`, `DOWN` (화면 기준 이동 방향) |
+| `plate_status` | `CONFIRMED`, `CONFLICT`, `INSUFFICIENT_EVIDENCE`, `NO_VALID_KOREAN_PLATE` |
+| `start_seconds`, `end_seconds` | 원본 영상 시각(초), 양 끝 포함 |
+
+예: `/vision/runs/traffic_pipeline_fresh/passages?direction=DOWN&start_seconds=0&end_seconds=3`
+
+조건은 AND로 적용하며 `total`은 검색 조건 적용 후의 건수입니다. 검색 후 페이지를
+나눕니다. 시작 시각이 종료 시각보다 크면 422입니다. 필터 밖의 행도 검증하므로
+검색 조건으로 손상된 기록을 숨기지 않습니다. 중복 차량 ID, 누락 행, 요약과
+판정별 건수 불일치도 503으로 처리합니다.
+
+서버를 실행하지 않고 같은 조건으로 CSV를 만들 수 있습니다. `apcms_ai`에서 실행합니다.
+
+```powershell
+.\.venv312\Scripts\python.exe -m ai_vision.recognition.export_passages `
+  --run-id traffic_pipeline_fresh `
+  --direction DOWN `
+  --output ai_vision/results/exports/my_passages_01.csv
+```
+
+`--plate-status`, `--start-seconds`, `--end-seconds`도 지원합니다. Excel 한글 표시를
+위해 UTF-8 BOM을 사용하며, 100건을 넘는 결과도 모두 저장합니다. 검색 결과가
+없으면 열 이름만 저장합니다. 원본 `results/recognition` 밖의 새 CSV만 허용하고
+기존 CSV는 덮어쓰지 않습니다. 내보내기는 영상 처리가 끝난 결과에서 실행하세요.
+CSV에는 실행 ID, 차량 ID, 화면 방향, 영상 시각, 번호판 판정·번호·표본 수만
+들어갑니다. API 추가와 마찬가지로 실제 ENTRY/EXIT 이벤트를 만들거나 전송하지 않습니다.
 
 ## 모델 없는 독립 조회 서버
 
