@@ -5,6 +5,8 @@
 from fastapi import APIRouter, FastAPI, HTTPException, Path, Query
 
 from ai_vision.recognition.results_catalog import ResultCatalog
+from ai_vision.recognition.passage_query import PassageQuery
+from ai_vision.recognition.run_audit import audit_run
 
 
 def create_router(catalog=None):
@@ -29,10 +31,24 @@ def create_router(catalog=None):
     def get_run(run_id: str = Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$")):
         return read_result(lambda: catalog.overview(run_id))
 
+    @router.get("/{run_id}/audit")
+    def get_audit(run_id: str = Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$")):
+        # 진단 실패도 상태와 검사 코드를 응답하며 원본 결과는 수정하지 않습니다.
+        return read_result(lambda: audit_run(catalog, run_id))
+
     @router.get("/{run_id}/passages")
     def get_passages(run_id: str = Path(pattern=r"^[A-Za-z0-9][A-Za-z0-9_-]{0,95}$"),
-                     offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100)):
-        return read_result(lambda: catalog.passages(run_id, offset, limit))
+                     offset: int = Query(0, ge=0), limit: int = Query(20, ge=1, le=100),
+                     direction: str | None = Query(None, pattern=r"^(UP|DOWN)$"),
+                     plate_status: str | None = Query(None, pattern=r"^(CONFIRMED|CONFLICT|INSUFFICIENT_EVIDENCE|NO_VALID_KOREAN_PLATE)$"),
+                     start_seconds: float | None = Query(None, ge=0, allow_inf_nan=False),
+                     end_seconds: float | None = Query(None, ge=0, allow_inf_nan=False)):
+        # 검색 조건 오류는 422, 저장 파일 손상은 기존처럼 503으로 구분합니다.
+        try:
+            query = PassageQuery(direction, plate_status, start_seconds, end_seconds)
+        except ValueError as error:
+            raise HTTPException(status_code=422, detail=str(error)) from error
+        return read_result(lambda: catalog.passages(run_id, offset, limit, query))
 
     return router
 
