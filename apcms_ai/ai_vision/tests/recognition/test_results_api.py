@@ -72,6 +72,18 @@ class ResultsAPITests(unittest.TestCase):
         self.assertEqual(self.client.post("/vision/runs").status_code, 405)
         self.assertEqual(self.client.delete("/vision/runs/tracking").status_code, 405)
 
+    def test_audit_returns_diagnostic_failure_without_private_paths(self):
+        # 요약만 있고 필수 로그가 없는 결과는 200 응답 안의 FAILED로 구분합니다.
+        before = (self.root / "tracking/summary.json").read_bytes()
+        response = self.client.get("/vision/runs/tracking/audit")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["status"], "FAILED")
+        self.assertNotIn(str(self.root), response.text)
+        self.assertEqual(before, (self.root / "tracking/summary.json").read_bytes())
+        self.assertEqual(self.client.get("/vision/runs/missing/audit").status_code, 404)
+        self.assertEqual(self.client.get("/vision/runs/bad.name/audit").status_code, 422)
+        self.assertEqual(self.client.post("/vision/runs/tracking/audit").status_code, 405)
+
     def test_passage_pagination_and_recomputed_consensus(self):
         folder = self.root / "ocr"
         write_json_atomic(folder / "summary.json", {
@@ -87,9 +99,19 @@ class ResultsAPITests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()["items"][0]["plate_number"], "91소6408")
         self.assertEqual(self.client.get("/vision/runs/ocr/passages?offset=1").json()["items"], [])
+        # 필터 적용 후의 총 건수로 페이지를 계산합니다.
+        self.assertEqual(self.client.get("/vision/runs/ocr/passages?direction=UP").json()["total"], 0)
+        filtered = self.client.get("/vision/runs/ocr/passages?direction=DOWN&plate_status=CONFIRMED&start_seconds=1.2&end_seconds=1.2")
+        self.assertEqual(filtered.json()["total"], 1)
+        for suffix in ("direction=ENTRY", "plate_status=BAD", "start_seconds=2&end_seconds=1", "start_seconds=nan"):
+            self.assertEqual(self.client.get("/vision/runs/ocr/passages?" + suffix).status_code, 422)
         row["plate_consensus"]["plate_number"] = "12가3456"
         path.write_text(json.dumps(row), encoding="utf-8")
         self.assertEqual(self.client.get("/vision/runs/ocr/passages").status_code, 503)
+        # 필터 밖의 손상된 행도 검사해 검색 조건으로 오류가 숨겨지지 않는지 확인합니다.
+        row["samples"] = [None]
+        path.write_text(json.dumps(row), encoding="utf-8")
+        self.assertEqual(self.client.get("/vision/runs/ocr/passages?direction=UP").status_code, 503)
 
 
 if __name__ == "__main__":

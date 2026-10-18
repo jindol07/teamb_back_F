@@ -2,15 +2,16 @@
 
 """허용된 결과 폴더에서 실행 요약과 차량 판정만 읽는 저장소."""
 
-import math
 import re
+import hashlib
+import json
 from pathlib import Path
 
 from ai_vision.paths import RESULT_DIR
 from ai_vision.recognition.local_io import read_json, iter_jsonl
-from ai_vision.recognition.plate_consensus import summarize_plate_samples
+from ai_vision.recognition.result_validation import public_passage, validate_summary
+from ai_vision.recognition.passage_query import PassageQuery, PLATE_STATUSES
 
-PLATE_STATUSES = {"CONFIRMED", "CONFLICT", "INSUFFICIENT_EVIDENCE", "NO_VALID_KOREAN_PLATE"}
 
 
 def _counts(value, allowed):
@@ -80,6 +81,7 @@ class ResultCatalog:
                 result[key] = summary[key]
         else:
             raise ValueError("지원하지 않는 결과 요약입니다.")
+        validate_summary(result)
         return result
 
     def list_runs(self, offset=0, limit=20):
@@ -104,8 +106,53 @@ class ResultCatalog:
         if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 100:
             raise ValueError("offset은 0 이상, limit은 1~100이어야 합니다.")
 
-    def passages(self, run_id, offset=0, limit=20):
+    def passages(self, run_id, offset=0, limit=20, query=None):
         self.pagination(offset, limit)
+        items = self.all_passages(run_id, query)
+        return {"run_id": run_id, "total": len(items), "offset": offset, "limit": limit,
+                "items": items[offset:offset + limit], "http_enabled": False}
+
+    def review_snapshot(self, run_id):
+        # 4. 전체 OCR 결과와 처리 범위를 묶어 검토 파일의 대상을 식별합니다.
+        # 경로·모델·카메라를 포함하지 않고, 판정이 바뀌면 해시도 바뀝니다.
+        overview = self.overview(run_id)
+        items = sorted(self.all_passages(run_id), key=lambda row: row["track_id"])
+        if overview != self.overview(run_id):
+            raise ValueError("결과가 변경 중입니다. 처리가 끝난 뒤 검토해 주세요.")
+        payload = {"run_id": run_id, "overview": overview, "items": items}
+        encoded = json.dumps(payload, sort_keys=True, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+        return {**payload, "snapshot_sha256": hashlib.sha256(encoded.encode("utf-8")).hexdigest()}
+
+    def all_passages(self, run_id, query=None):
+        # CSV도 전체 결과를 한 번 읽어서 만들고 페이지별 재조회는 하지 않습니다.
+        query = query if query is not None else PassageQuery()
+        if not isinstance(query, PassageQuery):
+            raise ValueError("검색 조건 형식이 유효하지 않습니다.")
+        folder, overview = self.review_source(run_id)
+        path = self.safe_file(folder / "passages.jsonl")
+        selected, seen, confirmed, statuses = [], set(), 0, {}
+        # 3. 필터 밖의 행도 검증해 손상된 전체 결과를 정상으로 보여주지 않습니다.
+        for row in iter_jsonl(path):
+            item = public_passage(row)
+            if item["track_id"] in seen:
+                raise ValueError("같은 차량의 통과 결과가 중복됐습니다.")
+            seen.add(item["track_id"])
+            confirmed += item["plate_status"] == "CONFIRMED"
+            statuses[item["plate_status"]] = statuses.get(item["plate_status"], 0) + 1
+            if query.matches(item):
+                selected.append(item)
+        expected = overview.get("ocr_processed", overview.get("processed_tracks"))
+        if len(seen) != expected:
+            raise ValueError("통과 결과 행 수와 OCR 처리 건수가 일치하지 않습니다.")
+        if overview["kind"] == "ocr" and confirmed != overview["confirmed_plates"]:
+            raise ValueError("확정 번호판 행 수가 요약과 일치하지 않습니다.")
+        if overview["kind"] == "pipeline" and any(statuses.get(key, 0) != overview["plate_status_counts"].get(key, 0)
+                                                       for key in PLATE_STATUSES):
+            raise ValueError("판정별 결과 행 수가 요약과 일치하지 않습니다.")
+        return selected
+
+    def review_source(self, run_id):
+        # 5. 통합 실행과 OCR 단독 실행이 같은 완료 상태·경로 검사를 사용합니다.
         folder = self.folder(run_id)
         overview = self.overview(run_id)
         if overview["kind"] == "pipeline":
@@ -115,24 +162,7 @@ class ResultCatalog:
             folder = Path(summary["ocr_dir"])
         elif overview["kind"] != "ocr":
             raise FileNotFoundError("이 실행에는 OCR 결과가 없습니다.")
-        path = self.safe_file(folder / "passages.jsonl")
-        selected, total = [], 0
-        for index, row in enumerate(iter_jsonl(path)):
-            if (row.get("http_enabled") is not False or row.get("record_type") != "LOCAL_TRACKED_PASSAGE" or
-                    type(row.get("track_id")) is not int or row["track_id"] < 0 or
-                    row.get("screen_direction") not in {"UP", "DOWN"}):
-                raise ValueError("통과 판정 결과 형식이 유효하지 않습니다.")
-            time = row.get("crossing_video_seconds")
-            if isinstance(time, bool) or not isinstance(time, (int, float)) or not math.isfinite(time) or time < 0:
-                raise ValueError("통과 시각이 유효하지 않습니다.")
-            consensus = row["plate_consensus"]
-            checked = summarize_plate_samples(row["samples"], consensus["minimum_votes"], consensus["minimum_spacing_seconds"])
-            if checked != consensus:
-                raise ValueError("번호판 판정과 원본 표본이 일치하지 않습니다.")
-            if offset <= index < offset + limit:
-                selected.append({"track_id": row["track_id"], "screen_direction": row["screen_direction"],
-                                 "video_seconds": time, "plate_status": checked["status"],
-                                 "plate_number": checked["plate_number"], "sample_count": len(row["samples"])})
-            total += 1
-        return {"run_id": run_id, "total": total, "offset": offset, "limit": limit,
-                "items": selected, "http_enabled": False}
+        folder = folder.resolve()
+        if not folder.is_relative_to(self.root):
+            raise ValueError("허용된 OCR 결과 폴더가 아닙니다.")
+        return folder, overview
