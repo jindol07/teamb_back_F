@@ -1,3 +1,5 @@
+# D:/finalProjectB/back/apcms_ai/ai_vision/main.py
+
 # 차량번호 인식 및 주차면 점유 현황 조회를 담당하는
 # APCMS 비전 AI 통합 라우터
 
@@ -11,6 +13,7 @@ from .recognition.recognizer import recognize_image
 
 # 기존 주차면 점유 조회 라우터
 from .parking.parking_api import router as parking_router
+from .recognition.results_api import router as results_router
 
 
 # 1. 비전 AI 라우터 생성
@@ -120,3 +123,6 @@ async def recognize(file: UploadFile = File(...)):
 # 주차면의 최신 결과 JSON을 읽어 반환하며
 # 이 요청 자체가 웹캠 감지를 시작하지는 않음
 router.include_router(parking_router)
+
+# 4. 저장된 실행 결과 조회. 이 GET API 자체는 모델·카메라·송신기를 실행하지 않음
+router.include_router(results_router)

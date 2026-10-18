@@ -1,0 +1,23 @@
+{
+  "source_name": "traffic.mp4",
+  "line_y": 432,
+  "label_status": "CODEX_VISUAL_PROVISIONAL",
+  "method": "원본 0.25초 간격 확대 프레임 검토. 가림으로 중심점 시각이 불확실해 통과 허용 구간으로 표시. 독립적인 사람의 정답 라벨은 아님.",
+  "scope": {"start_seconds": 36.5, "end_seconds": 40.5, "x_min": 350, "x_max": 550},
+  "vehicles": [
+    {
+      "label_id": "LEFT_SILVER_SUV",
+      "direction": "DOWN",
+      "earliest_seconds": 37.0,
+      "latest_seconds": 38.25,
+      "description": "파란 세단 바로 뒤의 은색 SUV. 가림이 있어 통과 확정 로그의 지연을 포함한 구간으로 검토."
+    },
+    {
+      "label_id": "LEFT_SILVER_COMPACT",
+      "direction": "DOWN",
+      "earliest_seconds": 39.25,
+      "latest_seconds": 40.5,
+      "description": "은색 SUV 바로 뒤의 작은 은색 차량. SUV와 구별하여 이동을 따라가며 검토."
+    }
+  ]
+}
