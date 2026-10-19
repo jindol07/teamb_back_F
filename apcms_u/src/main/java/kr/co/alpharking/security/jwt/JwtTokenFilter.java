@@ -40,7 +40,6 @@ public class JwtTokenFilter extends OncePerRequestFilter{
         //로그인 -> 인증처리 -> 발급한 토큰을 받았을 때 null이 아님
         System.out.println("JwtTokenFilter token============>"+token);
         if (token != null && jwtTokenProvider.validateToken(token)) {
-        	System.out.println(123123123);
 
             String username = jwtTokenProvider.getUsername(token);
             //JwtTokenFilter: 추출된 username => xman2@gmail.com
