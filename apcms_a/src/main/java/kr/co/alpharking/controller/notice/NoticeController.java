@@ -19,6 +19,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -29,11 +30,13 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.multipart.MultipartFile;
+import org.springframework.web.server.ResponseStatusException;
 
 import kr.co.alpharking.dto.notice.NoticeCreateReq;
 import kr.co.alpharking.dto.notice.NoticeFiles;
 import kr.co.alpharking.dto.notice.NoticeHistory;
 import kr.co.alpharking.service.notice.NoticeService;
+import kr.co.alpharking.security.Admin;
 
 @RestController
 @RequestMapping("/api/notice")
@@ -46,12 +49,27 @@ public class NoticeController {
 	@Value("${spring.servlet.multipart.location}")
 	private String filePath;
 
+	// JWT 필터가 DB에서 조회한 관리자만 사용하며, 요청으로 받은 ID는 신뢰하지 않습니다.
+	private Long getAuthenticatedAdminId(Authentication authentication) {
+		if (authentication == null || !authentication.isAuthenticated()) {
+			throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "관리자 로그인이 필요합니다.");
+		}
+		if (!(authentication.getPrincipal() instanceof Admin admin) || admin.getAdmin_id() == null
+				|| authentication.getAuthorities().stream().noneMatch(role -> "ADMIN".equals(role.getAuthority()))) {
+			throw new ResponseStatusException(HttpStatus.FORBIDDEN, "관리자 권한이 필요합니다.");
+		}
+		return admin.getAdmin_id();
+	}
+
 	// ========================================
 	// 1. 공지사항 등록 + 첨부파일 등록
 	// ========================================
 	@PostMapping("/add")
 	public ResponseEntity<?> addNotice(NoticeCreateReq galleryVO,
-			@RequestParam(value = "files", required = false) MultipartFile[] images) {
+			@RequestParam(value = "files", required = false) MultipartFile[] images, Authentication authentication) {
+
+		// 파일 저장 전에 인증을 확인하고, 프론트가 보낸 작성자 ID도 덮어씁니다.
+		galleryVO.setWriterAdminId(Math.toIntExact(getAuthenticatedAdminId(authentication)));
 
 		// 첨부파일 정보를 저장할 목록
 		List<NoticeFiles> imageList = new ArrayList<>();
@@ -192,7 +210,9 @@ public class NoticeController {
 	// ========================================
 	@PutMapping("/{noticeId}")
 	public ResponseEntity<?> updateNotice(@PathVariable("noticeId") Integer noticeId,
-			@RequestParam("changedByAdminId") Long changedByAdminId, @RequestBody NoticeCreateReq nidto) {
+			@RequestBody NoticeCreateReq nidto, Authentication authentication) {
+
+		Long changedByAdminId = getAuthenticatedAdminId(authentication);
 
 		// URL의 공지사항 번호 설정
 		nidto.setNoticeId(noticeId);
@@ -213,7 +233,9 @@ public class NoticeController {
 	// ========================================
 	@DeleteMapping("/{noticeId}")
 	public ResponseEntity<?> deleteNotice(@PathVariable("noticeId") Integer noticeId,
-			@RequestParam("changedByAdminId") Long changedByAdminId) {
+			Authentication authentication) {
+
+		Long changedByAdminId = getAuthenticatedAdminId(authentication);
 
 		// 공지사항 삭제 및 이력 저장
 		boolean result = noticeService.deleteNotice(noticeId, changedByAdminId);
