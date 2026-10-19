@@ -1,6 +1,6 @@
 package kr.co.alpharking.controller.vehicle;
 
-import java.util.Optional;
+import java.util.List;
 
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
@@ -12,7 +12,6 @@ import org.springframework.web.bind.annotation.RestController;
 import kr.co.alpharking.entity.vehicle.Vehicle;
 import kr.co.alpharking.service.vehicle.VehicleService;
 
-// 번호판으로 VEHICLE 테이블 조회(차량 조회)가 되는지 확인하는 단독 테스트 용도
 @RestController
 @RequestMapping("/api/vehicles")
 public class VehicleController {
@@ -20,21 +19,23 @@ public class VehicleController {
 	@Autowired
 	private VehicleService vehicleService;
 
-//	http://192.168.0.23/alpharking/api/vehicles/number/91소6408
+	// http://192.168.0.23/alpharking/api/vehicles/number/12 (일부 검색 지원)
 	@GetMapping("/number/{vehicleNumber}")
-	public ResponseEntity<?> findByVehicleNumber(@PathVariable("vehicleNumber") String vehicleNumber) {
+	public ResponseEntity<?> searchByVehicleNumber(@PathVariable("vehicleNumber") String vehicleNumber) {
 
-		System.out.println("===== VehicleController =====");
-		System.out.println("vehicleNumber : " + vehicleNumber);
+		System.out.println("===== VehicleController (일부 검색) =====");
+		System.out.println("검색어 : " + vehicleNumber);
 
-		Optional<Vehicle> vehicle = vehicleService.findByVehicleNumber(vehicleNumber);
+		List<Vehicle> vehicleList = vehicleService.searchByVehicleNumber(vehicleNumber);
 
-		System.out.println("조회 결과 : " + vehicle);
+		System.out.println("조회된 차량 수 : " + vehicleList.size());
 
-		if (vehicle.isPresent()) {
-			return ResponseEntity.ok(vehicle.get());
+		// 검색 결과가 존재하면 리스트 반환
+		if (vehicleList != null && !vehicleList.isEmpty()) {
+			return ResponseEntity.ok(vehicleList);
 		}
 
+		// 결과가 없으면 빈 리스트 혹은 404 처리 (여기서는 빈 리스트 또는 404)
 		return ResponseEntity.notFound().build();
 	}
 }
