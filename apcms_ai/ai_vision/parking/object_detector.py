@@ -23,9 +23,9 @@ VEHICLE_CLASSES = [2, 3, 5, 7]
 
 def detect_objects():
 
-    model = YOLO(str(MODEL_PATH))
+    model = YOLO(MODEL_PATH)
 
-    cap = cv2.VideoCapture(str(VIDEO_PATH))
+    cap = cv2.VideoCapture(VIDEO_PATH)
 
     if not cap.isOpened():
         print("영상을 열 수 없습니다.")
@@ -140,7 +140,7 @@ def detect_objects():
 
     save_path = RESULT_DIR / "detected_objects_tiled.jpg"
 
-    cv2.imwrite(str(save_path), annotated)
+    cv2.imwrite(save_path, annotated)
 
     print(f"\n결과 이미지 저장: {save_path}")
 

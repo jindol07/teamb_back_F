@@ -55,7 +55,7 @@ for result in results:
 
             # 저장
             cv2.imwrite(
-                str(RESULT_DIR / f"vehicle_{vehicle_count}.jpg"),
+                RESULT_DIR / f"vehicle_{vehicle_count}.jpg",
                 crop
             )
 

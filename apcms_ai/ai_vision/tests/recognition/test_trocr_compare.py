@@ -20,7 +20,7 @@ processor = TrOCRProcessor.from_pretrained(model_name)
 model = VisionEncoderDecoderModel.from_pretrained(model_name)
 
 # 원본 번호판 이미지
-image_path = str(RESULT_DIR / "plates" / "plate_1.jpg")
+image_path = RESULT_DIR / "plates" / "plate_1.jpg"
 
 # OpenCV로 이미지 읽기
 image = cv2.imread(image_path)
@@ -61,7 +61,7 @@ def run_trocr(image_path, label):
 # 1. 원본 이미지
 # -----------------------------------------
 
-original_path = str(RESULT_DIR / "trocr_compare" / "01_original.jpg")
+original_path = RESULT_DIR / "trocr_compare" / "01_original.jpg"
 
 cv2.imwrite(
     original_path,
@@ -81,7 +81,7 @@ upscaled = cv2.resize(
     interpolation=cv2.INTER_CUBIC
 )
 
-upscaled_path = str(RESULT_DIR / "trocr_compare" / "02_upscaled.jpg")
+upscaled_path = RESULT_DIR / "trocr_compare" / "02_upscaled.jpg"
 
 cv2.imwrite(
     upscaled_path,
@@ -98,7 +98,7 @@ gray = cv2.cvtColor(
     cv2.COLOR_BGR2GRAY
 )
 
-gray_path = str(RESULT_DIR / "trocr_compare" / "03_gray.jpg")
+gray_path = RESULT_DIR / "trocr_compare" / "03_gray.jpg"
 
 cv2.imwrite(
     gray_path,
@@ -117,7 +117,7 @@ clahe = cv2.createCLAHE(
 
 clahe_image = clahe.apply(gray)
 
-clahe_path = str(RESULT_DIR / "trocr_compare" / "04_clahe.jpg")
+clahe_path = RESULT_DIR / "trocr_compare" / "04_clahe.jpg"
 
 cv2.imwrite(
     clahe_path,

@@ -13,6 +13,13 @@ def settings():
     if mode=='MOCK' and env!='development': raise RuntimeError('MOCK mode is DEVELOPMENT ONLY')
     return {
       'mode':mode, 'env':env,
+      # 개발 환경에서만 테스트 예약 DB 조회 허용 로그인 구현시 ----------위 삭제
+  'test_reservation_enabled': (
+      env == 'development'
+      and mode == 'MOCK'
+      and os.getenv('TEST_RESERVATION_ENABLED', 'false').lower() == 'true'
+  ),
+  #----------------------------------------------
       'base_url':os.getenv('SPRING_BOOT_BASE_URL','http://localhost:8080').rstrip('/'),
       'auth_path':os.getenv('AUTH_ME_PATH','/api/auth/me'),
       'reservation_path':os.getenv('RESERVATIONS_PATH','/api/reservation'),
