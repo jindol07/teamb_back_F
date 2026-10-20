@@ -1,0 +1,62 @@
+# D:/finalProjectB/back/apcms_ai/ai_vision/recognition/vehicle_contract.py
+
+"""Boot 차량 통과 요청의 AI 측 검증. 네트워크나 환경변수를 사용하지 않습니다."""
+
+import math
+import re
+import unicodedata
+import uuid
+from datetime import datetime, timedelta, timezone
+
+VEHICLE_ENDPOINT = "/api/parking/ai/vehicle-events"
+AUTH_HEADER = "X-AI-API-Key"
+REQUIRED = {"event_id", "event_type", "detected_at", "camera_id", "direction", "plate_number", "confidence"}
+
+
+def parse_detected_at(value):
+    # 1. 영상 상대 초만으로 실제 날짜를 만들지 않고 명시된 타임존을 요구합니다.
+    if not isinstance(value, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-](?:[01]\d|2[0-3]):[0-5]\d)", value):
+        raise ValueError("감지 시각은 타임존 포함 ISO-8601이어야 합니다.")
+    at = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    if at.utcoffset() is None or abs(at.utcoffset()) > timedelta(hours=18):
+        raise ValueError("감지 시각의 타임존 범위가 유효하지 않습니다.")
+    return at
+
+
+def validate_camera_id(value):
+    # Java String.length와 동일하게 UTF-16 코드 단위 60자를 제한합니다.
+    if (not isinstance(value, str) or not value.strip() or len(value.encode("utf-16-le")) // 2 > 60 or
+            any(ord(char) < 32 for char in value)):
+        raise ValueError("camera_id는 비어 있지 않은 60자 이내 식별자여야 합니다.")
+    return value
+
+
+def validate_vehicle_payload(payload, now=None):
+    if not isinstance(payload, dict) or not REQUIRED <= set(payload) or set(payload) - REQUIRED - {"space_code", "method"}:
+        raise ValueError("차량 통과 요청 필드를 확인해 주세요.")
+    if payload["event_type"] != "VEHICLE_PASSAGE" or not isinstance(payload["direction"], str) or payload["direction"] not in {"ENTRY", "EXIT"}:
+        raise ValueError("차량 통과 유형과 방향이 유효하지 않습니다.")
+    if payload.get("space_code") is not None or payload.get("method") is not None:
+        raise ValueError("차량 통과 요청에는 주차구획 매칭 필드를 넣지 않습니다.")
+    if not isinstance(payload["event_id"], str):
+        raise ValueError("event_id는 UUID 문자열이어야 합니다.")
+    event_id = str(uuid.UUID(payload["event_id"]))
+    camera = validate_camera_id(payload["camera_id"])
+    plate = payload["plate_number"]
+    if not isinstance(plate, str):
+        raise ValueError("차량번호는 문자열이어야 합니다.")
+    plate = re.sub(r"\s+", "", unicodedata.normalize("NFC", plate))
+    if not re.fullmatch(r"[0-9]{2,3}[가-힣][0-9]{4}", plate):
+        raise ValueError("지원하는 한국 번호판 형식이 아닙니다.")
+    confidence = payload["confidence"]
+    if isinstance(confidence, bool) or not isinstance(confidence, (int, float)) or not 0 <= confidence <= 1 or not math.isfinite(confidence):
+        raise ValueError("confidence는 유한한 0~1 숫자여야 합니다.")
+    at = parse_detected_at(payload["detected_at"])
+    current = datetime.now(timezone.utc) if now is None else now
+    if not isinstance(current, datetime) or current.utcoffset() is None:
+        raise ValueError("현재 시각에도 타임존이 필요합니다.")
+    if at > current + timedelta(seconds=60):
+        raise ValueError("60초를 넘는 미래 감지 시각은 허용하지 않습니다.")
+    # 2. 원본 딕셔너리를 바꾸지 않고 검증된 7개 전송 필드만 반환합니다.
+    return {"event_id": event_id, "event_type": "VEHICLE_PASSAGE", "detected_at": at.isoformat(),
+            "camera_id": camera, "direction": payload["direction"], "plate_number": plate, "confidence": float(confidence)}
