@@ -87,6 +87,17 @@ public class NoticeController {
 
 		try {
 			path = Paths.get(filePath).toAbsolutePath().normalize();
+			
+			System.out.println("===== 첨부파일 다운로드 디버깅 =====");
+			System.out.println("noticeId: " + noticeId);
+			System.out.println("attachmentId: " + attachmentId);
+			System.out.println("DB 파일 경로: " + filePath);
+			System.out.println("설정된 업로드 폴더: " + uploadDir);
+			System.out.println("검사 대상 절대 경로: " + path);
+			System.out.println("폴더 내부 여부: " + path.startsWith(uploadDir));
+			System.out.println("일반 파일 여부: " + Files.isRegularFile(path));
+			System.out.println("읽기 가능 여부: " + Files.isReadable(path));
+			System.out.println("====================================");
 
 		} catch (RuntimeException e) {
 			throw new ResponseStatusException(HttpStatus.NOT_FOUND, "첨부파일 경로가 올바르지 않습니다.", e);
@@ -97,6 +108,8 @@ public class NoticeController {
 
 			throw new ResponseStatusException(HttpStatus.NOT_FOUND, "첨부파일을 찾을 수 없습니다.");
 		}
+		
+
 
 		try {
 			// 실제 파일을 Resource로 변환

@@ -12,4 +12,5 @@ import lombok.Setter;
 public class AuthResponse {
 
 	private String accessToken;
+	private String office_number;
 }

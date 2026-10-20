@@ -62,7 +62,7 @@ public class SecurityConfig {
                 .httpBasic((basic) -> basic.disable())
             	//.authenticationProvider(daoAuthenticationProvider())
                 .authorizeHttpRequests((auth) -> auth
-
+                		.requestMatchers("/api/notice/**").permitAll()
                         .requestMatchers("/api/auth/**").permitAll() // /api/auth/** 에서 오는 모든 요청은 허용
                         .requestMatchers("/demos/**").permitAll() 
                         .requestMatchers("/api/gallery/**").permitAll()
@@ -83,6 +83,8 @@ public class SecurityConfig {
 
                         // 공지사항은 로그인한 사용자만 접근
                         .requestMatchers("/api/notice", "/api/notice/**").authenticated()
+                        
+                        
                         
                         .anyRequest().authenticated()) // 모든 요청에 대해 인증을 요구
                 // JWT 토큰 필터 추가: JwtTokenFilter를 BasicAuthenticationFilter 전에 추가하여 JWT 토큰을 검증

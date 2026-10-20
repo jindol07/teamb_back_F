@@ -3,6 +3,7 @@ package kr.co.alpharking.security.jwt;
 import java.io.IOException;
 
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.core.userdetails.UserDetailsService;
@@ -39,28 +40,49 @@ public class JwtTokenFilter extends OncePerRequestFilter{
         //처음 로그인 하면 여기는 null이다.
         //로그인 -> 인증처리 -> 발급한 토큰을 받았을 때 null이 아님
         System.out.println("JwtTokenFilter token============>"+token);
-        if (token != null && jwtTokenProvider.validateToken(token)) {
-
-            String username = jwtTokenProvider.getUsername(token);
-            //JwtTokenFilter: 추출된 username => xman2@gmail.com
-            System.out.println("JwtTokenFilter: 추출된 username => " + username);
-            
-            //---Token으로 부터 getRole 해서 롤 출력 ------------------------------------
-            String role = jwtTokenProvider.getRole(token);
-            System.out.println("Role: " + role);
-            
-            //----------------------------------------------------------------------
-           // Get the user details from the token
-            UserDetails userDetails = userDetailsService.loadUserByUsername(jwtTokenProvider.getUsername(token));
-          //Create an authentication object and set it in the security context holder
-            UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
-                    userDetails, null, userDetails.getAuthorities());
-           // 생성된 인증 객체를 SecurityContextHolder에 설정하여,
-            authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
-            // 이후의 요청 처리 과정에서 현재 사용자가 인증되었음을 SecurityContextHolder를 통해서 넘긴다.
-            SecurityContextHolder.getContext().setAuthentication(authentication);
-        }
-        // filterChain.doFilter(request, response)를 호출하여 요청 처리를 계속 진행한다.
+        
+        if (token != null) {
+	        boolean valid = jwtTokenProvider.validateToken(token);
+	        System.out.println("JWT 검증 결과: " + valid);
+	        if (valid) {
+	            String username = jwtTokenProvider.getUsername(token);
+	            //JwtTokenFilter: 추출된 username => xman2@gmail.com
+	            System.out.println("JwtTokenFilter: 추출된 username => " + username);
+	            
+	            //---Token으로 부터 getRole 해서 롤 출력 ------------------------------------
+	            String role = jwtTokenProvider.getRole(token);
+	            System.out.println("Role: " + role);
+	            
+	            //----------------------------------------------------------------------
+	           // Get the user details from the token
+	            UserDetails userDetails = userDetailsService.loadUserByUsername(jwtTokenProvider.getUsername(token));
+	          //Create an authentication object and set it in the security context holder
+	            UsernamePasswordAuthenticationToken authentication = new UsernamePasswordAuthenticationToken(
+	                    userDetails, null, userDetails.getAuthorities());
+	            
+		        System.out.println(
+	        	    "인증 사용자: " + authentication.getName()
+	        	);
+	        	System.out.println(
+	        	    "인증 권한: " + authentication.getAuthorities()
+	        	);
+	            
+	           // 생성된 인증 객체를 SecurityContextHolder에 설정하여,
+	            authentication.setDetails(new WebAuthenticationDetailsSource().buildDetails(request));
+	            // 이후의 요청 처리 과정에서 현재 사용자가 인증되었음을 SecurityContextHolder를 통해서 넘긴다.
+	            SecurityContextHolder.getContext().setAuthentication(authentication);
+	            
+	            Authentication authentication2 =
+	                    SecurityContextHolder.getContext().getAuthentication();
+	
+//	            System.out.println("JWT 인증 완료");
+//	            System.out.println("요청 URI: " + request.getRequestURI());
+//	            System.out.println("인증 정보: "
+//	                + SecurityContextHolder.getContext().getAuthentication());
+//	            System.out.println("응답 상태 코드: " + response.getStatus());
+	        }
+	    }
+        
         filterChain.doFilter(request, response);
 	}
 
