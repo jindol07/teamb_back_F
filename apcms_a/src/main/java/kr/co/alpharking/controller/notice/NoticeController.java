@@ -293,7 +293,9 @@ public class NoticeController {
 
 			// 지정된 업로드 폴더 밖의 파일 접근 방지
 			if (!path.startsWith(uploadDir) || !Files.isRegularFile(path) || !Files.isReadable(path)) {
-
+//				System.out.println(uploadDir);
+//				System.out.println(path);
+//				System.out.println(filePath);
 				return ResponseEntity.notFound().build();
 			}
 

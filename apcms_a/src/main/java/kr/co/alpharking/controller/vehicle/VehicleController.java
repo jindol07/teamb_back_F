@@ -1,14 +1,11 @@
 package kr.co.alpharking.controller.vehicle;
 
 import java.util.List;
-//import org.springframework.http.MediaType;
 
 import kr.co.alpharking.dto.vehicle.VehicleDTO;
 import kr.co.alpharking.service.vehicle.VehiceService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
-//import org.springframework.web.multipart.MultipartFile;
-
 
 
 @RestController
@@ -47,15 +44,4 @@ public class VehicleController {
         vehiceService.deleteVehicle(vehicleId);
         return ResponseEntity.ok().build();
     }
-    
-//    @PostMapping(value = "/upload", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
-//    	public ResponseEntity<?> uploadVehicles(
-//    	        @RequestParam("file") MultipartFile file) {
-//    	    // 1. 파일 확장자 및 크기 검증
-//    	    // 2. XLSX / XLS / CSV 파싱
-//    	    // 3. 차량 데이터 검증 및 중복 검사
-//    	    // 4. Service를 통해 vehicle 테이블에 저장
-//    	    // 5. 성공·실패 건수 반환
-//    	    return ResponseEntity.ok().build();
-//    	} => 추후 구현 예정
 }

@@ -15,12 +15,7 @@ public class CustomUserDetailsService implements UserDetailsService{
 	@Override
 	public UserDetails loadUserByUsername(String username)
 	        throws UsernameNotFoundException {
-
-	    System.out.println("1. 조회 시작: " + username);
-
 	    var result = userRepository.findByUsername(username);
-
-	    System.out.println("2. 사용자 존재 여부: " + result.isPresent());
 
 	    UserDetails user = result.orElseThrow(() ->
 	        new UsernameNotFoundException(
@@ -28,16 +23,6 @@ public class CustomUserDetailsService implements UserDetailsService{
 	        )
 	    );
 
-	    System.out.println("3. 객체 타입: " + user.getClass().getName());
-	    System.out.println("4. 사용자 ID: " + user.getUsername());
-
-	    // 비밀번호 해시 자체는 출력하지 않습니다.
-	    System.out.println(
-	        "5. 비밀번호 필드 존재 여부: " +
-	        (user.getPassword() != null && !user.getPassword().isBlank())
-	    );
-
 	    return user;
 	}
-
 }
