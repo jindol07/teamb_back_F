@@ -88,7 +88,7 @@ public class ReservationService {
             String startDateStr,
             String endDateStr) {
 
-        if (officeId == null || officeId < 1 || officeId > 10) {
+        if (officeId == null || officeId <= 0) {
             throw new IllegalArgumentException(
                     "올바른 오피스 ID가 아닙니다.");
         }
@@ -170,7 +170,7 @@ public class ReservationService {
         Reservation savedReservation =
                 reservationRepository.save(reservation);
 
-        // ✅ 예약 쪽은 정상 작동하는 "INSERT" 유지
+        // 예약 쪽은 정상 작동하는 "INSERT" 유지
         ReservationHistory history = ReservationHistory.create(
                 savedReservation,
                 "USER",
@@ -186,7 +186,7 @@ public class ReservationService {
     }
 
     /**
-     * 🛑 예약 취소 (Soft Delete 방식: status_code를 CANCELED로 변경 및 이력 생성)
+     * 예약 취소 (Soft Delete 방식: status_code를 CANCELED로 변경 및 이력 생성)
      */
     @Transactional
     public void cancelReservation(Long reservationId) {
@@ -207,7 +207,7 @@ public class ReservationService {
         
         Reservation updatedReservation = reservationRepository.save(reservation);
 
-        // ✅ 취소 쪽은 제약조건 충돌을 막기 위해 "CANCEL" 대신 안전하게 "UPDATE"로 변경
+        // 취소 쪽은 제약조건 충돌을 막기 위해 "CANCEL" 대신 안전하게 "UPDATE"로 변경
         ReservationHistory history = ReservationHistory.create(
                 updatedReservation,
                 "USER", 
@@ -218,6 +218,21 @@ public class ReservationService {
         );
 
         reservationHistoryRepository.save(history);
+    }
+
+    // 로그인한 사용자의 취소되지 않았고 만료되지 않은 예약 조회
+    public List<ReservationRes> getReservationsByOfficeId(Long officeId) {
+        if (officeId == null) {
+            return List.of();
+        }
+
+        LocalDateTime now = LocalDateTime.now();
+        return reservationRepository
+                .findAllByOfficeIdAndStatusCodeAndReservationEndAtGreaterThanEqualOrderByParkingReservationIdDesc(
+                        officeId, "CONFIRMED", now)
+                .stream()
+                .map(ReservationRes::from)
+                .toList();
     }
 
     // 전체 예약 최신순 조회
