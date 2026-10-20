@@ -20,12 +20,13 @@ def settings():
       and os.getenv('TEST_RESERVATION_ENABLED', 'false').lower() == 'true'
   ),
   #----------------------------------------------
-      'base_url':os.getenv('SPRING_BOOT_BASE_URL','http://localhost:8080').rstrip('/'),
-      'auth_path':os.getenv('AUTH_ME_PATH','/api/auth/me'),
-      'reservation_path':os.getenv('RESERVATIONS_PATH','/api/reservation'),
-      'usage_path':os.getenv('PARKING_USAGE_PATH','/api/parkingusage'),
-      'inquiry_add_path':os.getenv('INQUIRY_ADD_PATH','/api/inquiry/add'),
-      'vehicle_path':os.getenv('VEHICLES_PATH','/api/vehicle'),
+      'base_url':os.getenv('SPRING_BOOT_BASE_URL','http://localhost:80/alpharking').rstrip('/') + '/',
+      # 기존 전체 조회 API 설정과 구분하여 챗봇 전용 본인 조회만 호출합니다.
+      'auth_path':os.getenv('CHATBOT_ME_PATH','api/chatbot/me'),
+      'reservation_path':os.getenv('CHATBOT_RESERVATIONS_PATH','api/chatbot/me/reservations'),
+      'usage_path':os.getenv('CHATBOT_USAGE_PATH','api/chatbot/me/usage'),
+      'inquiry_add_path':os.getenv('CHATBOT_SAVE_PATH','api/chatbot/conversations/exchanges'),
+      'vehicle_path':os.getenv('CHATBOT_VEHICLES_PATH','api/chatbot/me/vehicles'),
       'mileage_path':os.getenv('MILEAGE_PATH','/api/mileage'),
       'fee_path':os.getenv('FEES_PATH','/api/maintenance'),
       'model':os.getenv('GEMINI_MODEL','gemini-2.5-flash'),

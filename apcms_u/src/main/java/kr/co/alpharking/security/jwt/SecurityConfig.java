@@ -3,6 +3,7 @@ import java.util.List;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
@@ -69,6 +70,12 @@ public class SecurityConfig {
                         .requestMatchers("/api/member/**").permitAll()
                         .requestMatchers("/uploads/**").permitAll() //이미지 경로도 열어줘야 한다.
                         .requestMatchers("/api/employees/**","/back/api/employees/**").permitAll()
+                        // 주차 소켓은 첫 AUTH 메시지에서 JWT를 검증한다. 인증 전 현황 전송은 금지한다.
+                        .requestMatchers(HttpMethod.GET, "/ws/parking/spaces").permitAll()
+                        // 사용자 주차현황은 기존과 동일하게 로그인한 사용자만 조회한다.
+                        .requestMatchers(HttpMethod.GET, "/api/parking/spaces").authenticated()
+                        .requestMatchers("/api/chatbot/**").permitAll()
+                        
                         
                         // 관리자 및 사용자 권한
                         .requestMatchers("/admin/**").hasAuthority("ADMIN")

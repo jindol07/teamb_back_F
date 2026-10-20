@@ -3,6 +3,7 @@ import java.util.List;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.dao.DaoAuthenticationProvider;
 import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
@@ -69,6 +70,18 @@ public class SecurityConfig {
                         .requestMatchers("/api/member/**").permitAll()
                         .requestMatchers("/uploads/**").permitAll() //이미지 경로도 열어줘야 한다.
                         .requestMatchers("/api/employees/**","/back/api/employees/**").permitAll()
+                        // 주차 소켓은 첫 AUTH 메시지에서 JWT를 검증한다. 인증 전 현황 전송은 금지한다.
+                        .requestMatchers(HttpMethod.GET, "/ws/parking/spaces").permitAll()
+                        // AI 이벤트는 Controller의 X-AI-API-Key 검사로 인증한다.
+                        .requestMatchers(HttpMethod.POST,
+                                "/api/parking/ai/vehicle-events",
+                                "/api/parking/ai/space-match-events",
+                                "/api/parking/ai/occupancy-events").permitAll()
+                        // 민감 정보를 제외한 현황도 로그인은 필요하다.
+                        .requestMatchers(HttpMethod.GET, "/api/parking/spaces/public").authenticated()
+                        // 관리자용 구획 및 입출차 관리는 ADMIN 권한으로 제한한다.
+                        .requestMatchers("/api/parking/spaces", "/api/parking/spaces/**",
+                                "/api/parking/usages", "/api/parking/usages/**").hasAuthority("ADMIN")
                         //.requestMatchers("/demos/**").permitAll()
                         //.requestMatchers("/**").permitAll()
                         .anyRequest().authenticated()) // 모든 요청에 대해 인증을 요구

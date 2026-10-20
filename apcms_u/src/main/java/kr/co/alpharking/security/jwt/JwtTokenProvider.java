@@ -1,6 +1,7 @@
 package kr.co.alpharking.security.jwt;
 
 import java.security.Key;
+import java.time.Instant;
 import java.util.Date;
 
 import org.springframework.security.core.Authentication;
@@ -103,6 +104,14 @@ public class JwtTokenProvider {
         return false;
     }
     
+    /** 주차 웹소켓에서 사용한다. 기존 키로 서명을 검증한 JWT의 만료 시각만 반환한다. */
+    public Instant getExpiration(String token) {
+        Date expiration = Jwts.parserBuilder().setSigningKey(key).build()
+                .parseClaimsJws(token).getBody().getExpiration();
+        if (expiration == null) throw new JwtException("JWT 만료 시각이 없습니다.");
+        return expiration.toInstant();
+    }
+
  // 목적: 클라이언트로부터 전달받은 JWT를 파싱하고, 토큰의 내용을 추출하기 위해 사용된다.
     public String getUsername(String token) {
 
