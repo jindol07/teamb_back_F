@@ -68,3 +68,43 @@ def summarize_plate_samples(samples, minimum_votes=2, minimum_spacing=.25):
             "votes": dict(votes), "minimum_votes": minimum_votes,
             "observed_valid_numbers": sorted(observed_numbers),
             "minimum_spacing_seconds": minimum_spacing}
+
+
+def validate_plate_summary(summary, sample_count):
+    # 4. 원본 프레임 없이도 저장된 합의 요약 안의 모순은 검사할 수 있습니다.
+    keys = {"status", "plate_number", "plate_type", "votes", "minimum_votes",
+            "observed_valid_numbers", "minimum_spacing_seconds"}
+    if (not isinstance(summary, dict) or set(summary) != keys or type(sample_count) is not int or
+            not 0 <= sample_count <= 100000):
+        raise ValueError("번호판 합의 요약·표본 수가 올바르지 않습니다.")
+    minimum, spacing = summary["minimum_votes"], summary["minimum_spacing_seconds"]
+    if (type(minimum) is not int or not 2 <= minimum <= 100000 or isinstance(spacing, bool) or
+            not isinstance(spacing, (int, float)) or not math.isfinite(spacing) or spacing < .25):
+        raise ValueError("번호판 확정 조건이 올바르지 않습니다.")
+    votes, observed = summary["votes"], summary["observed_valid_numbers"]
+    def valid_plate(value):
+        return isinstance(value, str) and re.fullmatch(r"[0-9]{2,3}[가-힣][0-9]{4}", value) is not None
+    if (not isinstance(votes, dict) or not isinstance(observed, list) or
+            any(not valid_plate(value) for value in observed) or
+            any(not valid_plate(plate) or type(count) is not int or not 1 <= count <= sample_count
+                for plate, count in votes.items())):
+        raise ValueError("번호판별 투표·관찰 목록이 올바르지 않습니다.")
+    if (observed != sorted(set(observed)) or not set(votes) <= set(observed) or
+            len(observed) > sample_count or sum(votes.values()) > sample_count or bool(votes) != bool(observed)):
+        raise ValueError("투표 수가 표본 수·관찰 번호판과 일치하지 않습니다.")
+    # 4-1. 충돌은 다수결로 확정하지 않는 기존 규칙과 같은 순서로 확인합니다.
+    if len(observed) > 1:
+        expected = "CONFLICT"
+    elif not votes:
+        expected = "NO_VALID_KOREAN_PLATE"
+    elif max(votes.values()) < minimum:
+        expected = "INSUFFICIENT_EVIDENCE"
+    else:
+        expected = "CONFIRMED"
+    plate = next(iter(votes)) if expected == "CONFIRMED" else ""
+    plate_type = "KOREAN_VALID" if expected == "CONFIRMED" else None
+    if summary["status"] != expected or summary["plate_number"] != plate or summary["plate_type"] != plate_type:
+        raise ValueError("저장된 번호판 판정이 투표·확정 조건과 일치하지 않습니다.")
+    # 4-2. 실제 표본 간격·프레임 중복이나 문자 정답은 원본 자료가 있어야 검증할 수 있습니다.
+    return {"plate_status": expected, "plate_number": plate, "accepted_votes": sum(votes.values()),
+            "required_votes": minimum, "minimum_spacing_seconds": spacing}

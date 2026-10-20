@@ -14,6 +14,7 @@ def inspect_session(folder):
     folder = Path(folder)
     result = {"record_type": "LIVE_GATE_INSPECTION", "status": "INCOMPLETE",
               "summary_status": "MISSING", "failure_phase": None, "recovery_available": False,
+              "stop_reason": None,
               "processed_passages": None, "issues": [], "http_used_by_inspector": False}
     if not folder.is_dir():
         raise ValueError("실행 결과 폴더가 필요합니다.")
@@ -27,6 +28,7 @@ def inspect_session(folder):
             else:
                 checked = load_report(summary)
                 result.update(summary_status=checked["status"], status=checked["status"],
+                              stop_reason=checked["stop_reason"],
                               processed_passages=checked["processed_passages"])
     except (OSError, ValueError, TypeError, KeyError, OverflowError):
         result["issues"].append("INVALID_SUMMARY")

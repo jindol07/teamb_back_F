@@ -1,0 +1,77 @@
+# D:/finalProjectB/back/apcms_ai/ai_vision/tests/recognition/test_recognizer_lazy_loading.py
+
+import builtins
+import importlib.util
+import unittest
+from unittest.mock import Mock, patch
+
+import numpy as np
+
+from ai_vision.paths import BASE_DIR
+from ai_vision.recognition.live_gate_processor import LiveGateProcessor
+
+
+class RecognizerLazyLoadingTests(unittest.TestCase):
+    def load_module(self):
+        spec = importlib.util.spec_from_file_location("ai_vision._recognizer_lazy_test", BASE_DIR / "recognition/recognizer.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_import_and_text_processing_do_not_import_model_backends(self):
+        original_import = builtins.__import__
+        def guarded(name, *args, **kwargs):
+            if name.split(".")[0] in {"ultralytics", "paddleocr", "paddle"}:
+                raise AssertionError("model backend imported before use")
+            return original_import(name, *args, **kwargs)
+        with patch("builtins.__import__", side_effect=guarded):
+            module = self.load_module()
+            self.assertEqual(module.classify_plate_format(module.cleanup_plate_text("91소·6408")), "KOREAN_VALID")
+            self.assertEqual(module.recognize_image(None)["vehicle_count"], 0)
+
+    def test_plate_detection_does_not_request_vehicle_or_ocr(self):
+        module = self.load_module()
+        models = Mock()
+        models.plate.return_value = Mock(return_value=[])
+        with patch.object(module, "_models", models):
+            self.assertIsNone(module.detect_best_plate(np.zeros((20, 20, 3), dtype=np.uint8)))
+        models.plate.assert_called_once()
+        models.vehicle.assert_not_called()
+        models.ocr.assert_not_called()
+
+    def test_full_image_detection_still_uses_vehicle_fallback_and_response_shape(self):
+        module = self.load_module()
+        model = Mock(return_value=[])
+        models = Mock()
+        models.vehicle.return_value = model
+        with patch.object(module, "_models", models):
+            result = module.recognize_image(np.zeros((20, 20, 3), dtype=np.uint8))
+        self.assertEqual((result["success"], result["vehicle_count"], result["vehicle_fallback_used"]), (False, 0, True))
+        self.assertEqual(model.call_count, 2)
+        models.plate.assert_not_called()
+        models.ocr.assert_not_called()
+
+    def test_ocr_only_requests_ocr_model_and_preserves_output(self):
+        module = self.load_module()
+        models = Mock()
+        models.ocr.return_value.predict.return_value = [{"rec_texts": ["91소", "6408"]}]
+        with patch.object(module, "_models", models), \
+                patch.object(module.cv2, "imwrite", return_value=True), \
+                patch.object(module.tempfile, "TemporaryDirectory") as temporary:
+            temporary.return_value.__enter__.return_value = "unused-test-path"
+            result = module.recognize_plate(np.zeros((20, 20, 3), dtype=np.uint8))
+        self.assertEqual((result["plate_number"], result["plate_type"]), ("91소6408", "KOREAN_VALID"))
+        models.ocr.assert_called_once()
+        models.vehicle.assert_not_called()
+        models.plate.assert_not_called()
+
+    def test_live_crop_path_does_not_request_another_vehicle_model(self):
+        from ai_vision.recognition import recognizer
+        models = Mock()
+        models.plate.return_value = Mock(return_value=[])
+        with patch.object(recognizer, "_models", models):
+            result = LiveGateProcessor._read_plate(np.zeros((20, 20, 3), dtype=np.uint8))
+        self.assertEqual(result["plate_type"], "NOT_DETECTED")
+        models.vehicle.assert_not_called()
+        models.plate.assert_called_once()
+        models.ocr.assert_not_called()

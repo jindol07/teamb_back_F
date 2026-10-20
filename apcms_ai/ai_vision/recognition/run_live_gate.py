@@ -15,27 +15,44 @@ from ai_vision.recognition.live_gate_lifecycle import close_resources
 from ai_vision.recognition.live_gate_storage import save_failure
 from ai_vision.recognition.live_gate_metrics import LiveGateMetrics
 from ai_vision.recognition.live_gate_context import build_run_context
+from ai_vision.recognition.live_gate_deadline import LiveGateDeadline
 from ai_vision.recognition.local_io import read_json, write_json_atomic
 from ai_vision.recognition.plate_consensus import summarize_plate_samples
 from ai_vision.recognition.tracking_config import validate_config
 
 
-def execute(capture, processor, session, seconds=20, max_frames=100000, monotonic_reader=None, performance_reader=None):
+def execute(capture, processor, session, seconds=20, max_frames=100000, monotonic_reader=None, performance_reader=None,
+            allow_source_end=False, deadline_reader=None):
     reader = time.monotonic if monotonic_reader is None else monotonic_reader
     metrics = LiveGateMetrics(performance_reader)
     stop_reason, status, results, cleanup_errors, error_type = "FRAME_LIMIT", "STOPPED", [], 0, None
+    capture_failure = None
+    deadline = None
     try:
         if (isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not 0 < seconds <= 300 or
-                type(max_frames) is not int or not 1 <= max_frames <= 100000):
+                type(max_frames) is not int or not 1 <= max_frames <= 100000 or type(allow_source_end) is not bool):
             raise ValueError("실행 제한을 확인해 주세요.")
+        deadline = LiveGateDeadline(seconds, deadline_reader)
+        capture_failure = "CAMERA_OPEN_FAILED"
         if not capture.isOpened():
             raise ValueError("카메라를 열 수 없습니다.")
+        capture_failure = None
         for index in range(max_frames):
+            # OCR 처리 중 제한을 넘겼다면 다음 카메라 read를 시작하지 않습니다.
+            if deadline.before_read():
+                stop_reason = "TIME_LIMIT"
+                break
+            capture_failure = "CAMERA_READ_FAILED"
             with metrics.measure("read"):
                 ok, frame = capture.read()
             if not ok:
+                # 물리 카메라에는 파일 EOF가 없으므로 읽기 종료를 정상 완료로 숨기지 않습니다.
+                if not allow_source_end:
+                    capture_failure = "CAMERA_READ_FAILED"
+                    raise ValueError("카메라 프레임을 읽을 수 없습니다.")
                 stop_reason = "CAMERA_READ_ENDED"
                 break
+            capture_failure = None
             # 1. 파일 FPS가 아니라 카메라 read 직후의 세션 시각을 고정합니다.
             stamp = session.capture(index, reader())
             metrics.record_frame(stamp.elapsed_seconds)
@@ -43,7 +60,12 @@ def execute(capture, processor, session, seconds=20, max_frames=100000, monotoni
                 stop_reason = "TIME_LIMIT"
                 break
             with metrics.measure("process"):
-                for passage in processor.process(frame, stamp):
+                # 시각 보관 한도가 OCR의 2초 창보다 먼저 줄어들어도 오래된 표본을 쓰지 않습니다.
+                if isinstance(processor, LiveGateProcessor):
+                    passages = processor.process(frame, stamp, minimum_frame_index=session.clock.oldest_frame_index)
+                else:
+                    passages = processor.process(frame, stamp)
+                for passage in passages:
                     if len(results) >= 10000:
                         raise ValueError("결과 보관 한도에 도달했습니다.")
                     decision = session.consume(passage, stamp)
@@ -53,7 +75,7 @@ def execute(capture, processor, session, seconds=20, max_frames=100000, monotoni
     except KeyboardInterrupt:
         stop_reason = "USER_INTERRUPTED"
     except Exception as error:
-        status, stop_reason = "FAILED", "CAPTURE_OR_PROCESSING_FAILED"
+        status, stop_reason = "FAILED", capture_failure or "CAPTURE_OR_PROCESSING_FAILED"
         error_type = type(error).__name__
     finally:
         # 2. 카메라 읽기·OCR·후보 처리 중 실패해도 모든 자원을 정리합니다.
@@ -62,7 +84,8 @@ def execute(capture, processor, session, seconds=20, max_frames=100000, monotoni
             status = "FAILED"
     return {**session.summary(), "status": status, "stop_reason": stop_reason, "error_type": error_type, "cleanup_errors": cleanup_errors,
             "dropped_crops": getattr(processor, "dropped_crops", 0), "dropped_tracks": getattr(processor, "dropped_tracks", 0),
-            "performance": metrics.summary(),
+            "performance": metrics.summary(), "source_end_expected": allow_source_end,
+            "deadline": deadline.summary() if deadline is not None else None,
             "processor_statistics": processor.statistics() if isinstance(processor, LiveGateProcessor) else None,
             "results": results}
 
@@ -96,7 +119,7 @@ def _demo():
 
     clock = LiveGateClock(datetime(2020, 1, 1, tzinfo=timezone.utc), 0)
     session = LiveGateSession("SIMULATION_ONLY", "ENTRY", clock=clock)
-    report = execute(Capture(), Processor(), session, monotonic_reader=iter((0, .3, .6)).__next__)
+    report = execute(Capture(), Processor(), session, monotonic_reader=iter((0, .3, .6)).__next__, allow_source_end=True)
     return {**report, "uses_synthetic_source": True,
             "run_context": build_run_context(None, None, synthetic=True)}
 

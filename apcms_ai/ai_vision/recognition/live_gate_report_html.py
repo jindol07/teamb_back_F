@@ -10,13 +10,15 @@ def render_html(report):
     def cell(value):
         return escape("" if value is None else str(value), quote=True)
 
-    headers = ("차량 ID", "수집 시각", "경과 초", "번호판 상태", "번호판", "표본 수", "판정", "응답 상태", "요청 시도")
+    headers = ("차량 ID", "수집 시각", "경과 초", "번호판 상태", "번호판", "표본 수", "판정", "응답 상태", "요청 시도",
+               "채택 표 수", "필요 표 수", "최소 표본 간격(초)")
     keys = ("track_id", "captured_at", "crossing_elapsed_seconds", "plate_status", "plate_number",
-            "sample_count", "decision", "receipt_state", "request_attempted")
+            "sample_count", "decision", "receipt_state", "request_attempted",
+            "accepted_votes", "required_votes", "minimum_spacing_seconds")
     rows = "".join("<tr>" + "".join(f"<td>{cell('UNKNOWN' if key == 'request_attempted' and row[key] is None else row[key])}</td>"
                    for key in keys) + "</tr>" for row in report["rows"])
     if not rows:
-        rows = '<tr><td colspan="9">통과 자료가 없습니다.</td></tr>'
+        rows = f'<tr><td colspan="{len(headers)}">통과 자료가 없습니다.</td></tr>'
     source = "합성 예시" if report["uses_synthetic_source"] else "카메라 실행 기록"
     summary = [("실행 출처", source), ("상태 / 종료 사유", f'{report["status"]} / {report["stop_reason"]}'),
                ("카메라", report["camera_id"]), ("세션", report["session_id"]),
@@ -25,6 +27,9 @@ def render_html(report):
                ("요청 시도 수", report["request_attempts"]), ("요청 시도 여부 불명", report["unknown_request_attempts"]),
                ("자원 정리 오류", report["cleanup_errors"]), ("오류 종류", report["error_type"]),
                ("crop 보관 실패", report["dropped_crops"]), ("차량 한도로 생략한 관찰", report["dropped_tracks"])]
+    end_policy = report.get("source_end_expected")
+    summary.append(("입력 종료 정책", "기록 없음" if end_policy is None else
+                    ("입력 끝을 정상 종료로 허용" if end_policy else "카메라 읽기 종료는 실패로 처리")))
     details = "".join(f"<dt>{cell(key)}</dt><dd>{cell(value)}</dd>" for key, value in summary)
     counts = " / ".join(f"{key}: {value}" for key, value in sorted(report["decision_counts"].items())) or "없음"
     context = report.get("run_context")
@@ -42,6 +47,11 @@ def render_html(report):
                          f'<p>설정 SHA-256: {cell(context["tracking_config_sha256"])}</p>')
     performance = report.get("performance")
     diagnostics = '<h2>처리 시간과 관찰 통계</h2>'
+    deadline = report.get("deadline")
+    if deadline is not None:
+        diagnostics += (f'<p>읽기 전 시간 확인: {cell(deadline["checks"])}회 / 마지막 확인 경과: '
+                        f'{cell(deadline["last_checked_elapsed_seconds"])}초 / 다음 읽기 전 시간 초과: '
+                        f'{cell(deadline["expired_before_read"])}</p>')
     if performance is None:
         diagnostics += '<p>이 결과에는 처리 시간 측정값이 없습니다.</p>'
     else:
@@ -59,6 +69,11 @@ def render_html(report):
         labels = {"frames": "관찰 검사 완료 프레임", "observations": "전체 관찰", "already_counted": "이미 통과한 ID 관찰",
                   "outside_roi": "ROI 밖 관찰", "eligible": "ROI 안 처리 대상 관찰", "gap_resets": "관찰 공백으로 crop 초기화",
                   "crossings": "통과 판정", "ocr_calls": "OCR 표본 처리 호출", "peak_buffer_bytes": "최대 crop 보관 바이트"}
+        # 이전 결과에 없는 초기화 횟수를 0으로 추정하지 않습니다.
+        for key, label in (("roi_resets", "ROI 이탈로 위치·crop 초기화"), ("speed_resets", "위치 점프로 위치·crop 초기화"),
+                           ("expired_history_crops", "시각 기록 만료로 제외한 crop")):
+            if key in statistics:
+                labels[key] = label
         diagnostics += '<ul>' + ''.join(f'<li>{label}: {cell(statistics[key])}</li>' for key, label in labels.items()) + '</ul>'
         diagnostics += '<p>관찰 건수는 같은 차량의 반복 검출을 포함합니다. 실제 차량 정답 수가 아닙니다.</p>'
     # 2. 원본 OCR 표본이 없는 요약으로 정확도나 DB 반영 성공을 추정하지 않습니다.

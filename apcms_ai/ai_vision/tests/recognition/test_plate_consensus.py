@@ -4,7 +4,7 @@
 
 import unittest
 
-from ai_vision.recognition.plate_consensus import summarize_plate_samples
+from ai_vision.recognition.plate_consensus import summarize_plate_samples, validate_plate_summary
 from ai_vision.recognition.recognize_tracked_passages import select_samples
 
 
@@ -57,6 +57,41 @@ class PlateConsensusTests(unittest.TestCase):
         self.assertTrue(all(8 <= row["video_seconds"] <= 10.75 for row in selected))
         self.assertTrue(all(b["video_seconds"] - a["video_seconds"] >= .25 - 1e-9
                             for a, b in zip(selected, selected[1:])))
+
+
+class SavedPlateSummaryTests(unittest.TestCase):
+    def sample(self, index, plate="91소6408"):
+        return {"frame_index": index, "video_seconds": index * .3, "plate_number": plate, "plate_type": "KOREAN_VALID"}
+
+    def test_all_generated_statuses_validate_with_original_sample_count(self):
+        for samples, expected in (([], "NO_VALID_KOREAN_PLATE"), ([self.sample(0)], "INSUFFICIENT_EVIDENCE"),
+                ([self.sample(0), self.sample(1)], "CONFIRMED"),
+                ([self.sample(0), self.sample(1, "12가3456")], "CONFLICT")):
+            with self.subTest(status=expected):
+                checked = validate_plate_summary(summarize_plate_samples(samples), len(samples))
+                self.assertEqual(checked["plate_status"], expected)
+                self.assertEqual(checked["accepted_votes"], len(samples))
+
+    def test_forged_confirmed_votes_and_conditions_rejected(self):
+        summary = summarize_plate_samples([self.sample(0), self.sample(1)])
+        for changes in ({"votes": {}}, {"votes": {"91소6408": 1}}, {"votes": {"91소6408": True}},
+                        {"votes": {"91소6408": 3}}, {"minimum_votes": 1},
+                        {"minimum_spacing_seconds": .1}, {"plate_type": None}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                validate_plate_summary({**summary, **changes}, 2)
+
+    def test_observed_numbers_and_votes_must_agree(self):
+        summary = summarize_plate_samples([self.sample(0), self.sample(1)])
+        for observed in ([], ["bad"], ["91소6408", "91소6408"], ["12가3456"]):
+            with self.assertRaises(ValueError):
+                validate_plate_summary({**summary, "observed_valid_numbers": observed}, 2)
+        with self.assertRaises(ValueError):
+            validate_plate_summary(summary, True)
+
+    def test_conflict_due_to_unaccepted_close_sample_stays_conflict(self):
+        samples = [self.sample(0), {**self.sample(1, "12가3456"), "video_seconds": .01}, self.sample(2)]
+        checked = validate_plate_summary(summarize_plate_samples(samples), 3)
+        self.assertEqual((checked["plate_status"], checked["accepted_votes"]), ("CONFLICT", 2))
 
 
 if __name__ == "__main__":
