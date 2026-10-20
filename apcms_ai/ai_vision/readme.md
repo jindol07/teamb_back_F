@@ -1,70 +1,115 @@
-=== 통합 install ===
-pip install -r requirements.txt
+# APCMS AI Vision 시작 안내
 
-=== FastAPI 실행 시 ===
-python -m uvicorn main:app --reload --port 8000
+이 문서를 시작점으로 사용합니다. 설명서는 기능마다 추가하지 않고 아래 세 분야에
+통합합니다. 모든 실행 명령의 기준 폴더는 `D:\finalProjectB\back\apcms_ai`입니다.
 
-=====================================================================================================
-[YOLO,COCO]
+| 필요한 작업 | 설명서 |
+|---|---|
+| 영상 추적·ROI/기준선·번호판 OCR·촬영·기존 실험 확인 | [영상 분석과 번호판 인식](docs/VIDEO_ANALYSIS.md) |
+| 결과 API·CSV 내보내기·수동 정답 검토·HTML·진단 | [저장 결과 조회와 검토](docs/RESULTS_REVIEW.md) |
+| Boot 요청 규격·중복 억제·응답 처리·HTTP 경로 | [입출차 연동과 중복 억제](docs/VEHICLE_INTEGRATION.md) |
 
-YOLO : 이미지 전체를 단 한 번만 보고 그 안에 있는 객체의 종류와 위치를 찾아내는 실시간 객체 탐지 모델
-(You Only Look Once)
+## 현재 구현과 검증 범위
 
-pip install ultralytics
+- 저장 영상의 차량 추적 → 화면 방향 UP/DOWN 판정 → 통과 ID별 OCR → 결과 저장
+- 저장 결과 조회·검색·CSV, 수동 번호판 정답 비교, 오프라인 이미지 검토, 로그 연결 진단
+- 입출차 요청 검증·초안·메모리 중복 억제·응답 분류·기본 비활성 HTTP 클라이언트
+- 최근 기능 작업의 자동 테스트 276개 통과. HTTP 활성 경로는 모의 세션으로 검증
+- 카메라 프레임 수집·추적·OCR·기본 비활성 전송 판단의 세션 루프 구현
+- 종료된 실시간 세션 요약 검사와 HTML·CSV 보고서 생성
+- 카메라 실행 전 설정·설치 정보·모델 파일 점검, 선택적인 한 프레임 장치 확인
+- 실행 장애 시 별도 실패·복구 기록과 저장 폴더 상태 검사
+- 카메라 읽기·추적/OCR 처리 시간과 차량 관찰 통계의 저장·HTML 표시
+- 실행 당시 추적 설정·카메라 번호·실행 제한의 사본 보존과 보고서 표시
+- 실제 카메라 하드웨어·한국 번호판 주행·HTTP 활성화와 Boot·DB 통합 검증은 아직 남음
+- 한국 번호판 주행 영상의 정확도는 미검증. traffic 영상은 외국 번호판 영상
 
-ultralytics : YOLO를 Python에서 쉽게 사용할 수 있게 해주는 라이브러리
+`CONFIRMED`는 반복 OCR의 일치, `COMPLETED`는 실행 완료, 진단 `PASS`는 저장 로그의
+일관성을 뜻합니다. 실제 정답 정확도 합격과 구분합니다. 화면 DOWN/UP을 설치 방향
+확인 없이 ENTRY/EXIT로 매핑하지 않습니다. UUID는 DB에 저장하지 않는 설계입니다.
 
-======== 내부적으로 같이 쓰이는 주요 패키지 목록 ========
-ultralytics : YOLO 실행, 학습, 추론
-torch : 딥러닝 모델 계산 담당
-torchvision : 이미지 관련 딥러닝 기능
-opencv-python : 이미지/영상 처리
-numpy : 좌표, 배열, 수치 연산
-Pillow : 이미지 파일 읽기/처리
-matplotlib : 결과 시각화
+## 작업 환경과 서버 실행
 
-Python 코드 -> Ultralytics -> PyTorch (ultralytics가 내부적으로 PyTorch를 사용) -> CPU 또는 GPU 연산
+기존 `.venv312` 환경을 사용합니다. 통합 `requirements.txt`와
+`ai_vision/requirements.txt`는 조건 차이가 있으므로 문서 확인만을 위해 기존 환경에
+일괄 재설치하지 않습니다. 아래 명령은 PowerShell에서 사용합니다.
 
-yolo11n.pt : COCO 데이터셋으로 사전 학습된 YOLO11 nano 모델 가중치 파일
+```powershell
+cd D:\finalProjectB\back\apcms_ai
+$env:PYTHONIOENCODING = "utf-8"
 
-COCO : 이미지 속 사물을 인식하도록 학습시키기 위해 만들어진 데이터셋
-(Common Objects in Context)
-다양한 사물의 이미지와 정답 정보를 모아놓은 학습 자료
-=====================================================================================================
-[OCR]
+# Vision·문의·추천을 등록한 통합 AI 서버. 기존 모델을 불러올 수 있음
+.\.venv312\Scripts\python.exe -m uvicorn main:app --reload --port 8000
+```
 
-1. PaddleOCR (이거 쓸듯)
-pip install paddleocr paddlepaddle
+결과 조회만 할 때에는 별도 창에서 모델 없는 앱을 실행할 수 있습니다.
 
-PaddleOCR : 문자 인식 기능을 쉽게 사용하게 해주는 라이브러리, 내부적으로 PaddlePaddle을 사용함
-PaddlePaddle : PaddleOCR 모델이 실제로 계산을 수행할 때 사용하는 딥러닝 엔진(프레임워크)
+```powershell
+.\.venv312\Scripts\python.exe -m uvicorn ai_vision.recognition.results_api:app --host 127.0.0.1 --port 8001
+```
 
-Python 코드 -> PaddleOCR -> PaddlePaddle (PaddleOCR이 내부적으로 PaddlePaddle을 사용) -> CPU / GPU
+주요 Vision 경로는 `/recognize`, `/parking/occupancy`, `/vision/runs`입니다.
+저장 결과 조회 서버의 Swagger는 `http://127.0.0.1:8001/docs`입니다.
+서버를 실행하는 것과 실시간 카메라·입출차 전송을 활성화하는 것은 별개입니다.
 
-2. EasyOCR (안쓸듯)
-pip install easyocr
+## 가장 짧은 영상 분석 예시
 
-EasyOCR : 설치와 구현이 간단한 ocr, 비교용(안해도됨)
+```powershell
+.\.venv312\Scripts\python.exe -m ai_vision.recognition.run_video_pipeline `
+  --source "C:\Users\ICT-008\Downloads\traffic.mp4" `
+  --config ai_vision/data/tracking_configs/traffic_near.json `
+  --max-seconds 3 --max-tracks 1 `
+  --output-dir ai_vision/results/recognition/my_pipeline_01
+```
 
-3. Ko-TrOCR (비교용으로 사용할듯)
-pip install transformers sentencepiece
+입력 영상·기존 모델이 로컬에 있어야 합니다. 재실행 시 출력 폴더 이름을 바꿉니다.
+이 영상은 한국 번호판이 아니므로 `NO_VALID_KOREAN_PLATE`가 예상되는 결과입니다.
+나머지 실행 옵션과 결과 파일은 [영상 분석](docs/VIDEO_ANALYSIS.md#pipeline)에 있습니다.
 
-transformers : Hugging Face에서 제공하는 라이브러리로 BERT, GPT 계열, ViT, TrOCR 같은 다양한 사전학습 AI 모델을 불러와서 사용할 수 있게 해주는 도구(여기서는 TrOCR 사용)
-sentencepiece : 문자열을 AI 모델이 처리할 수 있는 토큰 단위로 나누거나 다시 합치는 데 사용하는 라이브러리
+## 주요 연동 기능 자동 검사
 
-Python 코드 -> transformers -> Ko-TrOCR 모델 -> PyTorch -> CPU / GPU
+실제 HTTP 요청 없이 검증합니다. 아래는 최근 전체 276개 중 HTTP·후보 변환·전송
+흐름 관련 22개 테스트만 실행하는 명령입니다. 구형 실험 스크립트가 함께 있어
+recognition 폴더 전체를 무조건 discover하는 방식은 사용하지 않습니다.
 
-=====================================================================================================
+```powershell
+.\.venv312\Scripts\python.exe -m unittest `
+  ai_vision.tests.recognition.test_vehicle_http `
+  ai_vision.tests.recognition.test_vehicle_delivery_flow `
+  ai_vision.tests.recognition.test_vehicle_live_candidate `
+  ai_vision.tests.recognition.test_run_vehicle_delivery_check -v
+```
 
-[FastAPI]
+영상 전체 정답 비교와 하드웨어·실제 서버 검증은 자동 검사와 별도로 진행합니다.
+실행 결과·모델·가상환경·환경변수는 Git 업로드에서 제외합니다.
 
-python -m pip install fastapi uvicorn python-multipart
+FastAPI API 테스트는 Windows asyncio의 내부 루프백 소켓을 사용할 수 있는 환경에서
+실행해야 합니다. 제한된 환경에서는 API 호출 전에 `ASYNCIO_RUNTIME_UNAVAILABLE`로
+종료합니다. 이는 테스트 성공이나 생략이 아닙니다. 원인과 확인 방법은
+[결과 API 실행 환경](docs/RESULTS_REVIEW.md#api-runtime)에 정리했습니다.
 
-fastapi -> Python API 서버를 만드는 프레임워크
-uvicorn -> FastAPI 애플리케이션을 실제로 실행하는 서버
-python-multipart ->브라우저나 Spring Boot가 이미지 파일을 multipart/form-data 방식으로 업로드할 때 필요
+## 모델·라이브러리 용어
 
-테스트 해본 결과
+| 이름 | 역할 |
+|---|---|
+| YOLO / Ultralytics | 영상·이미지의 차량과 번호판 영역 탐지 |
+| `yolo11n.pt` / COCO | COCO 데이터로 사전 학습된 차량 탐지 모델 |
+| PyTorch / torchvision | YOLO 계산과 관련 이미지 기능 |
+| PaddleOCR / PaddlePaddle | 번호판 문자 인식 / 계산 엔진 |
+| OpenCV / NumPy / Pillow | 프레임·배열·이미지 처리 |
+| matplotlib / lap | 결과 시각화 / 추적 객체 연결 계산 |
+| FastAPI / uvicorn / python-multipart | API / 서버 실행 / 이미지 업로드 처리 |
+| EasyOCR / Ko-TrOCR | 기존 비교 후보. 현재 주 인식기는 PaddleOCR |
+| transformers / sentencepiece | Ko-TrOCR 같은 모델 사용·토큰 처리 시 사용하는 라이브러리 |
+
+탐지 신뢰도는 모델 점수이며 그 값을 차량·번호판의 실제 정답 확률이나 OCR 정확도로
+해석하지 않습니다. 설치 패키지는 위 용어 목록보다 프로젝트 requirements를 기준으로 확인합니다.
+
+## 정지 이미지 인식 API 응답 예시
+
+아래는 기존 정지 이미지 테스트에서 저장한 예시입니다. 주행 영상 검증 결과가 아닙니다.
+
+```json
 {
     "success": true,
     "message": "차량 인식 처리가 완료되었습니다.",
@@ -92,57 +137,27 @@ python-multipart ->브라우저나 Spring Boot가 이미지 파일을 multipart/
         }
     ]
 }
+```
 
-success: 전체 AI 인식 처리 정상 수행 여부 (true일 경우 요청 정상 처리)
+| 필드 | 의미 |
+|---|---|
+| success / message | 요청 처리 성공 여부와 설명 |
+| vehicle_fallback_used | 기본 탐지 기준 미달 시 완화된 기준으로 재탐지했는지 |
+| vehicle_count / vehicles | 탐지된 차량 수 / 차량별 결과 |
+| vehicle_index / vehicle_type | 차량 순서 / car·truck·bus·motorcycle 등 참고 분류 |
+| vehicle_confidence / vehicle_box | 차량 탐지 점수 / 원본 영상의 x1·y1·x2·y2 상자 |
+| plate_detected / plate_confidence | 번호판 탐지 여부 / 번호판 탐지 점수 |
+| plate_number / plate_type | 최종 번호 문자열 / 형식 분류 |
+| first_ocr / first_type | 첫 인식 문자열과 분류 |
+| retry_ocr / retry_type | 전처리 후 재인식 문자열과 분류 |
 
-message: AI 인식 처리 결과 설명 메시지 (예: "차량 인식 처리가 완료되었습니다.")
+`plate_type`은 KOREAN_VALID, FOREIGN_OR_OTHER, REVIEW, OCR_FAILED 등으로 구분합니다.
+REVIEW/OCR_FAILED 시 확대·그레이스케일·CLAHE 등의 전처리 후 재시도할 수 있습니다.
+형식상 KOREAN_VALID인 것과 여러 프레임에서 CONFIRMED인 것, 사람이 정답을 확인한
+것은 서로 다른 단계입니다.
 
-vehicle_fallback_used: 기본 차량 탐지 기준 미달 시 더 낮은 신뢰도 기준으로 재탐지했는지 여부 
-(false일 경우 기본 기준에서 정상 탐지)
+## 문서 유지 기준
 
-vehicle_count: 최종 탐지된 차량 개수
-
-vehicles: 탐지된 차량별 결과를 담는 배열 (여러 대 탐지 시 객체 다수 포함)
-
-    vehicle_index: 탐지된 차량 순번 (1: 첫 번째 차량)
-
-    vehicle_type: YOLO 모델이 판단한 차량 종류 (car, truck, bus, motorcycle 등)
-        얘는 현재 참고용 값임. 핵심은 plate_detected, plate_number, plate_type
-
-    vehicle_confidence: 차량 탐지 신뢰도 (예: 0.6485 → 약 64.85%)
-
-    vehicle_box: 원본 이미지 내 차량 사각형 영역 좌표
-
-        vehicle_box.x1: 차량 영역 좌상단 X 좌표
-
-        vehicle_box.y1: 차량 영역 좌상단 Y 좌표
-
-        vehicle_box.x2: 차량 영역 우하단 X 좌표
-
-        vehicle_box.y2: 차량 영역 우하단 Y 좌표
-
-    plate_detected: 차량 영역 내 번호판 탐지 성공 여부
-
-    plate_confidence: 번호판 탐지 모델 신뢰도 (예: 0.9736 → 약 97.36%)
-
-    plate_number: 최종 확정된 번호판 문자열
-
-    plate_type: 최종 번호판 문자열 형식 판정 결과
-
-        아래는 plate_type 종류들
-        KOREAN_VALID : 정상적인 국내 번호판 형식으로 판단
-        FOREIGN_OR_OTHER : 영문/숫자 조합 등 국내 번호판 형식이 아닌 형태
-        REVIEW : OCR 결과가 번호판 형식에 맞지 않아 재확인이 필요한 상태
-        OCR_FAILED : OCR 자체가 실패한 상태
-
-    first_ocr: 1차 OCR 인식 문자열 (노이즈/불필요 문자 포함 가능)
-
-    first_type: 1차 OCR 결과 형식 판정 결과
-
-    retry_ocr: 이미지 보정 후 수행한 2차 OCR 결과 문자열
-
-    retry_type: 2차 OCR 결과 형식 판정 결과
-
-Q : 1차랑 2차는 뭐냐? 왜 또하냐?
-A : 1차 OCR 결과가 REVIEW / OCR_FAILED일 경우 번호판 이미지를 다시 전처리(확대·그레이스케일·CLAHE 보정)한 뒤 
-2차 OCR을 수행하고 더 나은 결과를 최종 번호판으로 사용
+실행·검토·연동 내용은 해당 분야 설명서에 추가합니다. 기능별·커밋별 새 설명서를
+계속 만들지 않습니다. 과거 실험은 영상 분석 문서의 검증 기록에 남기고, 현재 상태와
+구분합니다. 코드 설명은 해당 Python 파일의 경로 주석과 한국어 설명 주석을 유지합니다.
