@@ -74,11 +74,11 @@ public class Office implements UserDetails {
     public String getPassword() {
         return this.password;
     }
-    
-    public String getOfficeNumber() {
-    	return this.office_number;
-    }
-    
+//    
+//    public String getOfficeNumber() {
+//    	return this.office_number;
+//    }
+//    
     //나머지도 재정의 한다.
    // 계정이 만료되었는지 여부를 반환 하는데 , true를 반환해서 계정이 만료 안됨을 반환하도록 설정했다.
 	@Override
@@ -94,14 +94,7 @@ public class Office implements UserDetails {
 	@Override
 	public boolean isCredentialsNonExpired() {
 		return true;
-	}
-	// 계정이 활성화되어 있는지 여부를 반환, 계정이 활성화되었음을 반환
-	@Override
-	public boolean isEnabled() {
-		return true;
-	}
-
-    
+	}    
 }
 
 

@@ -50,15 +50,12 @@ public class AuthController {
 			String jwt = jwtTokenProvider.createToken(authentication);
 			System.out.print("jwtLog~~~~~~~ =>" + jwt);
 			
-			Office userDetails = (Office) authentication.getPrincipal();
-			String officeNumber = userDetails.getOfficeNumber();
-			
-			return ResponseEntity.ok(new AuthResponse(jwt, officeNumber));
+			return ResponseEntity.ok(new AuthResponse(jwt));
 		} catch (Exception e) {
 			System.out.println("인증 오류   :  " + e);
 		}
 		// AuthenticationResponse에 JWT 토큰을 담아 클라이언트에게 반환
-		return ResponseEntity.ok(new AuthResponse(null, null));
+		return ResponseEntity.ok(new AuthResponse(null));
 	}
 
 	// 사용자 로그아웃 처리
@@ -71,12 +68,12 @@ public class AuthController {
 		return ResponseEntity.ok("Logout successful");
 	}
 
-//	// 사용자 정보
-//    @GetMapping("/office")
-//    public ResponseEntity<?> getOfficeInfo(@AuthenticationPrincipal Office office) {
-//        if (office == null) {
-//            return ResponseEntity.status(401).body("로그인이 필요합니다.");
-//        }
-//        return ResponseEntity.ok(office);
-//    }
+	// 사용자 정보
+    @GetMapping("/office")
+    public ResponseEntity<?> getOfficeInfo(@AuthenticationPrincipal Office office) {
+        if (office == null) {
+            return ResponseEntity.status(401).body("로그인이 필요합니다.");
+        }
+        return ResponseEntity.ok(office);
+    }
 }
