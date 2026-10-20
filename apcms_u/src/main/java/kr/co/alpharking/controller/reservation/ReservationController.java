@@ -5,6 +5,7 @@ import java.util.List;
 import jakarta.validation.Valid;
 
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import kr.co.alpharking.dto.reservation.ReservationReq;
 import kr.co.alpharking.dto.reservation.ReservationRes;
+import kr.co.alpharking.security.Office;
 import kr.co.alpharking.service.reservation.ReservationService;
 import lombok.RequiredArgsConstructor;
 
@@ -31,10 +33,14 @@ public class ReservationController {
      */
     @PostMapping
     public ResponseEntity<ReservationRes> createReservation(
+            Authentication authentication,
             @Valid @RequestBody ReservationReq request) {
+
+        Office office = (Office) authentication.getPrincipal();
 
         ReservationRes createdReservation =
                 reservationService.createReservation(
+                        office.getOffice_id(),
                         request.getParkingSpaceId(),
                         request.getVehicleId(),
                         request.getVehicleNumber(),
@@ -51,13 +57,14 @@ public class ReservationController {
      * GET /alpharking/api/reservation
      */
     @GetMapping
-    public ResponseEntity<List<ReservationRes>> getAllReservations() {
+    public ResponseEntity<List<ReservationRes>> getAllReservations(Authentication authentication) {
+        Office office = (Office) authentication.getPrincipal();
         return ResponseEntity.ok(
-                reservationService.getAllReservations());
+                reservationService.getReservationsByOfficeId(office.getOffice_id()));
     }
 
     /**
-     * 🛑 예약 취소 (삭제)
+     * 예약 취소 (삭제)
      * DELETE /alpharking/api/reservation/{id}
      */
     @DeleteMapping("/{id}")
