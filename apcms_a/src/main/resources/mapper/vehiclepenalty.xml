@@ -1,0 +1,110 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="kr.co.alpharking.dao.vehiclepenalty.VehiclePenaltyDao">
+
+    <resultMap id="vehiclePenaltyResultMap" type="kr.co.alpharking.dto.vehiclepenalty.VehiclePenaltyDto">
+        <id property="vehiclepenaltyid" column="vehiclepenaltyid" />
+        <result property="vehicleid" column="vehicleid" />
+        <result property="violationtypecode" column="violationtypecode" />
+        <result property="penaltyamount" column="penaltyamount" />
+        <result property="reason" column="reason" />
+        <result property="imposedbyadminid" column="imposedbyadminid" />
+        <result property="imposedat" column="imposedat" />
+        <result property="statuscode" column="statuscode" />
+        <association property="vehicle" javaType="kr.co.alpharking.dto.vehicle.VehicleDTO" autoMapping="true">
+            <id property="vehicleid" column="v_vehicleid" />
+            <result property="officeid" column="v_officeid" />
+            <result property="officenumber" column="v_officenumber" />
+            <result property="vehiclenumber" column="v_vehiclenumber" />
+            <result property="vehiclemodel" column="v_vehiclemodel" />
+            <result property="ownername" column="v_ownername" />
+            <result property="vehicletypecode" column="v_vehicletypecode" />
+            <result property="registrationtypecode" column="v_registrationtypecode" />
+            <result property="registrationstatuscode" column="v_registrationstatuscode" />
+            <result property="registeredat" column="v_registeredat" />
+            <result property="rejectedreason" column="v_rejectedreason" />
+            <result property="createdat" column="v_createdat" />
+            <result property="updatedat" column="v_updatedat" />
+            <result property="deletedat" column="v_deletedat" />
+        </association>
+        <association property="admin" javaType="kr.co.alpharking.security.Admin" autoMapping="true">
+            <id property="admin_id" column="a_admin_id" />
+            <result property="admin_name" column="a_admin_name" />
+            <result property="email" column="a_email" />
+            <result property="status_code" column="a_status_code" />
+            <result property="created_at" column="a_created_at" />
+            <result property="updated_at" column="a_updated_at" />
+            <result property="username" column="a_username" />
+        </association>
+    </resultMap>
+
+    <sql id="penaltySelectColumns">
+        p.vehiclepenaltyid AS vehiclepenaltyid,
+        p.vehicleid AS vehicleid,
+        p.violationtypecode AS violationtypecode,
+        p.penaltyamount AS penaltyamount,
+        p.reason AS reason,
+        p.imposedbyadminid AS imposedbyadminid,
+        p.imposedat AS imposedat,
+        p.statuscode AS statuscode,
+        v.vehicle_id AS v_vehicleid,
+        v.office_id AS v_officeid,
+        o.office_number AS v_officenumber,
+        v.vehicle_number AS v_vehiclenumber,
+        v.vehicle_model AS v_vehiclemodel,
+        v.owner_name AS v_ownername,
+        v.vehicle_type_code AS v_vehicletypecode,
+        v.registration_type_code AS v_registrationtypecode,
+        v.registration_status_code AS v_registrationstatuscode,
+        v.registered_at AS v_registeredat,
+        v.rejected_reason AS v_rejectedreason,
+        v.created_at AS v_createdat,
+        v.updated_at AS v_updatedat,
+        v.deleted_at AS v_deletedat,
+        a.admin_id AS a_admin_id,
+        a.admin_name AS a_admin_name,
+        a.email AS a_email,
+        a.status_code AS a_status_code,
+        a.created_at AS a_created_at,
+        a.updated_at AS a_updated_at,
+        a.login_id AS a_username
+    </sql>
+
+    <sql id="penaltyFrom">
+        FROM VEHICLE_PENALTY p
+        LEFT JOIN vehicle v ON v.vehicle_id = p.vehicleid
+        LEFT JOIN office o ON o.office_id = v.office_id
+        LEFT JOIN admin a ON a.admin_id = p.imposedbyadminid
+    </sql>
+
+    <insert id="add" parameterType="kr.co.alpharking.dto.vehiclepenalty.VehiclePenaltyDto">
+        INSERT INTO VEHICLE_PENALTY (
+            vehiclepenaltyid, vehicleid, violationtypecode, penaltyamount,
+            reason, imposedbyadminid, imposedat, statuscode
+        ) VALUES (
+            SEQ_VEHICLE_PENALTY.NEXTVAL, #{vehicleid}, #{violationtypecode}, #{penaltyamount},
+            #{reason}, #{imposedbyadminid}, COALESCE(#{imposedat}, SYSDATE), COALESCE(#{statuscode}, 'ACTIVE')
+        )
+    </insert>
+
+    <select id="list" resultMap="vehiclePenaltyResultMap">
+        SELECT <include refid="penaltySelectColumns" />
+        <include refid="penaltyFrom" />
+        ORDER BY p.imposedat DESC, p.vehiclepenaltyid DESC
+    </select>
+
+    <update id="update" parameterType="kr.co.alpharking.dto.vehiclepenalty.VehiclePenaltyDto">
+        UPDATE VEHICLE_PENALTY
+        SET vehicleid = #{vehicleid},
+            violationtypecode = #{violationtypecode},
+            penaltyamount = #{penaltyamount},
+            reason = #{reason},
+            imposedat = COALESCE(#{imposedat}, imposedat),
+            statuscode = #{statuscode}
+        WHERE vehiclepenaltyid = #{vehiclepenaltyid}
+    </update>
+
+    <delete id="delete">
+        DELETE FROM VEHICLE_PENALTY WHERE vehiclepenaltyid = #{vehiclepenaltyid}
+    </delete>
+</mapper>
