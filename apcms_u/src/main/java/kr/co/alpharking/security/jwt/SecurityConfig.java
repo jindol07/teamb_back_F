@@ -69,6 +69,8 @@ public class SecurityConfig {
                         .requestMatchers("/api/member/**").permitAll()
                         .requestMatchers("/uploads/**").permitAll() //이미지 경로도 열어줘야 한다.
                         .requestMatchers("/api/employees/**","/back/api/employees/**").permitAll()
+                        .requestMatchers("/api/chatbot/**").permitAll()
+                        
                         
                         // 관리자 및 사용자 권한
                         .requestMatchers("/admin/**").hasAuthority("ADMIN")
