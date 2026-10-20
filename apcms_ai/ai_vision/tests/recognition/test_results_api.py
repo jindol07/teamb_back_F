@@ -17,9 +17,15 @@ from ai_vision.recognition.local_io import write_json_atomic
 from ai_vision.recognition.results_catalog import ResultCatalog
 from ai_vision.recognition.results_api import create_router
 from ai_vision.recognition.plate_consensus import summarize_plate_samples
+from ai_vision.tests.recognition.asyncio_runtime_check import ensure_asyncio_runtime
 
 
 class ResultsAPITests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        # Windows asyncio가 내부 소켓 생성에서 멈추면 API 호출 전에 원인을 알립니다.
+        ensure_asyncio_runtime()
+
     def test_existing_vision_router_includes_results_routes(self):
         # 기존 인식기를 대체해 실제 모델 없이 통합 라우터 등록만 검증
         fake = types.ModuleType("ai_vision.recognition.recognizer")
@@ -35,7 +41,7 @@ class ResultsAPITests(unittest.TestCase):
         self.assertTrue({"/recognize", "/parking/occupancy", "/vision/runs", "/vision/runs/{run_id}/passages"} <= paths)
 
     def setUp(self):
-        # TestClient는 실제 HTTP 서버나 네트워크 소켓을 열지 않습니다.
+        # HTTP 서버는 열지 않지만 Windows asyncio는 내부 루프백 소켓을 사용합니다.
         base = RESULT_DIR / "test_tmp"
         base.mkdir(parents=True, exist_ok=True)
         self.temp = tempfile.TemporaryDirectory(dir=base)

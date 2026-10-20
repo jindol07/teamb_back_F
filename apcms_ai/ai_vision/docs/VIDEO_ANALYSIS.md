@@ -10,6 +10,7 @@
 ## 목차
 
 - [추적부터 OCR까지 통합 실행](#pipeline)
+- 실제 카메라 루프는 [실시간 카메라 세션](VEHICLE_INTEGRATION.md#live-session) 참고
 - [영상별 ROI와 추적 설정](#config)
 - [차량 추적과 화면 방향 판정](#tracking)
 - [통과 ID별 OCR과 촬영 도구](#ocr)

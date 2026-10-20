@@ -10,8 +10,10 @@
 ## 목차
 
 - [결과 API와 검색 및 CSV](#api)
+- [FastAPI 테스트 실행 환경](#api-runtime)
 - [수동 정답 검토와 이미지 HTML](#review)
 - [추적과 OCR 연결 진단](#audit)
+- [실시간 세션 보고서](#live-report)
 
 <a id="api"></a>
 
@@ -107,6 +109,40 @@ CSV에는 실행 ID, 차량 ID, 화면 방향, 영상 시각, 번호판 판정·
 변경 파일의 첫 줄에는 파일 경로 주석을 달았으며 주요 흐름에 한국어 주석을
 유지했습니다. Boot 코드와 송신 설정은 변경하지 않았습니다.
 
+
+<a id="api-runtime"></a>
+
+## FastAPI 테스트 실행 환경
+
+2026-10-20 조사에서 Codex 샌드박스 안의 TestClient 요청이 대기하는 현상을
+프로젝트 코드가 없는 최소 FastAPI 앱에서도 재현했습니다. 스택은 API 함수에 진입하기 전
+`asyncio → socket.socketpair → _fallback_socketpair → accept`에서 멈췄습니다.
+Python의 socketpair만 실행해도 제한 시간 안에 연결되지 않았고, 같은 Python·패키지의
+샌드박스 밖 실행에서는 socketpair와 TestClient 요청 모두 성공했습니다.
+따라서 이번 재현의 원인은 실행 환경의 내부 루프백 통신 제약이며, 이 현상 때문에
+FastAPI 버전을 바꾸거나 API 함수를 수정하지 않았습니다.
+
+TestClient가 실제 HTTP 서버를 열지는 않지만 Windows asyncio 초기화는 내부 통신용
+루프백 소켓을 사용합니다. ‘실제 서버를 열지 않는다’와 ‘소켓이 전혀 필요 없다’는 다릅니다.
+API 테스트 시작 전에 별도 Python 프로세스에서 asyncio 초기화를 확인하며, 최대 5초 안에
+실패하면 `ASYNCIO_RUNTIME_UNAVAILABLE` 오류로 종료합니다. 건너뛰거나 통과 처리하지
+않고 해당 환경에서 API 검사가 실행되지 않았음을 알립니다.
+
+오류가 발생하면 기존 가상환경을 유지한 채 일반 PowerShell이나 루프백 통신을 허용한
+실행 환경에서 같은 명령을 실행하세요. 패키지 재설치·방화벽 해제는 필요하다고 확인되지
+않았으므로 수행하지 않습니다.
+
+```powershell
+.\.venv312\Scripts\python.exe -m unittest `
+  ai_vision.tests.recognition.test_asyncio_runtime_check `
+  ai_vision.tests.recognition.test_results_api -v
+```
+
+이번 조사에서는 실제 결과 조회 앱도 127.0.0.1의 임시 포트에서 실행해 목록 200,
+없는 결과 404, 잘못된 쿼리 422 응답을 확인하고 서버를 종료했습니다. 이는 결과 조회
+앱의 확인이며, 모델을 로딩하는 통합 main 앱·카메라·Boot 전송 검증과는 별개입니다.
+앞으로 발생하는 모든 FastAPI 오류가 같은 원인이라는 뜻은 아니므로 다른 예외·스택은
+별도로 확인해야 합니다.
 
 <a id="review"></a>
 
@@ -280,3 +316,66 @@ OCR 결과를 진단할 때에는 원래 추적 로그와 관찰 로그가 필�
 
 `scope`는 항상 `SAVED_LOG_CONSISTENCY_ONLY`이며 `http_enabled`는 false입니다.
 통과 0건인 정상 저장 구간도 PASS가 될 수 있고, 이는 인식 성능 증거를 뜻하지 않습니다.
+
+<a id="live-report"></a>
+
+## 실시간 세션 보고서
+
+[실시간 세션 실행](VEHICLE_INTEGRATION.md#live-session)의 summary.json을 HTML과 CSV로
+내보냅니다. 카메라·YOLO·OCR·HTTP를 다시 실행하지 않습니다.
+
+```powershell
+.\.venv312\Scripts\python.exe -m ai_vision.recognition.export_live_gate_report `
+  --summary ai_vision/results/live_gate/demo_20261020_01/summary.json `
+  --output-dir ai_vision/results/live_gate_reports/my_report_01
+```
+
+새 폴더의 `report.html`을 브라우저에서 열면 실행 출처(합성/카메라), 종료 상태·사유,
+카메라·세션 ID, 프레임·통과·요청 건수, crop 보관 실패·생략한 관찰, 각 통과 자료의
+수집 시각·번호판 합의·전송 판정을 확인할 수 있습니다. 외부 스크립트·이미지 연결은
+없습니다. `passages.csv`는 UTF-8 BOM 형식이며 Excel에서 열 수 있습니다.
+
+통과 개수·판정별 건수·요청 시도 합계·시간대와 경과 시각을 검사한 뒤 내보냅니다.
+요청 시도 여부가 불명확하면 `UNKNOWN`으로 표시합니다. HTTP 요청 시도 건수는
+실제 DB 반영 건수가 아닙니다. 통과 자료 0건도 정상적으로 보고서를 생성합니다.
+원본 응답 상세는 보고서에 복사하지 않습니다.
+
+새 결과에는 ‘처리 시간과 관찰 통계’가 표시됩니다. 읽기·처리 단계의 호출별 평균·최대·
+합계 시간과 예외 횟수, 수집 간격을 함께 확인합니다. 실제 처리기의 통계가 있으면
+ROI 밖 관찰·반복 관찰·crop 초기화·OCR 호출·최대 보관 바이트도 표시합니다.
+초기 모델 로딩이 포함될 수 있는 로컬 소요 시간이므로 순수 모델 FPS로 해석하지 않습니다.
+측정 항목이 없는 이전 결과는 정상적으로 열고 ‘처리 시간 측정값이 없습니다’로 표시합니다.
+CSV는 기존 차량별 통과 목록 형식을 유지하며 실행 통계는 HTML과 summary.json에서 봅니다.
+
+‘실행 당시 설정’에는 저장된 카메라 번호·추적기·ROI·통과선·실행 제한과 설정 해시를
+표시합니다. 원본 설정 파일을 다시 읽지 않고 결과에 보존한 사본을 사용합니다.
+출처·설정 해시가 일치하지 않으면 보고서 생성을 거부합니다. 이전 결과에는
+‘실행 설정 사본이 없습니다’를 표시하고, 합성 데모는 카메라 설정 미사용으로 표시합니다.
+
+`RUNNING`이나 초기화 실패로 전체 항목이 없는 요약, 건수가 맞지 않는 자료는 거부합니다.
+전체 항목이 있는 `FAILED` 실행은 실패 상태를 유지해 보여줍니다. 기존 출력 폴더는
+덮어쓰지 않고 원본 summary.json도 변경하지 않습니다. 저장 중 실패하면 부분 출력이
+남을 수 있으므로 오류를 확인하고 새 폴더 이름으로 다시 실행하세요.
+
+이 보고서는 저장된 요약을 보여주는 도구입니다. 원본 OCR 표본·차량 crop이 없는
+summary.json으로 인식 정확도나 번호판 투표를 다시 검증하지 않습니다. 합성 예시의
+확정 번호판은 실제 한국 번호판 이동 인식 성공을 뜻하지 않습니다.
+
+### 실행 폴더 상태 검사와 복구 결과
+
+```powershell
+.\.venv312\Scripts\python.exe -m ai_vision.recognition.inspect_live_gate `
+  --session-dir ai_vision/results/live_gate/demo_20261020_01
+```
+
+모델·카메라·HTTP 없이 `summary.json`, `failure.json`, `recovered_summary.json`을
+확인합니다. 전체 결과가 정상 종료이면 STOPPED, 실패 기록이나 복구 결과가 있으면
+FAILED, 파일이 없거나 RUNNING 표시만 있으면 INCOMPLETE, 손상된 기록은 CORRUPT입니다.
+STOPPED만 종료 코드 0이고 나머지는 1입니다. RUNNING_OR_INTERRUPTED는 현재 실행 중인지
+비정상 종료했는지 파일만으로 구별할 수 없다는 뜻입니다.
+
+`recovery_available=true`이면 검사된 복구 결과가 있습니다. 확인하려면 보고서 명령의
+`--summary`에 해당 `recovered_summary.json`을 지정하고 새 출력 폴더를 사용합니다.
+복구 HTML의 상태는 복구 파일 안의 처리 상태이므로 원래 저장 성공을 의미하지 않습니다.
+검사 명령의 FAILED 상태와 failure_phase도 함께 확인하세요. 기존 summary나 복구 파일을
+자동 교체하지 않으며 번호판 요청을 재전송하지 않습니다.
