@@ -18,6 +18,12 @@ class LiveGateReportCsvTests(unittest.TestCase):
         self.assertEqual(rows[0]["receipt_state"], "")
         self.assertEqual(rows[0]["request_attempted"], "False")
 
+    def test_vote_columns_appended_after_original_columns(self):
+        report = validate_report(_demo())
+        row = list(csv.DictReader(io.StringIO(render_csv(report))))[0]
+        self.assertEqual(FIELDS[-3:], ("accepted_votes", "required_votes", "minimum_spacing_seconds"))
+        self.assertEqual((row["accepted_votes"], row["required_votes"], row["minimum_spacing_seconds"]), ("2", "2", "0.25"))
+
     def test_formula_cells_quoted_and_empty_report_has_headers(self):
         report = validate_report(_demo())
         report["rows"][0]["plate_number"] = '=HYPERLINK("x")'

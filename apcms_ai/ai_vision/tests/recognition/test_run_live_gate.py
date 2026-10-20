@@ -62,7 +62,7 @@ class RunLiveGateTests(unittest.TestCase):
             "plate_number": "91소6408", "plate_type": "KOREAN_VALID", "plate_detection_confidence": .8})
         capture, session = FakeCapture(frames), self.session()
         loaded = "ai_vision.recognition.recognizer" in sys.modules
-        report = execute(capture, processor, session, monotonic_reader=iter(i * .3 for i in range(7)).__next__)
+        report = execute(capture, processor, session, monotonic_reader=iter(i * .3 for i in range(7)).__next__, allow_source_end=True)
         self.assertEqual((report["captured_frames"], report["processed_passages"], report["request_attempts"]), (7, 1, 0))
         self.assertEqual(report["decision_counts"], {"DISABLED": 1})
         self.assertEqual(report["results"][0]["plate_consensus"]["plate_number"], "91소6408")
@@ -211,9 +211,10 @@ class RunLiveGateTests(unittest.TestCase):
             return False, None
         capture.read = read
         with patch("cv2.VideoCapture", return_value=capture):
-            with contextlib.redirect_stdout(io.StringIO()):
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as stopped:
                 main(["--config", str(config), "--camera-id", "TEST_GATE", "--down-direction", "EXIT",
                       "--camera-index", "2", "--seconds", "15", "--output-dir", str(output)])
+        self.assertEqual(stopped.exception.code, 1)
         report = load_report(output / "summary.json")
         context = report["run_context"]
         self.assertEqual((context["camera_index"], context["seconds"]), (2, 15))
@@ -229,3 +230,95 @@ class RunLiveGateTests(unittest.TestCase):
         self.assertEqual(context["seconds"], 20)
         self.assertIsNone(context["camera_index"])
         self.assertIsNone(context["tracking_config"])
+
+    def test_small_clock_history_keeps_session_running_and_does_not_invent_votes(self):
+        # 이전 시각을 찾을 수 없던 실패 경로를 1개·2개 보관 한도로 검증합니다.
+        for limit, expected_status, expected_samples in ((1, "BLOCKED", 1), (2, "DISABLED", 2)):
+            with self.subTest(history_limit=limit):
+                frames = [np.full((100, 100, 3), index, dtype=np.uint8) for index in range(7)]
+                def tracker(frame):
+                    index = int(frame[0, 0, 0])
+                    y = 20 if index < 3 else (50 if index == 3 else 80)
+                    return [{"track_id": 7, "box": [40, y - 10, 60, y + 10]}]
+                ocr_frames = []
+                def reader(crop):
+                    ocr_frames.append(int(crop[0, 0, 0]))
+                    return {"plate_number": "91소6408", "plate_type": "KOREAN_VALID", "plate_detection_confidence": .8}
+                processor = LiveGateProcessor(CONFIG, tracker, reader)
+                clock = LiveGateClock(datetime(2020, 1, 1, tzinfo=timezone.utc), 0, history_limit=limit)
+                session = LiveGateSession("TEST_GATE", "ENTRY", clock)
+                report = execute(FakeCapture(frames), processor, session,
+                                 monotonic_reader=iter(index * .3 for index in range(7)).__next__, allow_source_end=True)
+                self.assertEqual((report["status"], report["processed_passages"], report["request_attempts"]), ("STOPPED", 1, 0))
+                self.assertEqual(report["results"][0]["decision"], expected_status)
+                self.assertEqual(report["results"][0]["sample_count"], expected_samples)
+                self.assertEqual(ocr_frames, list(range(7 - limit, 7)))
+                self.assertGreater(report["processor_statistics"]["expired_history_crops"], 0)
+
+    def test_camera_open_and_first_read_failure_are_not_normal_completion(self):
+        for opened, expected in ((False, "CAMERA_OPEN_FAILED"), (True, "CAMERA_READ_FAILED")):
+            capture, processor, session = FakeCapture([], opened=opened), Mock(), self.session()
+            processor.dropped_crops = processor.dropped_tracks = 0
+            report = execute(capture, processor, session)
+            self.assertEqual((report["status"], report["stop_reason"], report["captured_frames"]), ("FAILED", expected, 0))
+            self.assertTrue(capture.released)
+            self.assertTrue(report["closed"])
+            processor.process.assert_not_called()
+
+    def test_read_failure_after_passage_preserves_results_and_does_not_reconnect(self):
+        frames = [np.full((100, 100, 3), index, dtype=np.uint8) for index in range(7)]
+        def tracker(frame):
+            index = int(frame[0, 0, 0])
+            y = 20 if index < 3 else (50 if index == 3 else 80)
+            return [{"track_id": 7, "box": [40, y - 10, 60, y + 10]}]
+        processor = LiveGateProcessor(CONFIG, tracker, lambda crop: {"plate_number": "", "plate_type": "NOT_DETECTED"})
+        capture = FakeCapture(frames)
+        report = execute(capture, processor, self.session(), monotonic_reader=iter(index * .3 for index in range(7)).__next__)
+        self.assertEqual((report["status"], report["stop_reason"], report["processed_passages"]), ("FAILED", "CAMERA_READ_FAILED", 1))
+        self.assertEqual(len(report["results"]), 1)
+        self.assertEqual(capture.reads, 8)
+        self.assertEqual(processor._bytes, 0)
+
+    def test_finite_source_end_requires_explicit_boolean_policy(self):
+        for policy, expected in ((True, "STOPPED"), (False, "FAILED"), (1, "FAILED")):
+            processor = Mock()
+            processor.dropped_crops = processor.dropped_tracks = 0
+            report = execute(FakeCapture([]), processor, self.session(), allow_source_end=policy)
+            self.assertEqual(report["status"], expected)
+
+    def test_read_exception_has_capture_reason_without_private_error_text(self):
+        capture, processor = FakeCapture([]), Mock()
+        capture.read = Mock(side_effect=OSError("private device details"))
+        processor.dropped_crops = processor.dropped_tracks = 0
+        report = execute(capture, processor, self.session())
+        self.assertEqual((report["status"], report["stop_reason"], report["error_type"]), ("FAILED", "CAMERA_READ_FAILED", "OSError"))
+        self.assertEqual(report["performance"]["stages"]["read"]["errors"], 1)
+        self.assertNotIn("private", str(report))
+
+    def test_expired_budget_after_processing_prevents_next_camera_read(self):
+        capture, processor = FakeCapture([object(), object()]), Mock()
+        processor.process.return_value = []
+        processor.dropped_crops = processor.dropped_tracks = 0
+        report = execute(capture, processor, self.session(), seconds=1, monotonic_reader=lambda: 0,
+                         deadline_reader=iter((0, 0, 2)).__next__)
+        self.assertEqual((report["status"], report["stop_reason"], capture.reads), ("STOPPED", "TIME_LIMIT", 1))
+        processor.process.assert_called_once()
+        self.assertTrue(report["deadline"]["expired_before_read"])
+        self.assertEqual(report["deadline"]["checks"], 2)
+        self.assertTrue(capture.released)
+
+    def test_initial_deadline_expiry_prevents_first_read(self):
+        capture, processor = FakeCapture([object()]), Mock()
+        processor.dropped_crops = processor.dropped_tracks = 0
+        report = execute(capture, processor, self.session(), seconds=1, deadline_reader=iter((0, 1)).__next__)
+        self.assertEqual((report["stop_reason"], report["captured_frames"], capture.reads), ("TIME_LIMIT", 0, 0))
+        processor.process.assert_not_called()
+
+    def test_read_that_finishes_after_frame_time_limit_is_not_processed(self):
+        capture, processor = FakeCapture([object()]), Mock()
+        processor.dropped_crops = processor.dropped_tracks = 0
+        report = execute(capture, processor, self.session(), seconds=1, monotonic_reader=lambda: 2,
+                         deadline_reader=iter((0, 0)).__next__)
+        self.assertEqual((report["stop_reason"], report["captured_frames"], capture.reads), ("TIME_LIMIT", 1, 1))
+        self.assertFalse(report["deadline"]["expired_before_read"])
+        processor.process.assert_not_called()

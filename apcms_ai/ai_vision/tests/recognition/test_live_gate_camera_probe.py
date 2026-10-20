@@ -44,3 +44,17 @@ class LiveGateCameraProbeTests(unittest.TestCase):
         with self.assertRaises(KeyboardInterrupt):
             probe_camera(0, lambda index: capture)
         capture.release.assert_called_once()
+
+    def test_optional_consumer_failure_still_releases_with_fixed_reason(self):
+        capture = Mock()
+        capture.read.return_value = (True, np.zeros((80, 120, 3), dtype=np.uint8))
+        consumer = Mock(side_effect=RuntimeError("private error"))
+        result = probe_camera(0, lambda index: capture, frame_consumer=consumer)
+        self.assertEqual((result["status"], result["reason"], result["released"]), ("FAILED", "FRAME_CONSUMER_FAILED", True))
+        capture.release.assert_called_once()
+
+    def test_non_callable_consumer_rejected_before_opening(self):
+        factory = Mock()
+        with self.assertRaises(ValueError):
+            probe_camera(0, factory, frame_consumer=False)
+        factory.assert_not_called()

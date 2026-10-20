@@ -7,7 +7,8 @@ import io
 
 
 FIELDS = ("track_id", "captured_at", "crossing_elapsed_seconds", "plate_status", "plate_number",
-          "sample_count", "decision", "receipt_state", "request_attempted")
+          "sample_count", "decision", "receipt_state", "request_attempted",
+          "accepted_votes", "required_votes", "minimum_spacing_seconds")
 
 
 def render_csv(report):

@@ -91,6 +91,47 @@ class LiveGateReportTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_report(source)
 
+    def test_camera_capture_failure_requires_failed_status(self):
+        for reason in ("CAMERA_OPEN_FAILED", "CAMERA_READ_FAILED"):
+            source = _demo()
+            source.update(status="FAILED", stop_reason=reason, error_type="ValueError", source_end_expected=False)
+            self.assertEqual(validate_report(source)["stop_reason"], reason)
+            source["status"] = "STOPPED"
+            with self.assertRaises(ValueError):
+                validate_report(source)
+
+    def test_end_policy_is_optional_for_older_results_and_consistent_when_present(self):
+        source = _demo()
+        del source["source_end_expected"]
+        self.assertIsNone(validate_report(source)["source_end_expected"])
+        source["source_end_expected"] = False
+        with self.assertRaises(ValueError):
+            validate_report(source)
+        source["source_end_expected"] = 1
+        with self.assertRaises(ValueError):
+            validate_report(source)
+
+    def test_deadline_optional_but_recorded_limit_and_stop_reason_must_match(self):
+        source = _demo()
+        del source["deadline"]
+        self.assertIsNone(validate_report(source)["deadline"])
+        source["deadline"] = {"scope": "READ_BOUNDARY_CHECKS_ONLY", "seconds": 20, "checks": 2,
+                              "last_checked_elapsed_seconds": 20, "expired_before_read": True}
+        with self.assertRaises(ValueError):
+            validate_report(source)
+        source["stop_reason"] = "TIME_LIMIT"
+        self.assertTrue(validate_report(source)["deadline"]["expired_before_read"])
+        source["deadline"]["seconds"] = 10
+        with self.assertRaises(ValueError):
+            validate_report(source)
+
+    def test_confirmed_label_with_too_few_recorded_votes_rejected(self):
+        source = _demo()
+        self.assertEqual(validate_report(source)["rows"][0]["accepted_votes"], 2)
+        source["results"][0]["plate_consensus"]["votes"] = {"91소6408": 1}
+        with self.assertRaises(ValueError):
+            validate_report(source)
+
     def test_unconfirmed_plate_and_incomplete_failure_rejected(self):
         source = _demo()
         source["results"][0]["plate_consensus"]["status"] = "CONFLICT"

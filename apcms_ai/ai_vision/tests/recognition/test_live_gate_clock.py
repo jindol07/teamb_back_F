@@ -33,6 +33,16 @@ class LiveGateClockTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 clock.lookup(index)
 
+    def test_oldest_frame_boundary_tracks_eviction_and_nonconsecutive_indices(self):
+        clock = LiveGateClock(self.start, 0, history_limit=2)
+        self.assertIsNone(clock.oldest_frame_index)
+        clock.capture(10, 0)
+        clock.capture(20, .1)
+        self.assertEqual(clock.oldest_frame_index, 10)
+        clock.capture(30, .2)
+        self.assertEqual(clock.oldest_frame_index, 20)
+        self.assertEqual(clock.lookup(clock.oldest_frame_index).frame_index, 20)
+
     def test_invalid_start_and_limits_are_rejected(self):
         for kwargs in ({"started_at": datetime(2020, 1, 1)}, {"monotonic_start": -1},
                        {"history_limit": 0}, {"history_limit": True}):

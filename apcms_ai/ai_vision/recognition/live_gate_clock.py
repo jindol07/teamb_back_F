@@ -50,6 +50,11 @@ class LiveGateClock:
         self.frame_count += 1
         return stamp
 
+    @property
+    def oldest_frame_index(self):
+        # 현재 시각을 확인할 수 있는 경계를 제공하고 내부 사전은 노출하지 않습니다.
+        return next(iter(self._history), None)
+
     def lookup(self, frame_index):
         if type(frame_index) is not int or frame_index < 0:
             raise ValueError("프레임 번호가 유효하지 않습니다.")

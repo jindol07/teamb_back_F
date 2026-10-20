@@ -49,13 +49,41 @@ class LineCrossingCounter:
         self.states = {key: value for key, value in self.states.items()
                        if timestamp - value.last_time <= self.max_gap_seconds}
 
-    # 역할: 새 중심점과 영상 시각을 받아 확정 통과 시 이벤트 딕셔너리를 반환합니다.
-    def update(self, track_id, point, timestamp):
+    def reset_track(self, track_id):
+        # 1-4. 관찰 연결만 지우고 이미 통과한 ID 기록은 유지합니다.
+        if type(track_id) is not int or track_id < 0:
+            raise ValueError("추적 ID를 확인해 주세요.")
+        return self.states.pop(track_id, None) is not None
+
+    def continuity_break_reason(self, track_id, point, timestamp):
+        # 1-5. OCR 보관 쪽에서도 같은 공백·속도 규칙으로 연결을 끊을 수 있습니다.
         if (type(track_id) is not int or track_id < 0 or not isinstance(point, (list, tuple)) or
                 len(point) != 2 or any(isinstance(v, bool) or not isinstance(v, (int, float)) or not isfinite(v) for v in point)):
             raise ValueError("추적 ID와 중심점 좌표를 확인해 주세요.")
+        if (isinstance(timestamp, bool) or not isinstance(timestamp, (int, float)) or
+                not isfinite(timestamp) or timestamp < 0):
+            raise ValueError("영상 시각은 유효한 0 이상의 숫자여야 합니다.")
+        state = self.states.get(track_id)
+        if state is None:
+            return None
+        elapsed = timestamp - state.last_time
+        if elapsed < 0:
+            raise ValueError("같은 차량의 영상 시각이 역행했습니다.")
+        if elapsed > self.max_gap_seconds:
+            return "GAP"
+        if state.observed_point is not None and elapsed > 0:
+            distance = hypot(point[0] - state.observed_point[0], point[1] - state.observed_point[1])
+            if distance > self.max_speed * elapsed:
+                return "SPEED"
+        return None
+
+    # 역할: 새 중심점과 영상 시각을 받아 확정 통과 시 이벤트 딕셔너리를 반환합니다.
+    def update(self, track_id, point, timestamp):
+        reason = self.continuity_break_reason(track_id, point, timestamp)
         # 1-4. track_id: 추적기가 붙인 차량 번호, point: 중심점, timestamp: 영상 시각
         self.expire(timestamp)
+        if reason is not None:
+            self.reset_track(track_id)
         # 1-5. setdefault(): 새 ID이면 상태를 만들고, 기존 ID이면 저장된 상태를 가져옴
         # 1-6. setdefault()는 ID가 처음이면 TrackState를 저장하고, 있으면 기존 상태를 반환합니다.
         state = self.states.setdefault(track_id, TrackState(timestamp))
@@ -67,13 +95,6 @@ class LineCrossingCounter:
             if elapsed == 0:
                 # 같은 시점의 중복 관찰로 안정화 횟수를 늘리지 않음
                 return None
-            # 1-8. hypot(dx, dy): 두 중심점 사이의 직선거리 계산
-            distance = hypot(point[0] - state.observed_point[0],
-                             point[1] - state.observed_point[1])
-            # 1-9. 시간이 역행하거나 허용 거리보다 멀리 이동했다면 이전 차량 위치와 새 관찰을 분리합니다.
-            if elapsed <= 0 or distance > self.max_speed * elapsed:
-                state = TrackState(timestamp)
-                self.states[track_id] = state
         state.last_time = timestamp
         state.observed_point = point
         x, y = point

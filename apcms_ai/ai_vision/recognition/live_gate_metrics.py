@@ -88,7 +88,8 @@ def validate_metrics(value, captured_frames):
 def validate_processor_statistics(value, captured_frames):
     keys = {"frames", "observations", "already_counted", "outside_roi", "eligible",
             "gap_resets", "crossings", "ocr_calls", "peak_buffer_bytes"}
-    if (not isinstance(value, dict) or set(value) != keys or
+    optional = {"roi_resets", "speed_resets", "expired_history_crops"}
+    if (not isinstance(value, dict) or not keys <= set(value) or not set(value) <= keys | optional or
             any(type(number) is not int or not 0 <= number <= 2**63 - 1 for number in value.values())):
         raise ValueError("차량 관찰 통계의 항목·건수가 올바르지 않습니다.")
     if (value["frames"] > captured_frames or

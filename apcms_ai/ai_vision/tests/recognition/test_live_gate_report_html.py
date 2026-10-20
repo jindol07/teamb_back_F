@@ -53,3 +53,41 @@ class LiveGateReportHtmlTests(unittest.TestCase):
         self.assertIn("카메라 번호·ROI·기준선을 사용하지 않았습니다", render_html(validate_report(source)))
         del source["run_context"]
         self.assertIn("실행 설정 사본이 없습니다", render_html(validate_report(source)))
+
+    def test_reset_counts_visible_only_when_recorded(self):
+        source = _demo()
+        source["processor_statistics"] = {"frames": 3, "observations": 3, "already_counted": 0,
+            "outside_roi": 0, "eligible": 3, "gap_resets": 0, "crossings": 1, "ocr_calls": 2, "peak_buffer_bytes": 100}
+        self.assertNotIn("ROI 이탈로 위치·crop 초기화", render_html(validate_report(source)))
+        source["processor_statistics"].update(roi_resets=1, speed_resets=2)
+        html = render_html(validate_report(source))
+        self.assertIn("ROI 이탈로 위치·crop 초기화: 1", html)
+        self.assertIn("위치 점프로 위치·crop 초기화: 2", html)
+
+    def test_expired_history_crop_count_visible_only_if_available(self):
+        source = _demo()
+        source["processor_statistics"] = {"frames": 3, "observations": 3, "already_counted": 0,
+            "outside_roi": 0, "eligible": 3, "gap_resets": 0, "crossings": 1, "ocr_calls": 2, "peak_buffer_bytes": 100}
+        self.assertNotIn("시각 기록 만료로 제외한 crop", render_html(validate_report(source)))
+        source["processor_statistics"]["expired_history_crops"] = 2
+        self.assertIn("시각 기록 만료로 제외한 crop: 2", render_html(validate_report(source)))
+
+    def test_camera_failure_reason_and_end_policy_visible(self):
+        source = _demo()
+        source.update(status="FAILED", stop_reason="CAMERA_READ_FAILED", error_type="ValueError", source_end_expected=False)
+        html = render_html(validate_report(source))
+        self.assertIn("CAMERA_READ_FAILED", html)
+        self.assertIn("카메라 읽기 종료는 실패로 처리", html)
+
+    def test_deadline_diagnostics_present_only_when_recorded(self):
+        source = _demo()
+        self.assertIn("읽기 전 시간 확인:", render_html(validate_report(source)))
+        del source["deadline"]
+        self.assertNotIn("읽기 전 시간 확인:", render_html(validate_report(source)))
+
+    def test_consensus_vote_conditions_visible(self):
+        html = render_html(validate_report(_demo()))
+        self.assertIn("채택 표 수", html)
+        self.assertIn("필요 표 수", html)
+        self.assertIn("최소 표본 간격(초)", html)
+        self.assertIn("<td>0.25</td>", html)

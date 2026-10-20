@@ -11,12 +11,13 @@ from ai_vision.recognition.local_io import read_json
 from ai_vision.recognition.vehicle_contract import validate_camera_id
 from ai_vision.recognition.live_gate_metrics import validate_metrics, validate_processor_statistics
 from ai_vision.recognition.live_gate_context import validate_run_context
+from ai_vision.recognition.live_gate_deadline import validate_deadline
+from ai_vision.recognition.plate_consensus import validate_plate_summary
 
 
 DECISIONS = {"DISABLED", "BLOCKED", "NEW_CANDIDATE", "SUPPRESSED_SAME_TRACK",
              "SUPPRESSED_RECENT_PLATE", "HELD_TRACK_CONFLICT", "HELD_CAPACITY",
              "HELD_OUT_OF_ORDER", "HELD_EVENT_ID_REUSE"}
-PLATE_STATES = {"CONFIRMED", "CONFLICT", "NO_VALID_KOREAN_PLATE", "INSUFFICIENT_EVIDENCE"}
 
 
 def _integer(value, maximum=100000):
@@ -53,7 +54,7 @@ def validate_report(report):
         raise ValueError("입출차 방향이 올바르지 않습니다.")
     if any(type(report[key]) is not bool for key in ("http_enabled", "uses_synthetic_source")):
         raise ValueError("실행 출처·HTTP 설정을 확인해 주세요.")
-    if report["stop_reason"] not in {"FRAME_LIMIT", "TIME_LIMIT", "CAMERA_READ_ENDED",
+    if report["stop_reason"] not in {"FRAME_LIMIT", "TIME_LIMIT", "CAMERA_READ_ENDED", "CAMERA_OPEN_FAILED", "CAMERA_READ_FAILED",
                                     "USER_INTERRUPTED", "CAPTURE_OR_PROCESSING_FAILED"}:
         raise ValueError("종료 사유가 올바르지 않습니다.")
     started = _timestamp(report["started_at"])
@@ -67,8 +68,14 @@ def validate_report(report):
             not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]{0,95}", report["error_type"])):
         raise ValueError("오류 종류가 올바르지 않습니다.")
     if report["status"] == "STOPPED" and (cleanup or report["error_type"] is not None or
-            report["stop_reason"] == "CAPTURE_OR_PROCESSING_FAILED"):
+            report["stop_reason"] in {"CAPTURE_OR_PROCESSING_FAILED", "CAMERA_OPEN_FAILED", "CAMERA_READ_FAILED"}):
         raise ValueError("실패 정보와 정상 종료 상태가 모순됩니다.")
+    source_end_expected = report.get("source_end_expected")
+    if "source_end_expected" in report:
+        if type(source_end_expected) is not bool:
+            raise ValueError("입력 종료 허용 정책은 참·거짓이어야 합니다.")
+        if source_end_expected is False and report["stop_reason"] == "CAMERA_READ_ENDED":
+            raise ValueError("읽기 실패를 정상 입력 종료로 기록할 수 없습니다.")
     rows, decisions = report["results"], report["decision_counts"]
     if not isinstance(rows, list) or len(rows) != count or not isinstance(decisions, dict):
         raise ValueError("통과 결과 개수가 요약과 다릅니다.")
@@ -103,20 +110,12 @@ def validate_report(report):
                 "AWAITING_RESULT", "NOT_CREATED", "APPLIED", "UNCHANGED", "HELD", "REJECTED",
                 "AUTH_REQUIRED", "DELIVERY_UNKNOWN"}:
             raise ValueError("응답 상태가 올바르지 않습니다.")
-        consensus = row["plate_consensus"]
-        if not isinstance(consensus, dict) or consensus.get("status") not in PLATE_STATES:
-            raise ValueError("번호판 합의 상태가 올바르지 않습니다.")
-        plate = consensus.get("plate_number")
-        if not isinstance(plate, str) or (consensus["status"] == "CONFIRMED" and
-                (not re.fullmatch(r"[0-9]{2,3}[가-힣][0-9]{4}", plate) or samples < 2)):
-            raise ValueError("확정 번호판 자료가 올바르지 않습니다.")
-        if consensus["status"] != "CONFIRMED" and plate != "":
-            raise ValueError("미확정 결과에 확정 번호판이 있습니다.")
+        consensus = validate_plate_summary(row["plate_consensus"], samples)
         attempts += row["request_attempted"] is True
         # 2. 원본 응답·추가 필드는 보고서에 옮기지 않고 표시용 항목만 선택합니다.
         checked.append({key: row[key] for key in ("track_id", "decision", "captured_at",
                         "crossing_elapsed_seconds", "sample_count", "receipt_state", "request_attempted")}
-                       | {"plate_status": consensus["status"], "plate_number": plate})
+                       | consensus)
     if Counter(row["decision"] for row in checked) != decisions or attempts != requests or (count and not frames):
         raise ValueError("판정·요청 건수가 원본 행과 일치하지 않습니다.")
     # 4. 이전 버전의 파일은 허용하되 새 진단 항목이 있으면 건수도 검사합니다.
@@ -129,10 +128,18 @@ def validate_report(report):
     context = validate_run_context(report["run_context"], report["uses_synthetic_source"]) if "run_context" in report else None
     if context is not None and frames > context["max_frames"]:
         raise ValueError("수집 프레임 수가 기록된 실행 제한을 넘었습니다.")
+    deadline = validate_deadline(report["deadline"]) if report.get("deadline") is not None else None
+    if deadline is not None:
+        if context is not None and deadline["seconds"] != context["seconds"]:
+            raise ValueError("시간 제한 검사와 실행 설정의 제한 시간이 다릅니다.")
+        if deadline["expired_before_read"] and report["stop_reason"] != "TIME_LIMIT":
+            raise ValueError("읽기 전 시간 초과와 종료 사유가 다릅니다.")
     return {key: report[key] for key in required - {"results"}} | {
         "status": report["status"], "rows": checked,
         "performance": performance, "processor_statistics": statistics,
         "run_context": context,
+        "deadline": deadline,
+        "source_end_expected": source_end_expected,
         "unknown_request_attempts": sum(row["request_attempted"] is None for row in checked)}
 
 
