@@ -53,9 +53,46 @@
 		<result property="createdat" column="created_at" />
 		<result property="updatedat" column="updated_at" />
 		<result property="deletedat" column="deleted_at" />
-
+		<collection property="vehiclepenaltyList"
+			ofType="kr.co.alpharking.dto.vehiclepenalty.VehiclePenaltyDto"
+			column="vehicle_id" select="findVehiclePenalties" />
+		<collection property="parkingusageList"
+			ofType="kr.co.alpharking.dto.parking.ParkingUsageRow"
+			column="vehicle_id" select="findVehicleParkingUsages" />
 	</resultMap>
-
+	<select id="findVehiclePenalties" parameterType="long"
+		resultType="kr.co.alpharking.dto.vehiclepenalty.VehiclePenaltyDto">
+		SELECT vehiclepenaltyid AS "vehiclepenaltyid",
+		vehicleid AS "vehicleid",
+		violationtypecode AS "violationtypecode",
+		penaltyamount AS "penaltyamount",
+		reason AS "reason",
+		imposedbyadminid AS "imposedbyadminid",
+		imposedat AS "imposedat",
+		statuscode AS "statuscode"
+		FROM vehiclepenalty
+		WHERE vehicleid = #{vehicleId}
+		ORDER BY imposedat DESC
+	</select>
+	<select id="findVehicleParkingUsages" parameterType="long"
+		resultType="kr.co.alpharking.dto.parking.ParkingUsageRow">
+		SELECT u.PARKING_USAGE_ID AS "parkingUsageId",
+		u.VEHICLE_ID AS "vehicleId",
+		u.VEHICLE_NUMBER AS "vehicleNumber",
+		u.PARKING_SPACE_ID AS "parkingSpaceId",
+		u.PARKING_TYPE_CODE AS "parkingTypeCode",
+		TO_CHAR(u.ENTRY_AT, 'YYYY-MM-DD"T"HH24:MI:SS') AS "entryAt",
+		TO_CHAR(u.EXIT_AT, 'YYYY-MM-DD"T"HH24:MI:SS') AS "exitAt",
+		CASE WHEN f.FLOOR_NO IS NULL THEN NULL
+		ELSE TO_CHAR(f.FLOOR_NO) || 'F-' || z.ZONE_CODE || s.SPACE_NUMBER
+		END AS "spaceCode"
+		FROM PARKING_USAGE u
+		LEFT JOIN PARKING_SPACE s ON s.PARKING_SPACE_ID = u.PARKING_SPACE_ID
+		LEFT JOIN PARKING_ZONE z ON z.PARKING_ZONE_ID = s.PARKING_ZONE_ID
+		LEFT JOIN PARKING_FLOOR f ON f.PARKING_FLOOR_ID = z.PARKING_FLOOR_ID
+		WHERE u.VEHICLE_ID = #{vehicleId}
+		ORDER BY u.ENTRY_AT DESC, u.PARKING_USAGE_ID DESC
+	</select>
 	<!-- 차량 목록 + 기존 호수 정보 조회 -->
 	<select id="list" resultMap="vehicleResultMap">
 		SELECT

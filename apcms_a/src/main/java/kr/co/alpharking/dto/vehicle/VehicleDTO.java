@@ -3,10 +3,14 @@ package kr.co.alpharking.dto.vehicle;
 // 날짜 형태: 2026-10-15 11:30:00
 // 한국 시간대 기준으로 처리
 import java.util.Date;
+import java.util.List;
 
 import org.apache.ibatis.type.Alias;
 
 import com.fasterxml.jackson.annotation.JsonFormat;
+
+import kr.co.alpharking.dto.parking.ParkingUsageRow;
+import kr.co.alpharking.dto.vehiclepenalty.VehiclePenaltyDto;
 
 import lombok.Getter;
 import lombok.Setter;
@@ -42,15 +46,12 @@ public class VehicleDTO {
     @JsonFormat(shape = JsonFormat.Shape.STRING,pattern = "yyyy-MM-dd HH:mm:ss",timezone = "Asia/Seoul")
     private Date deletedat; // 소프트 삭제 일시
 
-    // N:1 office
-    // private Office office;
-
     // 1:N vehicle_penalty
-    // private List<VehiclePenalty> vehiclepenaltyList;
+    private List<VehiclePenaltyDto> vehiclepenaltyList;
 
     // 1:N parking_usage
-    // private List<ParkingUsage> parkingusageList;
-
+    private List<ParkingUsageRow> parkingusageList;
+    
     // 1:N recommendation_log
     // private List<RecommendationLog> recommendationlogList;
 }
