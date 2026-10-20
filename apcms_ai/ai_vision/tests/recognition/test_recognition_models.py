@@ -1,6 +1,8 @@
 # D:/finalProjectB/back/apcms_ai/ai_vision/tests/recognition/test_recognition_models.py
 
 import tempfile
+import threading
+import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -61,3 +63,51 @@ class RecognitionModelsTests(unittest.TestCase):
         self.assertIs(models.ocr(), model)
         self.assertIs(models.ocr(), model)
         self.assertEqual(factory.call_count, 2)
+
+    def test_same_role_inference_is_serialized_without_loading(self):
+        factory = Mock()
+        models = RecognitionModels(self.root, ocr_factory=factory)
+        active, peak = 0, 0
+        counter_lock = threading.Lock()
+        def work(_):
+            nonlocal active, peak
+            with models.inference_lock("ocr"):
+                with counter_lock:
+                    active += 1
+                    peak = max(peak, active)
+                time.sleep(.005)
+                with counter_lock:
+                    active -= 1
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(work, range(16)))
+        self.assertEqual(peak, 1)
+        factory.assert_not_called()
+
+    def test_other_roles_not_blocked_and_exception_releases_lock(self):
+        models = RecognitionModels(self.root)
+        entered, other, release = threading.Event(), threading.Event(), threading.Event()
+        def first():
+            with models.inference_lock("ocr"):
+                entered.set()
+                release.wait(2)
+        def second():
+            with models.inference_lock("vehicle"):
+                other.set()
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            one = pool.submit(first)
+            self.assertTrue(entered.wait(1))
+            two = pool.submit(second)
+            try:
+                self.assertTrue(other.wait(1))
+            finally:
+                release.set()
+            one.result(timeout=1)
+            two.result(timeout=1)
+        with self.assertRaises(RuntimeError):
+            with models.inference_lock("ocr"):
+                raise RuntimeError("inference failed")
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            def acquire():
+                with models.inference_lock("ocr"):
+                    return True
+            self.assertTrue(pool.submit(acquire).result(timeout=1))

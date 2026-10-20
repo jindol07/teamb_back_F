@@ -3,13 +3,13 @@
 # 차량번호 인식 및 주차면 점유 현황 조회를 담당하는
 # APCMS 비전 AI 통합 라우터
 
-import cv2
-import numpy as np
-
 from fastapi import APIRouter, UploadFile, File, HTTPException
+from starlette.concurrency import run_in_threadpool
 
 # ai_vision/recognition/recognizer.py에 파일이 있는 경우
 from .recognition.recognizer import recognize_image
+from .recognition.image_upload import MAX_UPLOAD_BYTES, ImageUploadError, process_uploaded_image
+from .recognition.recognition_admission import RecognitionAdmission
 
 # 기존 주차면 점유 조회 라우터
 from .parking.parking_api import router as parking_router
@@ -21,13 +21,15 @@ from .recognition.results_api import router as results_router
 # APIRouter(): 관련 API들을 하나로 묶는 객체
 # 이 router를 상위 main.py에서 include_router()로 등록
 router = APIRouter(tags=["Vision"])
+_recognition_admission = RecognitionAdmission(capacity=2)
 
 
 # 2. 차량번호 인식 API 등록
 
 # 기존 API 경로 /recognize 유지
 # React 또는 Spring Boot에서 기존 경로로 호출 가능
-@router.post("/recognize")
+@router.post("/recognize", responses={413: {"description": "이미지 파일 10MB 또는 2천만 픽셀 한도 초과"},
+                                     503: {"description": "동시 인식 요청 한도 초과"}})
 async def recognize(file: UploadFile = File(...)):
 
     # 2-1. 업로드 파일 종류 확인
@@ -46,58 +48,24 @@ async def recognize(file: UploadFile = File(...)):
             detail="이미지 파일만 업로드할 수 있습니다."
         )
 
-    # 2-2. 업로드 파일 읽기
-
-    # await file.read():
-    # 업로드된 파일 내용을 bytes로 읽음
-    image_bytes = await file.read()
-
-    # 파일 내용이 비어 있으면 오류 반환
-    if not image_bytes:
-        raise HTTPException(
-            status_code=400,
-            detail="빈 이미지 파일입니다."
-        )
-
-    # 2-3. bytes를 NumPy 배열로 변환
-
-    # np.frombuffer():
-    # 이미지 파일의 바이트 데이터를 배열로 변환
-    #
-    # uint8:
-    # 0~255 범위의 8비트 정수 자료형
-    np_array = np.frombuffer(
-        image_bytes,
-        dtype=np.uint8
-    )
-
-    # 2-4. NumPy 배열을 OpenCV 이미지로 변환
-
-    # imdecode():
-    # JPEG/PNG 등의 압축된 이미지 데이터를 해석
-    #
-    # IMREAD_COLOR:
-    # 3채널 BGR 컬러 이미지로 읽음
-    image = cv2.imdecode(
-        np_array,
-        cv2.IMREAD_COLOR
-    )
-
-    # 이미지 파일이 손상되었거나
-    # OpenCV에서 해석할 수 없는 형식인 경우
-    if image is None:
-        raise HTTPException(
-            status_code=400,
-            detail="이미지를 읽을 수 없습니다."
-        )
-
-    # 2-5. 차량번호 인식 AI 파이프라인 실행
-
+    # 2-2. 파일을 읽기 전에 처리 슬롯을 확보합니다. 요청을 대기열에 쌓지 않습니다.
+    lease = _recognition_admission.try_acquire()
+    if lease is None:
+        raise HTTPException(status_code=503, detail="이미지 인식 요청이 많습니다. 잠시 후 다시 시도해 주세요.",
+                            headers={"Retry-After": "1"})
     try:
-        # 기존 recognizer.py에서 구현된 함수 사용
-        # 차량 및 번호판 탐지 → OCR → 결과 생성
-        result = recognize_image(image)
-
+        # 한도보다 1바이트 더 읽어 초과 여부만 확인합니다.
+        image_bytes = await file.read(MAX_UPLOAD_BYTES + 1)
+        if len(image_bytes) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="이미지 파일은 최대 10MB까지 업로드할 수 있습니다.")
+        if not image_bytes:
+            raise HTTPException(status_code=400, detail="빈 이미지 파일입니다.")
+        # 2-3. 작업 스레드가 디코딩·추론·슬롯 반환까지 책임집니다.
+        result = await run_in_threadpool(lease.run, process_uploaded_image, image_bytes, recognize_image)
+    except ImageUploadError as error:
+        raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+    except HTTPException:
+        raise
     except Exception as error:
 
         # 서버 콘솔에 오류 출력
@@ -108,6 +76,9 @@ async def recognize(file: UploadFile = File(...)):
             status_code=500,
             detail="AI 처리 중 오류가 발생했습니다."
         ) from error
+    finally:
+        # 2-4. 작업 시작 전 오류·취소일 때만 여기서 반환합니다. 실행 중 작업은 worker가 반환합니다.
+        lease.cancel_pending()
 
     # 2-6. 차량번호 인식 결과 반환
 

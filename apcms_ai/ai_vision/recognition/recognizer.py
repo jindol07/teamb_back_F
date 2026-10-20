@@ -13,8 +13,10 @@ import re
 import tempfile
 import unicodedata
 import cv2
+from functools import wraps
 
 from ai_vision.recognition.recognition_models import RecognitionModels
+from ai_vision.recognition.ocr_image_policy import retry_image_size
 
 
 # 2. 차량 탐지 클래스 설정
@@ -31,6 +33,17 @@ VEHICLE_CLASSES = {
 # 3. 모델은 각 기능의 최초 호출에서 역할별로 생성하고 이후 재사용합니다.
 # 번호판 crop만 읽는 실시간 경로에서는 별도의 차량 탐지 모델을 만들지 않습니다.
 _models = RecognitionModels()
+
+
+def _serialize_inference(role):
+    # 같은 역할의 모델은 결과 순회·fallback까지 한 번에 보호합니다.
+    def decorate(function):
+        @wraps(function)
+        def wrapped(*args, **kwargs):
+            with _models.inference_lock(role):
+                return function(*args, **kwargs)
+        return wrapped
+    return decorate
 
 
 # 4. normalize_plate_text() - OCR 문자열 정규화
@@ -136,6 +149,7 @@ def cleanup_plate_text(text):
 
 # 7. run_paddleocr() - 번호판 OCR 실행
 
+@_serialize_inference("ocr")
 def run_paddleocr(image):
     """
     OpenCV 이미지에서 문자를 인식한다.
@@ -154,10 +168,10 @@ def run_paddleocr(image):
 
         temp_path = os.path.join(
             temp_dir,
-            "ocr_input.jpg"
+            "ocr_input.png"
         )
 
-        # 7-3. OpenCV 이미지를 임시 파일로 저장
+        # 7-3. JPEG 재압축 손실이 생기지 않도록 PNG로 임시 저장합니다.
         saved = cv2.imwrite(temp_path, image)
 
         if not saved:
@@ -248,11 +262,11 @@ def retry_ocr(plate_crop):
 
     height, width = plate_crop.shape[:2]
 
-    # 9-2. 번호판 이미지를 4배 확대
+    # 9-2. 최대 4배 확대하되 4096px 변 길이·4백만 픽셀 안으로 제한합니다.
     # INTER_CUBIC: 확대할 때 사용하는 보간 방식
     enlarged = cv2.resize(
         plate_crop,
-        (width * 4, height * 4),
+        retry_image_size(width, height),
         interpolation=cv2.INTER_CUBIC
     )
 
@@ -282,6 +296,7 @@ def retry_ocr(plate_crop):
 
 # 10. detect_vehicles() - 이미지에서 차량 탐지
 
+@_serialize_inference("vehicle")
 def detect_vehicles(image):
     """
     YOLO를 사용하여 차량을 탐지한다.
@@ -376,6 +391,7 @@ def detect_vehicles(image):
 
 # 11. detect_best_plate() - 차량 내부 번호판 탐지
 
+@_serialize_inference("plate")
 def detect_best_plate(vehicle_crop):
     """
     차량을 잘라낸 이미지에서 번호판을 탐지한다.

@@ -3,12 +3,16 @@
 import builtins
 import importlib.util
 import unittest
-from unittest.mock import Mock, patch
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import Mock, MagicMock, patch
 
 import numpy as np
 
 from ai_vision.paths import BASE_DIR
 from ai_vision.recognition.live_gate_processor import LiveGateProcessor
+from ai_vision.recognition.recognition_models import RecognitionModels
 
 
 class RecognizerLazyLoadingTests(unittest.TestCase):
@@ -31,7 +35,7 @@ class RecognizerLazyLoadingTests(unittest.TestCase):
 
     def test_plate_detection_does_not_request_vehicle_or_ocr(self):
         module = self.load_module()
-        models = Mock()
+        models = MagicMock()
         models.plate.return_value = Mock(return_value=[])
         with patch.object(module, "_models", models):
             self.assertIsNone(module.detect_best_plate(np.zeros((20, 20, 3), dtype=np.uint8)))
@@ -42,7 +46,7 @@ class RecognizerLazyLoadingTests(unittest.TestCase):
     def test_full_image_detection_still_uses_vehicle_fallback_and_response_shape(self):
         module = self.load_module()
         model = Mock(return_value=[])
-        models = Mock()
+        models = MagicMock()
         models.vehicle.return_value = model
         with patch.object(module, "_models", models):
             result = module.recognize_image(np.zeros((20, 20, 3), dtype=np.uint8))
@@ -53,7 +57,7 @@ class RecognizerLazyLoadingTests(unittest.TestCase):
 
     def test_ocr_only_requests_ocr_model_and_preserves_output(self):
         module = self.load_module()
-        models = Mock()
+        models = MagicMock()
         models.ocr.return_value.predict.return_value = [{"rec_texts": ["91소", "6408"]}]
         with patch.object(module, "_models", models), \
                 patch.object(module.cv2, "imwrite", return_value=True), \
@@ -67,7 +71,7 @@ class RecognizerLazyLoadingTests(unittest.TestCase):
 
     def test_live_crop_path_does_not_request_another_vehicle_model(self):
         from ai_vision.recognition import recognizer
-        models = Mock()
+        models = MagicMock()
         models.plate.return_value = Mock(return_value=[])
         with patch.object(recognizer, "_models", models):
             result = LiveGateProcessor._read_plate(np.zeros((20, 20, 3), dtype=np.uint8))
@@ -75,3 +79,54 @@ class RecognizerLazyLoadingTests(unittest.TestCase):
         models.vehicle.assert_not_called()
         models.plate.assert_called_once()
         models.ocr.assert_not_called()
+
+    def test_ocr_generator_iteration_remains_inside_inference_lock(self):
+        module = self.load_module()
+        active, peak = 0, 0
+        guard = threading.Lock()
+        class Reader:
+            def predict(self, path):
+                nonlocal active, peak
+                with guard:
+                    active += 1
+                    peak = max(peak, active)
+                try:
+                    time.sleep(.01)
+                    yield {"rec_texts": ["91소6408"]}
+                finally:
+                    with guard:
+                        active -= 1
+        models = RecognitionModels(ocr_factory=lambda **kwargs: Reader())
+        with patch.object(module, "_models", models), patch.object(module.cv2, "imwrite", return_value=True), \
+                patch.object(module.tempfile, "TemporaryDirectory") as temporary:
+            temporary.return_value.__enter__.return_value = "unused-test-path"
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                results = list(pool.map(module.run_paddleocr, [np.zeros((20, 20, 3), dtype=np.uint8)] * 2))
+        self.assertEqual(results, ["91소6408", "91소6408"])
+        self.assertEqual(peak, 1)
+
+    def test_retry_resize_uses_bounded_dimensions_before_allocation(self):
+        module = self.load_module()
+        with patch.object(module.cv2, "resize", return_value=np.zeros((10, 10, 3), dtype=np.uint8)) as resize, \
+                patch.object(module, "run_paddleocr", return_value="91소6408"):
+            result = module.retry_ocr(np.zeros((1500, 1500, 3), dtype=np.uint8))
+        self.assertEqual(resize.call_args.args[1], (2000, 2000))
+        self.assertEqual(result, ("91소6408", "KOREAN_VALID"))
+
+    def test_ocr_temporary_png_preserves_pixels_and_is_removed(self):
+        module = self.load_module()
+        import cv2
+        from pathlib import Path
+        original = np.arange(20 * 30 * 3, dtype=np.uint8).reshape((20, 30, 3))
+        paths = []
+        class Reader:
+            def predict(self, path):
+                paths.append(Path(path))
+                self_image = cv2.imdecode(np.frombuffer(Path(path).read_bytes(), dtype=np.uint8), cv2.IMREAD_COLOR)
+                np.testing.assert_array_equal(self_image, original)
+                return [{"rec_texts": ["91소6408"]}]
+        models = RecognitionModels(ocr_factory=lambda **kwargs: Reader())
+        with patch.object(module, "_models", models):
+            self.assertEqual(module.run_paddleocr(original), "91소6408")
+        self.assertEqual(paths[0].suffix, ".png")
+        self.assertFalse(paths[0].exists())
