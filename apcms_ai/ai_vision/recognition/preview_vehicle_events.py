@@ -19,7 +19,7 @@ from ai_vision.recognition.vehicle_contract import (
     VEHICLE_ENDPOINT, AUTH_HEADER, parse_detected_at, validate_camera_id, validate_vehicle_payload)
 
 
-def _detection_confidence(row):
+def detection_confidence(row):
     # 1. 일치 번호 표본의 번호판 상자 탐지 신뢰도 최솟값입니다. OCR 정확도가 아닙니다.
     values = []
     for sample in row["samples"]:
@@ -58,7 +58,7 @@ def build_preview(catalog, run_id, camera_id=None, down_direction=None, recordin
                               (start is None, "MISSING_RECORDING_START")):
             if missing:
                 reasons.append(code)
-        confidence = _detection_confidence(row) if public["plate_status"] == "CONFIRMED" else None
+        confidence = detection_confidence(row) if public["plate_status"] == "CONFIRMED" else None
         if public["plate_status"] == "CONFIRMED" and confidence is None:
             reasons.append("MISSING_DETECTION_CONFIDENCE")
         payload = None
