@@ -5,6 +5,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.web.bind.annotation.CrossOrigin;
@@ -14,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import kr.co.alpharking.security.Admin;
 import kr.co.alpharking.security.jwt.AuthRequest;
 import kr.co.alpharking.security.jwt.AuthResponse;
 import kr.co.alpharking.security.jwt.JwtTokenProvider;
@@ -65,9 +67,12 @@ public class AuthController {
 		return ResponseEntity.ok("Logout successful");
 	}
 
-	// http://localhost/springjwt1/api/auth/test
-	@GetMapping("/test")
-	public ResponseEntity<?> test() {
-		return ResponseEntity.ok("접근이 됨을 확인합니다.");
-	}
+	// 사용자 정보
+    @GetMapping("/admin")
+    public ResponseEntity<?> getOfficeInfo(@AuthenticationPrincipal Admin admin) {
+        if (admin == null) {
+            return ResponseEntity.status(401).body("로그인이 필요합니다.");
+        }
+        return ResponseEntity.ok(admin);
+    }
 }
