@@ -53,3 +53,13 @@ class InspectLiveGateTests(unittest.TestCase):
         with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as stopped:
             main(["--session-dir", str(self.root)])
         self.assertEqual(stopped.exception.code, 1)
+
+    def test_capture_failure_reports_reason_and_cli_returns_failure(self):
+        source = _demo()
+        source.update(status="FAILED", stop_reason="CAMERA_READ_FAILED", error_type="ValueError", source_end_expected=False)
+        self.write("summary.json", source)
+        result = inspect_session(self.root)
+        self.assertEqual((result["status"], result["stop_reason"]), ("FAILED", "CAMERA_READ_FAILED"))
+        with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as stopped:
+            main(["--session-dir", str(self.root)])
+        self.assertEqual(stopped.exception.code, 1)

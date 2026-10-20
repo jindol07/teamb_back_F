@@ -1,6 +1,6 @@
 # D:/finalProjectB/back/apcms_ai/ai_vision/recognition/preview_gate_config.py
 
-"""정지 이미지에 ROI·통과선을 표시합니다. 카메라·모델·HTTP는 사용하지 않습니다."""
+"""파일 또는 명시한 카메라의 한 프레임에 ROI·통과선을 표시합니다."""
 
 import argparse
 from pathlib import Path
@@ -10,6 +10,7 @@ import numpy as np
 
 from ai_vision.recognition.local_io import read_json
 from ai_vision.recognition.tracking_config import validate_config
+from ai_vision.recognition.read_camera_frame import read_camera_frame
 
 
 def render_preview(frame, config, down_direction):
@@ -38,7 +39,9 @@ def render_preview(frame, config, down_direction):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--image", type=Path, required=True)
+    source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--image", type=Path)
+    source.add_argument("--camera-index", type=int, help="한 프레임을 읽을 물리 카메라 번호 0~32")
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--down-direction", choices=["ENTRY", "EXIT"], required=True)
     parser.add_argument("--output", type=Path, required=True)
@@ -47,16 +50,25 @@ def main(argv=None):
         # 3. 한글 경로는 바이트 디코딩으로 읽고 기존 출력은 덮어쓰지 않습니다.
         if args.output.suffix.lower() != ".png":
             raise ValueError("출력 확장자는 .png여야 합니다.")
-        data = args.image.read_bytes()
-        frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
-        result = render_preview(frame, read_json(args.config), args.down_direction)
+        if args.output.exists() or not args.output.parent.is_dir():
+            raise ValueError("기존 부모 폴더에 새 출력 파일을 지정해 주세요.")
+        # 3-1. 설정·출력 경로를 먼저 확인해 잘못된 입력으로 카메라를 열지 않습니다.
+        config = validate_config(read_json(args.config))
+        if args.image is not None:
+            data = args.image.read_bytes()
+            frame = cv2.imdecode(np.frombuffer(data, dtype=np.uint8), cv2.IMREAD_COLOR)
+        else:
+            frame = read_camera_frame(args.camera_index)
+        result = render_preview(frame, config, args.down_direction)
         ok, encoded = cv2.imencode(".png", result)
         if not ok:
             raise ValueError("미리보기 이미지 생성에 실패했습니다.")
         with args.output.open("xb") as stream:
             stream.write(encoded.tobytes())
     except (OSError, ValueError, cv2.error):
-        parser.exit(1, "설정 미리보기 실패: 입력 이미지·설정·새 PNG 출력 경로를 확인해 주세요.\n")
+        parser.exit(1, "설정 미리보기 실패: 입력 이미지 또는 카메라·설정·새 PNG 출력 경로를 확인해 주세요.\n")
+    except KeyboardInterrupt:
+        parser.exit(130, "사용자가 설정 미리보기를 중단했습니다.\n")
     print(f"설정 미리보기 저장: {args.output}")
 
 

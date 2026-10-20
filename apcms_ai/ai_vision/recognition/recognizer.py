@@ -1,3 +1,4 @@
+# D:/finalProjectB/back/apcms_ai/ai_vision/recognition/recognizer.py
 # APCMS 차량 및 번호판 인식 기능
 
 # 1. YOLO 차량 탐지
@@ -12,31 +13,10 @@ import re
 import tempfile
 import unicodedata
 import cv2
+from functools import wraps
 
-from paddleocr import PaddleOCR
-from ultralytics import YOLO
-
-from ai_vision.paths import MODEL_DIR
-
-
-# 1. 모델 파일 경로 설정
-
-# 1-1. 차량 탐지용 YOLO 모델
-VEHICLE_MODEL_PATH = MODEL_DIR / "yolo11n.pt"
-
-# 1-2. 번호판 탐지용 YOLO 모델
-PLATE_MODEL_PATH = MODEL_DIR / "license_plate_yolov8n.pt"
-
-# 1-3. 모델 파일 존재 여부 확인
-if not VEHICLE_MODEL_PATH.is_file():
-    raise FileNotFoundError(
-        f"차량 탐지 모델이 없습니다: {VEHICLE_MODEL_PATH}"
-    )
-
-if not PLATE_MODEL_PATH.is_file():
-    raise FileNotFoundError(
-        f"번호판 탐지 모델이 없습니다: {PLATE_MODEL_PATH}"
-    )
+from ai_vision.recognition.recognition_models import RecognitionModels
+from ai_vision.recognition.ocr_image_policy import retry_image_size
 
 
 # 2. 차량 탐지 클래스 설정
@@ -50,26 +30,20 @@ VEHICLE_CLASSES = {
 }
 
 
-# 3. AI 모델 로딩
+# 3. 모델은 각 기능의 최초 호출에서 역할별로 생성하고 이후 재사용합니다.
+# 번호판 crop만 읽는 실시간 경로에서는 별도의 차량 탐지 모델을 만들지 않습니다.
+_models = RecognitionModels()
 
-# 3-1. 모델은 모듈을 처음 불러올 때 한 번만 생성(요청마다 모델을 새로 로딩하면 처리 시간이 길어짐)
-print("=== AI 모델 로딩 시작 ===")
 
-# 학습된 모델 불러오기
-vehicle_model = YOLO(VEHICLE_MODEL_PATH)
-plate_model = YOLO(PLATE_MODEL_PATH)
-
-# 3-2. 한국어 번호판 문자인식용 PaddleOCR
-# 문서 방향 보정 및 문자 방향 분류 기능 비활성화
-paddle_ocr = PaddleOCR(
-    lang="korean",
-    use_doc_orientation_classify=False,
-    use_doc_unwarping=False,
-    use_textline_orientation=False,
-    enable_mkldnn=False
-)
-
-print("=== AI 모델 로딩 완료 ===")
+def _serialize_inference(role):
+    # 같은 역할의 모델은 결과 순회·fallback까지 한 번에 보호합니다.
+    def decorate(function):
+        @wraps(function)
+        def wrapped(*args, **kwargs):
+            with _models.inference_lock(role):
+                return function(*args, **kwargs)
+        return wrapped
+    return decorate
 
 
 # 4. normalize_plate_text() - OCR 문자열 정규화
@@ -175,6 +149,7 @@ def cleanup_plate_text(text):
 
 # 7. run_paddleocr() - 번호판 OCR 실행
 
+@_serialize_inference("ocr")
 def run_paddleocr(image):
     """
     OpenCV 이미지에서 문자를 인식한다.
@@ -193,10 +168,10 @@ def run_paddleocr(image):
 
         temp_path = os.path.join(
             temp_dir,
-            "ocr_input.jpg"
+            "ocr_input.png"
         )
 
-        # 7-3. OpenCV 이미지를 임시 파일로 저장
+        # 7-3. JPEG 재압축 손실이 생기지 않도록 PNG로 임시 저장합니다.
         saved = cv2.imwrite(temp_path, image)
 
         if not saved:
@@ -206,7 +181,7 @@ def run_paddleocr(image):
 
         # 7-4. PaddleOCR 실행
         # 결과에는 인식 문자열 등 여러 정보가 포함됨
-        results = paddle_ocr.predict(temp_path)
+        results = _models.ocr().predict(temp_path)
 
         texts = []
 
@@ -287,11 +262,11 @@ def retry_ocr(plate_crop):
 
     height, width = plate_crop.shape[:2]
 
-    # 9-2. 번호판 이미지를 4배 확대
+    # 9-2. 최대 4배 확대하되 4096px 변 길이·4백만 픽셀 안으로 제한합니다.
     # INTER_CUBIC: 확대할 때 사용하는 보간 방식
     enlarged = cv2.resize(
         plate_crop,
-        (width * 4, height * 4),
+        retry_image_size(width, height),
         interpolation=cv2.INTER_CUBIC
     )
 
@@ -321,6 +296,7 @@ def retry_ocr(plate_crop):
 
 # 10. detect_vehicles() - 이미지에서 차량 탐지
 
+@_serialize_inference("vehicle")
 def detect_vehicles(image):
     """
     YOLO를 사용하여 차량을 탐지한다.
@@ -333,7 +309,9 @@ def detect_vehicles(image):
         fallback_used: 낮은 임계값으로 재시도했는지
     """
 
-    # 10-1. 신뢰도 0.5 기준으로 차량 탐지
+    # 10-1. 전체 이미지 인식에서만 차량 탐지 모델을 요청합니다.
+    vehicle_model = _models.vehicle()
+    # 신뢰도 0.5 기준으로 차량 탐지
     results = vehicle_model(
         image,
         conf=0.5,
@@ -413,6 +391,7 @@ def detect_vehicles(image):
 
 # 11. detect_best_plate() - 차량 내부 번호판 탐지
 
+@_serialize_inference("plate")
 def detect_best_plate(vehicle_crop):
     """
     차량을 잘라낸 이미지에서 번호판을 탐지한다.
@@ -421,7 +400,8 @@ def detect_best_plate(vehicle_crop):
     신뢰도가 가장 높은 번호판 하나를 사용한다.
     """
 
-    # 11-1. 번호판 탐지용 YOLO 실행
+    # 11-1. 번호판 탐지가 필요할 때만 해당 YOLO를 생성·재사용합니다.
+    plate_model = _models.plate()
     results = plate_model(
         vehicle_crop,
         conf=0.25,

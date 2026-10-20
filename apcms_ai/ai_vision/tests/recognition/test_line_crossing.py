@@ -77,6 +77,24 @@ class LineCrossingTests(unittest.TestCase):
         self.assertIsNone(counter.update(1, (80, 70), .11))
         self.assertIsNone(counter.update(1, (80, 75), .2))
 
+    def test_explicit_reset_keeps_counted_ids_suppressed(self):
+        counter = self.counter()
+        self.assertEqual(len(self.feed(counter, [70, 75, 120, 125])), 1)
+        self.assertTrue(counter.reset_track(1))
+        self.assertFalse(counter.reset_track(1))
+        self.assertIn(1, counter.counted_ids)
+        self.assertEqual(self.feed(counter, [70, 75, 120, 125], start=1), [])
+
+    def test_continuity_reason_matches_gap_and_speed_rules_without_mutating(self):
+        counter = self.counter()
+        counter.update(1, (80, 70), 0)
+        self.assertEqual(counter.continuity_break_reason(1, (80, 130), .01), "SPEED")
+        self.assertEqual(counter.continuity_break_reason(1, (80, 70), 1.1), "GAP")
+        self.assertIsNone(counter.continuity_break_reason(1, (80, 70), 1))
+        self.assertEqual(counter.states[1].last_time, 0)
+        with self.assertRaises(ValueError):
+            counter.reset_track(True)
+
 
 if __name__ == "__main__":
     unittest.main()

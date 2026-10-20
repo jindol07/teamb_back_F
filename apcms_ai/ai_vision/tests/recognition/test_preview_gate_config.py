@@ -6,7 +6,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import cv2
 import numpy as np
@@ -58,3 +58,74 @@ class PreviewGateConfigTests(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 main(args[:-1] + [str(root / "invalid.png")])
             self.assertFalse((root / "invalid.png").exists())
+
+    def camera_case(self):
+        base = RESULT_DIR / "test_tmp"
+        base.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(dir=base)
+        self.addCleanup(temporary.cleanup)
+        root = Path(temporary.name)
+        assert root.resolve().is_relative_to(base.resolve())
+        config, output = root / "config.json", root / "camera.png"
+        config.write_text(json.dumps(self.config), encoding="utf-8")
+        args = ["--camera-index", "0", "--config", str(config), "--down-direction", "ENTRY", "--output", str(output)]
+        return config, output, args
+
+    def test_camera_mode_reads_once_releases_and_writes_overlay(self):
+        config, output, args = self.camera_case()
+        capture = Mock()
+        original = np.zeros((200, 300, 3), dtype=np.uint8)
+        capture.read.return_value = (True, original)
+        with patch("cv2.VideoCapture", return_value=capture), \
+                patch("requests.sessions.Session.request", side_effect=AssertionError("network forbidden")):
+            with contextlib.redirect_stdout(io.StringIO()):
+                main(args)
+        capture.read.assert_called_once()
+        capture.release.assert_called_once()
+        image = cv2.imdecode(np.frombuffer(output.read_bytes(), dtype=np.uint8), cv2.IMREAD_COLOR)
+        self.assertEqual(image[100, 150].tolist(), [0, 0, 255])
+        self.assertFalse(original.any())
+
+    def test_existing_output_bad_config_or_invalid_index_prevents_camera_access(self):
+        config, output, args = self.camera_case()
+        with patch("cv2.VideoCapture") as camera:
+            output.write_bytes(b"preserve")
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main(args)
+            self.assertEqual(output.read_bytes(), b"preserve")
+            bad_args = args[:-1] + [str(output.parent / "new.png")]
+            config.write_text('{}', encoding="utf-8")
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main(bad_args)
+            config.write_text(json.dumps(self.config), encoding="utf-8")
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main(["--camera-index", "33"] + bad_args[2:])
+            camera.assert_not_called()
+
+    def test_release_failure_does_not_publish_preview(self):
+        config, output, args = self.camera_case()
+        capture = Mock()
+        capture.read.return_value = (True, np.zeros((200, 300, 3), dtype=np.uint8))
+        capture.release.side_effect = OSError("private")
+        with patch("cv2.VideoCapture", return_value=capture):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main(args)
+        self.assertFalse(output.exists())
+
+    def test_image_and_camera_options_are_mutually_exclusive(self):
+        config, output, args = self.camera_case()
+        with patch("cv2.VideoCapture") as camera:
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main(args + ["--image", str(output.parent / "unused.png")])
+            camera.assert_not_called()
+
+    def test_user_interrupt_releases_camera_and_returns_130(self):
+        config, output, args = self.camera_case()
+        capture = Mock()
+        capture.read.side_effect = KeyboardInterrupt()
+        with patch("cv2.VideoCapture", return_value=capture):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as stopped:
+                main(args)
+        self.assertEqual(stopped.exception.code, 130)
+        capture.release.assert_called_once()
+        self.assertFalse(output.exists())

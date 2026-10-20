@@ -56,3 +56,22 @@ class LiveGateMetricsTests(unittest.TestCase):
         value.update(frames=1, eligible=1, crossings=1, ocr_calls=4)
         with self.assertRaises(ValueError):
             validate_processor_statistics(value, 1)
+
+    def test_old_statistics_and_optional_continuity_counters(self):
+        original = dict.fromkeys(("frames", "observations", "already_counted", "outside_roi", "eligible",
+                                  "gap_resets", "crossings", "ocr_calls", "peak_buffer_bytes"), 0)
+        self.assertNotIn("roi_resets", validate_processor_statistics(original, 0))
+        self.assertEqual(validate_processor_statistics({**original, "roi_resets": 0, "speed_resets": 0}, 0)["roi_resets"], 0)
+        for extra in ({"roi_resets": True}, {"speed_resets": -1}, {"unknown": 0}):
+            with self.assertRaises(ValueError):
+                validate_processor_statistics({**original, **extra}, 0)
+
+    def test_expired_history_crop_counter_optional_and_strict_integer(self):
+        original = dict.fromkeys(("frames", "observations", "already_counted", "outside_roi", "eligible",
+                                  "gap_resets", "crossings", "ocr_calls", "peak_buffer_bytes"), 0)
+        self.assertNotIn("expired_history_crops", validate_processor_statistics(original, 0))
+        value = {**original, "expired_history_crops": 3}
+        self.assertEqual(validate_processor_statistics(value, 0)["expired_history_crops"], 3)
+        for invalid in (True, -1, .5):
+            with self.assertRaises(ValueError):
+                validate_processor_statistics({**original, "expired_history_crops": invalid}, 0)

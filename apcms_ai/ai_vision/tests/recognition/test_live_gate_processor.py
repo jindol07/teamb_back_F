@@ -18,6 +18,15 @@ def stamp(index):
 
 
 class LiveGateProcessorTests(unittest.TestCase):
+    def process_path(self, processor, path):
+        passages = []
+        for index, (seconds, x, y) in enumerate(path):
+            frame = np.full((100, 100, 3), index, dtype=np.uint8)
+            processor._tracker = lambda frame, x=x, y=y: [{"track_id": 7, "box": [x - 5, y - 5, x + 5, y + 5]}]
+            current = FrameStamp(index, seconds, datetime(2020, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=seconds))
+            passages.extend(processor.process(frame, current))
+        return passages
+
     def crossing(self, processor):
         passages = []
         for index in range(7):
@@ -101,3 +110,52 @@ class LiveGateProcessorTests(unittest.TestCase):
         statistics = processor.statistics()
         self.assertEqual((statistics["observations"], statistics["outside_roi"], statistics["eligible"], statistics["gap_resets"]),
                          (4, 2, 2, 1))
+
+    def test_roi_exit_and_return_on_other_side_do_not_create_crossing(self):
+        config = {**CONFIG, "roi": [.2, 0, .8, 0, .8, 1, .2, 1]}
+        reader = Mock(side_effect=AssertionError("ROI 밖 이동은 통과가 아님"))
+        processor = LiveGateProcessor(config, plate_reader=reader)
+        path = [(0, 50, 20), (.1, 50, 20), (.2, 50, 20), (.3, 95, 20),
+                (.5, 95, 80), (.8, 50, 80), (.9, 50, 80), (1, 50, 80)]
+        self.assertEqual(self.process_path(processor, path), [])
+        self.assertEqual(processor.statistics()["roi_resets"], 1)
+        reader.assert_not_called()
+        self.assertTrue(all(row["frame_index"] >= 5 for row in processor._buffers[7]))
+
+    def test_position_jump_clears_previous_crops_before_new_track_segment(self):
+        processor = LiveGateProcessor(CONFIG)
+        path = [(0, 50, 80), (.3, 50, 80), (.6, 50, 80), (.61, 50, 20)]
+        self.assertEqual(self.process_path(processor, path), [])
+        self.assertEqual(processor.statistics()["speed_resets"], 1)
+        self.assertEqual([row["frame_index"] for row in processor._buffers[7]], [3])
+        self.assertEqual(processor._bytes, 10 * 10 * 3)
+
+    def test_already_counted_id_not_reopened_by_roi_excursion(self):
+        config = {**CONFIG, "roi": [.2, 0, .8, 0, .8, 1, .2, 1]}
+        processor = LiveGateProcessor(config, self.tracker, lambda crop: {"plate_number": "", "plate_type": "NOT_DETECTED"})
+        self.assertEqual(len(self.crossing(processor)), 1)
+        processor._tracker = lambda frame: [{"track_id": 7, "box": [90, 10, 100, 30]}]
+        self.assertEqual(processor.process(np.zeros((100, 100, 3), dtype=np.uint8), stamp(7)), [])
+        self.assertIn(7, processor._counter.counted_ids)
+        self.assertNotIn(7, processor._buffers)
+
+    def test_expired_frame_crops_are_pruned_for_all_tracks_and_memory_released(self):
+        rows = [{"track_id": track, "box": [20, 20, 40, 40]} for track in (1, 2)]
+        processor = LiveGateProcessor(CONFIG, lambda frame: rows)
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        processor.process(frame, stamp(0), minimum_frame_index=0)
+        processor.process(frame, stamp(1), minimum_frame_index=0)
+        processor.process(frame, stamp(2), minimum_frame_index=1)
+        self.assertEqual(processor.statistics()["expired_history_crops"], 2)
+        self.assertEqual(processor._bytes, 2 * 2 * 20 * 20 * 3)
+        self.assertTrue(all(entry["frame_index"] >= 1 for entries in processor._buffers.values() for entry in entries))
+        processor.close()
+        self.assertEqual(processor._bytes, 0)
+
+    def test_invalid_history_boundary_rejected_before_tracking(self):
+        tracker = Mock(side_effect=AssertionError("invalid input"))
+        processor = LiveGateProcessor(CONFIG, tracker)
+        for value in (True, -1, .5, 1):
+            with self.assertRaises(ValueError):
+                processor.process(np.zeros((100, 100, 3), dtype=np.uint8), stamp(0), minimum_frame_index=value)
+        tracker.assert_not_called()
