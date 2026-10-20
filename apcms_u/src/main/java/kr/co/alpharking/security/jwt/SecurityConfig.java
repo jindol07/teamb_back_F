@@ -69,8 +69,14 @@ public class SecurityConfig {
                         .requestMatchers("/api/member/**").permitAll()
                         .requestMatchers("/uploads/**").permitAll() //이미지 경로도 열어줘야 한다.
                         .requestMatchers("/api/employees/**","/back/api/employees/**").permitAll()
-                        //.requestMatchers("/demos/**").permitAll()
-                        //.requestMatchers("/**").permitAll()
+                        
+                        // 관리자 및 사용자 권한
+                        .requestMatchers("/admin/**").hasAuthority("ADMIN")
+                        .requestMatchers("/user/**").hasAuthority("OFFICE")
+
+                        // 공지사항은 로그인한 사용자만 접근
+                        .requestMatchers("/api/notice", "/api/notice/**").authenticated()
+                        
                         .anyRequest().authenticated()) // 모든 요청에 대해 인증을 요구
                 // JWT 토큰 필터 추가: JwtTokenFilter를 BasicAuthenticationFilter 전에 추가하여 JWT 토큰을 검증
                 .addFilterBefore(jwtTokenFilter, BasicAuthenticationFilter.class)
@@ -78,6 +84,7 @@ public class SecurityConfig {
                 .sessionManagement((session) -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 // 로그아웃 기능 비활성화: 상태를 유지하지 않는 인증 방식에서는 로그아웃이 필요 없다.
                 .logout((logout) -> logout.disable());
+        		
         return http.build();
     }
     @Bean
