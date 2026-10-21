@@ -44,6 +44,91 @@ class FakeCapture:
 
 
 class RunLiveGateTests(unittest.TestCase):
+    def test_cancelled_preparation_does_not_read_or_process_measurement_frames(self):
+        capture, processor, preview = Mock(), Mock(), Mock()
+        report = execute(capture, processor, self.session(), preview=preview, start_cancelled=True)
+        self.assertEqual(report['stop_reason'], 'USER_INTERRUPTED')
+        self.assertEqual(report['status'], 'STOPPED')
+        self.assertEqual(report['captured_frames'], 0)
+        self.assertEqual(report['request_attempts'], 0)
+        capture.read.assert_not_called()
+        processor.process.assert_not_called()
+
+    def test_cli_creates_session_only_after_user_preparation(self):
+        root = self.output_folder()
+        config = root / 'ready_config.json'
+        config.write_text(json.dumps(CONFIG), encoding='utf-8')
+        state = {'ready': False}
+        def ready(capture):
+            state['ready'] = True
+            return True
+        def make_session(*args, **kwargs):
+            self.assertTrue(state['ready'])
+            return LiveGateSession(*args, **kwargs)
+        def finish(capture, processor, session, **kwargs):
+            self.assertEqual(kwargs['seconds'], 60)
+            capture.release()
+            processor.close()
+            session.close()
+            kwargs['preview'].close()
+            return {**session.summary(), 'status': 'STOPPED'}
+        with patch('ai_vision.recognition.preview_gate_config.LiveGatePreview') as preview, \
+                patch('ai_vision.recognition.run_live_gate.LiveGateSession', side_effect=make_session), \
+                patch('ai_vision.recognition.run_live_gate.LiveGateProcessor'), patch('cv2.VideoCapture'), \
+                patch('ai_vision.recognition.run_live_gate.execute', side_effect=finish), \
+                contextlib.redirect_stdout(io.StringIO()):
+            preview.return_value.wait_until_ready.side_effect = ready
+            main(['--config', str(config), '--camera-id', 'TEST', '--down-direction', 'ENTRY', '--preview',
+                  '--seconds', '60', '--output-dir', str(root / 'ready_run')])
+        preview.return_value.wait_until_ready.assert_called_once()
+
+    def test_preview_q_stops_before_processing_and_closes_before_processor(self):
+        capture = FakeCapture([np.zeros((100, 100, 3), dtype=np.uint8)])
+        processor, preview = Mock(), Mock(return_value=False)
+        events = []
+        preview.close.side_effect = lambda: events.append('preview')
+        processor.close.side_effect = lambda: events.append('processor')
+        report = execute(capture, processor, self.session(), monotonic_reader=lambda: .1,
+                         deadline_reader=lambda: 0, preview=preview)
+        self.assertEqual(report['stop_reason'], 'USER_INTERRUPTED')
+        self.assertEqual(report['status'], 'STOPPED')
+        self.assertEqual(events, ['preview', 'processor'])
+        self.assertTrue(capture.released)
+        processor.process.assert_not_called()
+        self.assertEqual(report['request_attempts'], 0)
+
+    def test_preview_error_reports_failure_and_releases_camera(self):
+        capture = FakeCapture([np.zeros((100, 100, 3), dtype=np.uint8)])
+        preview = Mock(side_effect=RuntimeError('화면 표시 오류'))
+        report = execute(capture, Mock(), self.session(), monotonic_reader=lambda: .1,
+                         deadline_reader=lambda: 0, preview=preview)
+        self.assertEqual(report['status'], 'FAILED')
+        self.assertTrue(capture.released)
+        preview.close.assert_called_once()
+
+    def test_preview_close_failure_does_not_prevent_other_cleanup(self):
+        capture = FakeCapture([])
+        preview, processor = Mock(), Mock()
+        preview.close.side_effect = RuntimeError('창 닫기 오류')
+        report = execute(capture, processor, self.session(), allow_source_end=True, preview=preview)
+        self.assertEqual(report['status'], 'FAILED')
+        self.assertEqual(report['cleanup_errors'], 1)
+        self.assertTrue(capture.released)
+        processor.close.assert_called_once()
+
+    def test_headless_preview_failure_happens_before_model_or_camera(self):
+        root = self.output_folder()
+        config = root / 'preview_config.json'
+        config.write_text(json.dumps(CONFIG), encoding='utf-8')
+        with patch('ai_vision.recognition.preview_gate_config.LiveGatePreview', side_effect=RuntimeError('화면 없음')), \
+                patch('cv2.VideoCapture') as capture, \
+                patch('ai_vision.recognition.run_live_gate.LiveGateProcessor') as processor, \
+                contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            main(['--config', str(config), '--camera-id', 'TEST', '--down-direction', 'ENTRY',
+                  '--preview', '--output-dir', str(root / 'preview_run')])
+        capture.assert_not_called()
+        processor.assert_not_called()
+
     def test_remote_samples_reach_consensus_and_single_boot_attempt(self):
         from ai_vision.recognition.remote_plate_reader import RemotePlateReader
         from ai_vision.tests.recognition.test_remote_plate_reader import make_session
