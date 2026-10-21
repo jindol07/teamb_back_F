@@ -22,4 +22,9 @@ public interface ParkingUsageDao {
     int countOtherActiveOnSpace(@Param("spaceId") Long spaceId, @Param("usageId") Long usageId);
     int assignSpace(@Param("usageId") Long usageId, @Param("spaceId") Long spaceId);
     int exitUsage(@Param("usageId") Long usageId, @Param("eventTime") Timestamp eventTime);
+    List<ParkingUsageRow> findActiveOnSpace(@Param("spaceId") Long spaceId);
+    List<ParkingUsageRow> lockActiveOnSpace(@Param("spaceId") Long spaceId);
+    List<ParkingUsageRow> searchActive(@Param("number") String number);
+    int countActiveByPlate(@Param("number") String number);
+    int detachSpace(@Param("usageId") Long usageId, @Param("spaceId") Long spaceId);
 }

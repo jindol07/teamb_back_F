@@ -16,6 +16,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
 import kr.co.alpharking.dao.parking.AiOccupancyDao;
+import kr.co.alpharking.dao.parking.ParkingSpaceDao;
 import kr.co.alpharking.dto.parking.AiOccupancyRequest;
 import kr.co.alpharking.dto.parking.AiOccupancyResponse;
 import kr.co.alpharking.dto.parking.ParkingSpaceRow;
@@ -27,10 +28,12 @@ public class AiOccupancyService {
     private static final ZoneId KST = ZoneId.of("Asia/Seoul");
     private final AiOccupancyDao dao;
     private final ApplicationEventPublisher events;
+    private final ParkingSpaceDao spaces;
 
-    public AiOccupancyService(AiOccupancyDao dao, ApplicationEventPublisher events) {
+    public AiOccupancyService(AiOccupancyDao dao, ApplicationEventPublisher events, ParkingSpaceDao spaces) {
         this.dao = dao;
         this.events = events;
+        this.spaces = spaces;
     }
 
     @Transactional
@@ -77,6 +80,12 @@ public class AiOccupancyService {
         params.put("rawPayload", raw);
         if (dao.insertEvent(params) != 1) throw new IllegalStateException("AI 이벤트 저장 실패");
         Long eventId = ((Number) params.get("aiDetectionEventId")).longValue();
+
+        // 일회성 보정 이전(동일 초 포함)의 지연 감지는 기록만 남긴다. 새 감지는 계속 반영한다.
+        java.sql.Timestamp correctedAt = spaces.latestAdminChangedAt(id);
+        if (correctedAt != null && !detected.isAfter(correctedAt.toLocalDateTime())) {
+            return new AiOccupancyResponse(req.eventId(), req.spaceCode(), "SKIPPED_BEFORE_CORRECTION", previous, previous, eventId);
+        }
 
         // 예약/사용불가 상태는 AI가 임의로 덮어쓰지 않는다.
         if ("RESERVED".equals(previous) || "DISABLED".equals(previous)) {

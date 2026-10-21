@@ -91,4 +91,30 @@
         UPDATE PARKING_USAGE SET EXIT_AT = #{eventTime}
          WHERE PARKING_USAGE_ID = #{usageId} AND EXIT_AT IS NULL
     </update>
+    <select id="findActiveOnSpace" resultType="kr.co.alpharking.dto.parking.ParkingUsageRow">
+        SELECT <include refid="usageCols" /> <include refid="usageFrom" />
+         WHERE u.PARKING_SPACE_ID = #{spaceId} AND u.EXIT_AT IS NULL
+         ORDER BY u.PARKING_USAGE_ID
+    </select>
+    <select id="lockActiveOnSpace" resultType="kr.co.alpharking.dto.parking.ParkingUsageRow">
+        SELECT PARKING_USAGE_ID AS "parkingUsageId", VEHICLE_NUMBER AS "vehicleNumber",
+               PARKING_SPACE_ID AS "parkingSpaceId",
+               TO_CHAR(ENTRY_AT, 'YYYY-MM-DD"T"HH24:MI:SS') AS "entryAt"
+          FROM PARKING_USAGE WHERE PARKING_SPACE_ID = #{spaceId} AND EXIT_AT IS NULL
+         ORDER BY PARKING_USAGE_ID FOR UPDATE NOWAIT
+    </select>
+    <select id="searchActive" resultType="kr.co.alpharking.dto.parking.ParkingUsageRow">
+        SELECT * FROM (
+            SELECT <include refid="usageCols" /> <include refid="usageFrom" />
+             WHERE u.EXIT_AT IS NULL AND INSTR(u.VEHICLE_NUMBER, #{number}) &gt; 0
+             ORDER BY u.ENTRY_AT DESC, u.PARKING_USAGE_ID DESC
+        ) WHERE ROWNUM &lt;= 30
+    </select>
+    <select id="countActiveByPlate" resultType="int">
+        SELECT COUNT(*) FROM PARKING_USAGE WHERE VEHICLE_NUMBER = #{number} AND EXIT_AT IS NULL
+    </select>
+    <update id="detachSpace">
+        UPDATE PARKING_USAGE SET PARKING_SPACE_ID = NULL
+         WHERE PARKING_USAGE_ID = #{usageId} AND PARKING_SPACE_ID = #{spaceId} AND EXIT_AT IS NULL
+    </update>
 </mapper>
