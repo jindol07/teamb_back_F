@@ -5,6 +5,8 @@ import org.apache.ibatis.annotations.Param;
 import org.apache.ibatis.annotations.Mapper;
 import kr.co.alpharking.dto.parking.ParkingSpaceRow;
 import kr.co.alpharking.dto.parking.ParkingSpacePublicRow;
+import kr.co.alpharking.dto.parking.ParkingSpaceHistoryRow;
+import java.sql.Timestamp;
 
 @Mapper
 public interface ParkingSpaceDao {
@@ -17,4 +19,8 @@ public interface ParkingSpaceDao {
     int insertAdminHistory(@Param("id") Long id, @Param("adminId") Long adminId,
                            @Param("reason") String reason);
     ParkingSpaceRow findById(@Param("id") Long id);
+    List<ParkingSpaceHistoryRow> findHistory(@Param("id") Long id);
+    Long latestHistoryId(@Param("id") Long id);
+    Timestamp latestAdminChangedAt(@Param("id") Long id);
+    int countValidTextColumns(@Param("memo") String memo, @Param("reason") String reason);
 }
