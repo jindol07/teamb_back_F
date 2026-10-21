@@ -9,6 +9,24 @@ from ai_inquiry import main as inquiry_main
 from fastapi import FastAPI
 
 
+def test_parking_status_uses_user_server_and_bearer(monkeypatch):
+    seen = []
+    rows = [{'space_status_code': 'AVAILABLE'}, {'space_status_code': 'OCCUPIED'}]
+    def respond(request):
+        seen.append(request)
+        return httpx.Response(200, json=rows)
+    original_client = httpx.AsyncClient
+    monkeypatch.setattr(backend_client, 'settings', lambda: {
+        'base_url': 'http://test/alpharking/'
+    })
+    monkeypatch.setattr(backend_client.httpx, 'AsyncClient', lambda **kwargs: original_client(
+        **kwargs, transport=httpx.MockTransport(respond)))
+    result = asyncio.run(backend_client.BackendClient().get_public_parking_spaces('user-test-token'))
+    assert result == rows
+    assert str(seen[0].url) == 'http://test/alpharking/api/parking/spaces'
+    assert seen[0].headers['Authorization'] == 'Bearer user-test-token'
+
+
 def test_backend_keeps_context_path_and_forwards_bearer(monkeypatch):
     seen = []
     def respond(request):
