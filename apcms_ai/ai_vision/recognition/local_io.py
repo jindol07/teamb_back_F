@@ -30,18 +30,39 @@ def decode_object(text):
         if not math.isfinite(number):
             raise ValueError("JSON 숫자가 표현 가능한 범위를 초과했습니다.")
         return number
-    value = json.loads(text, parse_constant=_reject_constant, parse_float=finite_float,
-                       object_pairs_hook=_unique_object)
+    try:
+        value = json.loads(text, parse_constant=_reject_constant, parse_float=finite_float,
+                           object_pairs_hook=_unique_object)
+    except RecursionError as error:
+        raise ValueError("JSON의 중첩 깊이가 처리 한도를 초과했습니다.") from error
     if not isinstance(value, dict):
         raise ValueError("JSON 최상위 값은 객체여야 합니다.")
+    # 외부 라이브러리가 Python 재귀 한도를 바꿔도 허용 깊이는 일정하게 유지합니다.
+    stack = [(iter((value,)), 0)]
+    while stack:
+        iterator, depth = stack[-1]
+        try:
+            item = next(iterator)
+        except StopIteration:
+            stack.pop()
+            continue
+        if isinstance(item, (dict, list)):
+            if depth >= 128:
+                raise ValueError("JSON의 중첩 깊이가 처리 한도를 초과했습니다.")
+            stack.append((iter(item.values() if isinstance(item, dict) else item), depth + 1))
     return value
 
 
 def read_json(path, max_bytes=4 * 1024 * 1024):
     path = Path(path)
-    if path.stat().st_size > max_bytes:
+    if type(max_bytes) is not int or max_bytes < 1:
+        raise ValueError("JSON 읽기 한도는 양의 정수여야 합니다.")
+    # 1-1. 크기 확인 후 파일이 커지더라도 실제 읽기는 상한+1바이트로 제한합니다.
+    with path.open("rb") as handle:
+        content = handle.read(max_bytes + 1)
+    if len(content) > max_bytes:
         raise ValueError("JSON 파일이 허용 크기를 초과했습니다.")
-    return decode_object(path.read_text(encoding="utf-8-sig"))
+    return decode_object(content.decode("utf-8-sig"))
 
 
 def iter_jsonl(path, max_rows=200000, max_line_bytes=1024 * 1024):

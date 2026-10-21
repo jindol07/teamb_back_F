@@ -59,3 +59,14 @@ class CheckLiveGateTests(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                 main(self.args + ["--probe-camera", "--output", str(self.root / "missing" / "check.json")])
             run.assert_not_called()
+
+    def test_cli_import_failure_is_saved_and_returns_failure(self):
+        output = self.root / "imports.json"
+        with patch("ai_vision.recognition.live_gate_preflight.check_environment", return_value=[]), \
+                patch("ai_vision.recognition.live_gate_preflight.probe_imports",
+                      return_value={"status": "FAILED"}) as imports:
+            with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as stopped:
+                main(self.args + ["--probe-imports", "--import-timeout", "15", "--output", str(output)])
+        self.assertEqual(stopped.exception.code, 1)
+        self.assertEqual(imports.call_args_list[0].args, ("vision", 15))
+        self.assertEqual(json.loads(output.read_text(encoding="utf-8"))["imports"]["status"], "FAILED")

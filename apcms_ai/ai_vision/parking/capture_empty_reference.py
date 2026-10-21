@@ -1,4 +1,6 @@
+# D:/finalProjectB/back/apcms_ai/ai_vision/parking/capture_empty_reference.py
 import cv2
+from ai_vision.camera_runtime import open_camera
 
 from ai_vision.paths import DATA_DIR
 
@@ -10,9 +12,10 @@ def capture_empty_reference():
 
     # 기본 웹캠 연결
     # 0: 기본 웹캠, CAP_DSHOW: Windows DirectShow 사용
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    cap = open_camera(0)
 
     if not cap.isOpened():
+        cap.release()
         print("웹캠을 연결할 수 없습니다.")
         return
 

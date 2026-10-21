@@ -101,6 +101,7 @@ def run(run_dir, output_dir, max_tracks=None):
     import cv2
     cap = cv2.VideoCapture(summary["source"])
     if not cap.isOpened():
+        cap.release()
         raise ValueError("OCR 대상 원본 영상을 열 수 없습니다.")
     outcomes = []
     try:

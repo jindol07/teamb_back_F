@@ -3,7 +3,7 @@
 """저장 결과를 공개하기 전에 건수와 OCR 원본 표본을 검사합니다."""
 
 import math
-from ai_vision.recognition.plate_consensus import summarize_plate_samples
+from ai_vision.recognition.plate_consensus import summarize_plate_samples, validate_plate_summary
 
 
 def validate_summary(result):
@@ -26,7 +26,7 @@ def public_passage(row):
     if (not isinstance(row, dict) or row.get("http_enabled") is not False or
             row.get("record_type") != "LOCAL_TRACKED_PASSAGE" or
             type(row.get("track_id")) is not int or row["track_id"] < 0 or
-            row.get("screen_direction") not in {"UP", "DOWN"}):
+            not isinstance(row.get("screen_direction"), str) or row["screen_direction"] not in {"UP", "DOWN"}):
         raise ValueError("통과 판정 결과 형식이 유효하지 않습니다.")
     time = row.get("crossing_video_seconds")
     if isinstance(time, bool) or not isinstance(time, (int, float)) or not math.isfinite(time) or time < 0:
@@ -34,6 +34,8 @@ def public_passage(row):
     consensus, samples = row.get("plate_consensus"), row.get("samples")
     if not isinstance(consensus, dict) or not isinstance(samples, list) or any(not isinstance(s, dict) for s in samples):
         raise ValueError("번호판 판정과 표본은 객체와 목록이어야 합니다.")
+    # 2-1. 필수 키·투표 자료형을 먼저 검사해 손상 자료도 일관된 검증 오류로 거부합니다.
+    validate_plate_summary(consensus, len(samples))
     checked = summarize_plate_samples(samples, consensus["minimum_votes"], consensus["minimum_spacing_seconds"])
     if checked != consensus:
         raise ValueError("번호판 판정과 원본 표본이 일치하지 않습니다.")

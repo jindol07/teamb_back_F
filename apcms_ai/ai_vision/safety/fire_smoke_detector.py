@@ -1,14 +1,14 @@
+# D:/finalProjectB/back/apcms_ai/ai_vision/safety/fire_smoke_detector.py
 import cv2
 import json
-import sys
 import time
 
-from ultralytics import YOLO
 
 from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
-from paths import MODEL_DIR, RESULT_DIR
+# 패키지 이름으로 가져와 다른 모듈의 paths와 충돌하지 않게 합니다.
+from ai_vision.paths import MODEL_DIR, RESULT_DIR
+from ai_vision.recognition.model_files import require_model_file
+from ai_vision.recognition.local_io import write_json_atomic
 
 
 # 1. 화재·연기 감지에 사용할 경로와 설정값
@@ -48,10 +48,7 @@ def detect_fire_smoke(image_path):
             f"테스트 이미지가 없습니다: {image_path}"
         )
 
-    if not MODEL_PATH.is_file():
-        raise FileNotFoundError(
-            f"YOLO 모델 파일이 없습니다: {MODEL_PATH}"
-        )
+    require_model_file(MODEL_PATH)
 
 
     # 2-2. 결과 저장 폴더 생성
@@ -77,6 +74,8 @@ def detect_fire_smoke(image_path):
 
     # 2-4. YOLO를 사용하여 이미지 분석
     
+    # 명시적으로 감지를 실행할 때만 모델 라이브러리를 초기화합니다.
+    from ultralytics import YOLO
     model = YOLO(MODEL_PATH)
 
     # perf_counter(): 짧은 처리 시간을 측정하는 함수
@@ -211,14 +210,7 @@ def detect_fire_smoke(image_path):
     # with open(): 파일을 열어 작업한 뒤 자동으로 닫음
     # "w": 쓰기 모드 (기존 파일이 있으면 덮어씀)
     # encoding="utf-8": 한글 저장 지원
-    with open(json_output, "w", encoding="utf-8") as file:
-
-        json.dump( # json.dump(): Python 딕셔너리를 JSON 파일로 저장
-            output,
-            file,
-            ensure_ascii=False, # ensure_ascii=False: 한글을 그대로 저장
-            indent=4 # indent=4: 들여쓰기 4
-        )
+    write_json_atomic(json_output, output)
 
 
     # 2-9. 탐지 결과를 호출한 코드에 반환

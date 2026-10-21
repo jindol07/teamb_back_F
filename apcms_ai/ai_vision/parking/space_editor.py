@@ -1,13 +1,13 @@
-from pathlib import Path
+# D:/finalProjectB/back/apcms_ai/ai_vision/parking/space_editor.py
 from http.server import BaseHTTPRequestHandler, HTTPServer
 import json
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+from ai_vision.paths import DATA_DIR, RESULT_DIR
+from ai_vision.recognition.local_io import write_json_atomic, decode_object
+from ai_vision.parking.parking_validation import validate_spaces
 
-IMAGE_PATH = BASE_DIR / "results" / "parking" / "first_frame.jpg"
-SAVE_PATH = BASE_DIR / "data" / "parking_spaces" / "parking_spots.json"
-
-SAVE_PATH.parent.mkdir(parents=True, exist_ok=True)
+IMAGE_PATH = RESULT_DIR / "parking" / "first_frame.jpg"
+SAVE_PATH = DATA_DIR / "parking_spaces" / "parking_spots.json"
 
 HTML = """
 <!DOCTYPE html>
@@ -299,7 +299,7 @@ class SpaceEditorHandler(BaseHTTPRequestHandler):
             if size <= 0 or size > 1024 * 1024:
                 raise ValueError("Invalid request size")
 
-            data = json.loads(self.rfile.read(size))
+            data = validate_spaces(decode_object(self.rfile.read(size).decode("utf-8")))
 
             width = data["image_width"]
             height = data["image_height"]
@@ -318,10 +318,8 @@ class SpaceEditorHandler(BaseHTTPRequestHandler):
                     if not (0 <= x <= width and 0 <= y <= height):
                         raise ValueError("Point outside image")
 
-            SAVE_PATH.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2),
-                encoding="utf-8"
-            )
+            # 저장할 때만 폴더를 만들고 완성된 JSON으로 교체합니다.
+            write_json_atomic(SAVE_PATH, data)
 
             content = b'{"success":true}'
             self.send_response(200)
@@ -329,6 +327,10 @@ class SpaceEditorHandler(BaseHTTPRequestHandler):
         except (ValueError, KeyError, TypeError, json.JSONDecodeError):
             content = b'{"success":false}'
             self.send_response(400)
+        except OSError:
+            # 읽기 전용 볼륨·권한 오류도 실패 응답으로 알립니다.
+            content = b'{"success":false}'
+            self.send_response(503)
 
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(content)))

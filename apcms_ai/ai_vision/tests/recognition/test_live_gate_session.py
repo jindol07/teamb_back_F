@@ -3,6 +3,7 @@
 import copy
 import json
 import unittest
+from unittest.mock import Mock
 from dataclasses import replace
 from datetime import datetime, timezone
 
@@ -79,3 +80,22 @@ class LiveGateSessionTests(unittest.TestCase):
         session.post.assert_called_once()
         other = LiveGateSession("TEST_GATE", "ENTRY")
         self.assertNotEqual(self.session.session_id, other.session_id)
+
+    # 손상된 기록은 전송 판단·건수 집계 전에 거부하고 정상 기록은 계속 받을 수 있어야 합니다.
+    def test_malformed_passage_does_not_reach_flow_or_change_summary(self):
+        original_flow = self.session.flow
+        flow = Mock()
+        flow.client.enabled = False
+        self.session.flow = flow
+        before = self.session.summary()
+        for mutate in (lambda row: row["plate_consensus"].pop("minimum_votes"),
+                       lambda row: row.update(screen_direction=[]),
+                       lambda row: row["samples"][1].update(frame_index=99)):
+            row = passage()
+            mutate(row)
+            with self.assertRaises(ValueError):
+                self.session.consume(row, self.stamp)
+            self.assertEqual(self.session.summary(), before)
+        flow.process.assert_not_called()
+        self.session.flow = original_flow
+        self.assertEqual(self.session.consume(passage(), self.stamp)["decision"], "DISABLED")
