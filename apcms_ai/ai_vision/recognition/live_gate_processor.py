@@ -112,6 +112,11 @@ class LiveGateProcessor:
 
     # 6. 카메라 프레임 한 장 처리: 이 클래스의 핵심 메서드
     def process(self, frame, stamp, minimum_frame_index=None):
+        # 기존 동기 경로는 통과 수집과 OCR을 같은 호출에서 마칩니다.
+        return [self.recognize(job) for job in self.collect(frame, stamp, minimum_frame_index)]
+
+    def collect(self, frame, stamp, minimum_frame_index=None):
+        # 6-0. 추적·통과 판정만 수행합니다. OCR 작업에는 독립 복사한 차량 영역을 넘깁니다.
         # 6-1. 종료 여부와 입력 프레임 타입을 검증합니다.
         if self._closed:
             raise ValueError("종료된 프레임 처리기입니다.")
@@ -176,6 +181,7 @@ class LiveGateProcessor:
         # 6-5. 관찰 횟수는 프레임마다 반복될 수 있으므로 실제 차량 대수와 다릅니다.
         self._statistics["frames"] += 1
         passages = []
+        collected_bytes = 0
         for row in rows:
             self._statistics["observations"] += 1
             track = row["track_id"]
@@ -218,7 +224,7 @@ class LiveGateProcessor:
                     self._bytes -= entries.popleft()["crop"].nbytes
                 crop = frame[y1:y2, x1:x2]
                 # 전체 프레임이 아니라 차량 상자 부분을 복사하며 전체 메모리 제한도 확인합니다.
-                if self._bytes + crop.nbytes <= self._budget:
+                if self._bytes + collected_bytes + crop.nbytes <= self._budget:
                     entries.append({"crop": crop.copy(), "frame_index": stamp.frame_index, "video_seconds": seconds})
                     self._bytes += crop.nbytes
                     self._statistics["peak_buffer_bytes"] = max(self._statistics["peak_buffer_bytes"], self._bytes)
@@ -229,25 +235,33 @@ class LiveGateProcessor:
             if event is None:
                 continue
             self._statistics["crossings"] += 1
-            samples = []
-            # 6-10. 통과가 확인된 차량에 대해서만 저장한 crop들로 OCR을 수행합니다.
-            for entry in self._remove(track):
-                self._statistics["ocr_calls"] += 1
-                result = (self._reader or self._read_plate)(entry["crop"])
-                if not isinstance(result, dict):
-                    raise ValueError("번호판 인식 결과는 객체여야 합니다.")
-                sample = {"frame_index": entry["frame_index"], "video_seconds": entry["video_seconds"],
-                          "plate_number": result.get("plate_number", ""), "plate_type": result.get("plate_type", "NOT_DETECTED")}
-                sample["review_reasons"] = sample_review_reasons([sample])
-                if "plate_detection_confidence" in result:
-                    sample["plate_detection_confidence"] = result["plate_detection_confidence"]
-                samples.append(sample)
-            # 6-11. 여러 OCR 결과를 합의 판정해 통과 기록 한 건으로 묶습니다.
-            # screen_direction은 화면상의 UP/DOWN이며 실제 ENTRY/EXIT는 다른 계층에서 연결합니다.
-            passages.append({"record_type": "LIVE_TRACKED_PASSAGE", "http_enabled": False, "track_id": track,
-                "screen_direction": event["direction"], "crossing_video_seconds": seconds,
-                "samples": samples, "plate_consensus": summarize_plate_samples(samples)})
+            entries = self._remove(track)
+            collected_bytes += sum(entry["crop"].nbytes for entry in entries)
+            passages.append({"track_id": track, "screen_direction": event["direction"],
+                             "crossing_video_seconds": seconds, "entries": entries})
         return passages
+
+    def recognize(self, job, cancelled=None):
+        # 6-10. 이 단계는 차량 추적 상태를 변경하지 않아 별도 작업 스레드에서 실행할 수 있습니다.
+        from concurrent.futures import CancelledError
+        samples = []
+        for entry in job["entries"]:
+            # 실행 중인 HTTP 요청은 강제로 취소할 수 없지만 다음 표본 요청은 시작하지 않습니다.
+            if cancelled is not None and cancelled():
+                raise CancelledError()
+            self._statistics["ocr_calls"] += 1
+            result = (self._reader or self._read_plate)(entry["crop"])
+            if not isinstance(result, dict):
+                raise ValueError("번호판 인식 결과는 객체여야 합니다.")
+            sample = {"frame_index": entry["frame_index"], "video_seconds": entry["video_seconds"],
+                      "plate_number": result.get("plate_number", ""), "plate_type": result.get("plate_type", "NOT_DETECTED")}
+            sample["review_reasons"] = sample_review_reasons([sample])
+            if "plate_detection_confidence" in result:
+                sample["plate_detection_confidence"] = result["plate_detection_confidence"]
+            samples.append(sample)
+        return {"record_type": "LIVE_TRACKED_PASSAGE", "http_enabled": False, "track_id": job["track_id"],
+                "screen_direction": job["screen_direction"], "crossing_video_seconds": job["crossing_video_seconds"],
+                "samples": samples, "plate_consensus": summarize_plate_samples(samples)}
 
     # 7. 누적 처리 통계 조회
     def statistics(self):

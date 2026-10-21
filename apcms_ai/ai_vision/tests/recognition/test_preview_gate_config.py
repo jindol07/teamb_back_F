@@ -12,10 +12,60 @@ import cv2
 import numpy as np
 
 from ai_vision.paths import RESULT_DIR
-from ai_vision.recognition.preview_gate_config import main, render_preview
+from ai_vision.recognition.preview_gate_config import main, render_preview, LiveGatePreview
 
 
 class PreviewGateConfigTests(unittest.TestCase):
+    def test_preparation_keeps_showing_frames_until_space(self):
+        capture = Mock()
+        capture.read.return_value = (True, np.zeros((200, 300, 3), dtype=np.uint8))
+        with patch('ai_vision.recognition.preview_gate_config.require_display'), patch('cv2.imshow') as show, \
+                patch('cv2.waitKey', side_effect=[-1, -1, ord(' ')]), patch('cv2.destroyWindow'), \
+                contextlib.redirect_stdout(io.StringIO()):
+            preview = LiveGatePreview(self.config, 'ENTRY')
+            self.assertTrue(preview.wait_until_ready(capture))
+            self.assertEqual(show.call_count, 3)
+            preview.close()
+        capture.release.assert_not_called()
+
+    def test_preparation_q_cancels_without_starting_measurement(self):
+        capture = Mock()
+        capture.read.return_value = (True, np.zeros((200, 300, 3), dtype=np.uint8))
+        with patch('ai_vision.recognition.preview_gate_config.require_display'), patch('cv2.imshow'), \
+                patch('cv2.waitKey', return_value=ord('q')), patch('cv2.destroyWindow'), \
+                contextlib.redirect_stdout(io.StringIO()):
+            preview = LiveGatePreview(self.config, 'ENTRY')
+            self.assertFalse(preview.wait_until_ready(capture))
+            preview.close()
+        capture.read.assert_called_once()
+
+    def test_live_preview_preserves_original_and_q_closes_only_its_window(self):
+        frame = np.zeros((200, 300, 3), dtype=np.uint8)
+        before = frame.copy()
+        with patch('ai_vision.recognition.preview_gate_config.require_display'), \
+                patch('cv2.imshow') as show, patch('cv2.waitKey', return_value=ord('q')), \
+                patch('cv2.destroyWindow') as close:
+            preview = LiveGatePreview(self.config, 'ENTRY')
+            self.assertFalse(preview(frame))
+            np.testing.assert_array_equal(frame, before)
+            self.assertFalse(np.array_equal(show.call_args.args[1], frame))
+            preview.close()
+            preview.close()
+            close.assert_called_once_with('APCMS Live Gate - Q to stop')
+
+    def test_live_preview_rejects_headless_before_window_creation(self):
+        with patch('ai_vision.recognition.preview_gate_config.require_display', side_effect=RuntimeError('화면 없음')), \
+                patch('cv2.imshow') as show:
+            with self.assertRaises(RuntimeError):
+                LiveGatePreview(self.config, 'ENTRY')
+        show.assert_not_called()
+
+    def test_live_preview_not_shown_does_not_destroy_windows(self):
+        with patch('ai_vision.recognition.preview_gate_config.require_display'), patch('cv2.destroyWindow') as close:
+            preview = LiveGatePreview(self.config, 'ENTRY')
+            preview.close()
+        close.assert_not_called()
+
     def setUp(self):
         self.config = {"tracker": "bytetrack", "line_y": .5, "line_x": [.1, .9],
                        "roi": [.1, .1, .9, .1, .9, .9, .1, .9]}

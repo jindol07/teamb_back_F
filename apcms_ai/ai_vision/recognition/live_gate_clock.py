@@ -40,6 +40,8 @@ class LiveGateClock:
         # 3-4. 프레임 기록은 유한한 OrderedDict에 보관합니다.
         self._limit, self._history = history_limit, OrderedDict()
         self._last_index, self._last_time, self.frame_count = -1, None, 0
+        # 비동기 OCR 최대 두 작업의 시각만 추가 보관합니다. 이미지 데이터는 보관하지 않습니다.
+        self._retained = {}
 
     # 4. 단조 시계의 입력 숫자 검증
     @staticmethod
@@ -84,7 +86,23 @@ class LiveGateClock:
     def lookup(self, frame_index):
         if type(frame_index) is not int or frame_index < 0:
             raise ValueError("프레임 번호가 유효하지 않습니다.")
-        try:
+        if frame_index in self._history:
             return self._history[frame_index]
-        except KeyError as error:
-            raise ValueError("이 세션에서 보관한 프레임 시각이 아닙니다.") from error
+        for stamps in self._retained.values():
+            if frame_index in stamps:
+                return stamps[frame_index]
+        raise ValueError("이 세션에서 보관한 프레임 시각이 아닙니다.")
+
+    def retain(self, frame_indices):
+        # 8. 작업 제출 전에 현재 세션에서 발급한 원본 시각을 확인하고 잠시 보관합니다.
+        if (not isinstance(frame_indices, (list, tuple)) or not 1 <= len(frame_indices) <= 4 or
+                any(type(index) is not int or index < 0 for index in frame_indices) or len(self._retained) >= 2):
+            raise ValueError("추가 시각 보관은 최대 두 작업, 작업당 네 프레임까지 허용합니다.")
+        stamps = {index: self.lookup(index) for index in frame_indices}
+        token = object()
+        self._retained[token] = stamps
+        return token
+
+    def release_retained(self, token):
+        # 완료·실패·취소 뒤 참조를 반납하면 일반 시각 기록의 보관 한도가 다시 적용됩니다.
+        self._retained.pop(token, None)

@@ -43,7 +43,8 @@ class RecognitionModelsTests(unittest.TestCase):
             results = list(pool.map(lambda _: models.ocr(), range(16)))
         self.assertTrue(all(value is results[0] for value in results))
         factory.assert_called_once_with(lang="korean", use_doc_orientation_classify=False,
-                                       use_doc_unwarping=False, use_textline_orientation=False, enable_mkldnn=False)
+                                       use_doc_unwarping=False, use_textline_orientation=False, enable_mkldnn=False,
+                                       cpu_threads=2, text_det_limit_side_len=960, text_det_limit_type="max")
 
     def test_missing_unneeded_model_does_not_block_plate(self):
         (self.root / "yolo11n.pt").unlink()
