@@ -14,7 +14,7 @@
 - 저장 영상의 차량 추적 → 화면 방향 UP/DOWN 판정 → 통과 ID별 OCR → 결과 저장
 - 저장 결과 조회·검색·CSV, 수동 번호판 정답 비교, 오프라인 이미지 검토, 로그 연결 진단
 - 입출차 요청 검증·초안·메모리 중복 억제·응답 분류·기본 비활성 HTTP 클라이언트
-- 최근 기능 작업의 자동 테스트 426개 통과. HTTP 활성 경로는 모의 세션으로 검증
+- 최근 기능 작업의 자동 테스트 490개 통과. 제거한 부가 도구의 전용 테스트도 함께 정리
 - 카메라 프레임 수집·추적·OCR·기본 비활성 전송 판단의 세션 루프 구현
 - 종료된 실시간 세션 요약 검사와 HTML·CSV 보고서 생성
 - 카메라 실행 전 설정·설치 정보·모델 파일 점검, 선택적인 한 프레임 장치 확인
@@ -36,8 +36,10 @@
 - OCR 재시도 이미지 확대 한도와 임시 PNG 저장
 - DB 없는 회귀 검사 단일 명령과 PC별 Python·패키지 버전 비교
 - 별도 프로세스에서 API·영상·OCR 패키지 import 실패·시간 초과 점검
-- 실제 카메라 하드웨어·한국 번호판 주행·HTTP 활성화와 Boot·DB 통합 검증은 아직 남음
+- 로컬 수동 요청과 정지 사진 인식값의 Boot 입출차 처리 및 DB 저장을 확인
+- 실제 카메라 하드웨어·한국 번호판 주행·카메라 자동 전송의 통합 검증은 아직 남음
 - 한국 번호판 주행 영상의 정확도는 미검증. traffic 영상은 외국 번호판 영상
+- 사용자 공유 AWS 결과: Docker 빌드·재시작·한국 번호판 정지 이미지 인식 성공 (아래 기록 참조)
 
 `CONFIRMED`는 반복 OCR의 일치, `COMPLETED`는 실행 완료, 진단 `PASS`는 저장 로그의
 일관성을 뜻합니다. 실제 정답 정확도 합격과 구분합니다. 화면 DOWN/UP을 설치 방향
@@ -47,7 +49,26 @@
 
 ### Linux·Docker 배포 준비
 
-Vision 전용 서버는 `python -m uvicorn ai_vision.app:app --host 0.0.0.0 --port 8000 --workers 1`
+사용자가 사이드 채팅에서 수행하고 이 채팅에 공유한 AWS 결과는 다음과 같습니다.
+이 채팅에서 직접 AWS에 접속해 재실행한 결과와 구분합니다.
+
+| 항목 | 공유된 결과 |
+|---|---|
+| 환경 | EC2 Ubuntu 24.04 x86 / m7i-flex.large |
+| 빌드 브랜치 | feature/ai-vision-docker-deployment |
+| 상태 확인 | `/health`, `/ready` 모두 200 |
+| 한국 번호판 정지 이미지 | `91소6408` 인식 성공, 컨테이너 재시작 후 동일 |
+| OCR 캐시 | 호스트 저장 약 98MB |
+| 메모리 | 추론 후 약 1GB, 순간 측정값 |
+| 차량 없는 이미지 | `vehicle_count: 0` |
+| car.jpg | 가운데 차량의 한글 누락 → `10-1557`, `REVIEW` |
+| 외국 번호판 | `FOREIGN_OR_OTHER` |
+| 남은 범위 | Boot·DB 통합, 주행 영상 검증 |
+
+순간 메모리 측정값은 최대 사용량·동시 처리 용량을 뜻하지 않습니다. 위 결과는 공유 당시
+브랜치의 검증이며 이후 추가한 코드의 AWS 재검증 결과는 아닙니다.
+
+Vision 전용 서버는 `python -m uvicorn ai_vision.app:app --host 0.0.0.0 --port 8000 --workers 1 --no-access-log`
 로 실행합니다. 문의·추천 모듈을 가져오지 않으며 모델은 최초 사용 시 불러옵니다.
 `/health`는 프로세스 응답만 확인합니다. `/ready`는 YOLO 모델 두 개의 읽기 가능 여부와
 결과 볼륨의 실제 JSON 쓰기·읽기·정리를 검사합니다. 임시 점검 폴더만 만들고 제거하며,
@@ -55,9 +76,23 @@ Vision 전용 서버는 `python -m uvicorn ai_vision.app:app --host 0.0.0.0 --po
 `/ready`를 사용합니다. 정상 결과 `CHECKED`도 추론·GPU·카메라 준비 완료를 보장하지 않습니다.
 기존 통합 `main:app`의 실행 방식은 유지합니다.
 
+Vision 전용 서버는 `X-Request-ID`(서버 발급 요청 식별값)와 `Server-Timing: app;dur=...`
+응답 헤더를 제공합니다. 헤더의 시간은 요청 진입부터 응답 헤더 생성까지의 밀리초이며,
+디코딩·대기·추론 등을 포함할 수 있습니다. 순수 모델 추론 시간이나 사용자 체감 응답 시간은
+아닙니다. `VISION_HTTP_REQUEST` 구조화 로그에는 요청 식별값·라우트 틀·상태·앱 처리 시간·
+완료 여부·오류 종류만 기록합니다. 클라이언트가 보낸 식별값은 사용하지 않고 쿼리·요청 본문·
+파일명·인증 헤더·번호판·예외 원문은 이 진단 로그에 넣지 않습니다.
+
+`VISION_INFERENCE_ERROR`는 같은 요청 식별값과 오류 클래스 이름으로 인식 오류를 연결합니다.
+기존 JSON 응답은 유지하며 허용된 CORS origin에서는 브라우저도 진단 헤더를 읽을 수 있습니다.
+식별값은 업무 이벤트 UUID가 아니며 DB에 저장하지 않습니다. 이미 전송을 시작한 스트림이
+실패하면 기존 HTTP 상태가 200이어도 `completed=false`일 수 있습니다. 성공 여부는 상태와
+완료 여부를 함께 확인합니다. Docker는 원문 URL을 출력하는 기본 접근 로그를 끄며, 외부
+라이브러리·상위 프록시의 로그는 이 진단 모듈의 관리 범위에 포함되지 않습니다.
+
 `ai_vision/Dockerfile`과 `requirements-runtime.txt`는 Python 3.12·Linux amd64·CPU용
-배포 후보입니다. 2026-10-21 회사 PC에서는 Docker Linux 엔진이 실행 중이지 않아 이미지
-빌드·Linux 패키지 설치·실제 추론은 검증하지 못했습니다. GPU·ARM 배포에는 그대로 사용하지
+배포 구성입니다. 회사 PC에서의 초기 작업 당시에는 Docker Linux 엔진이 실행 중이지 않아
+빌드·Linux 추론이 미검증이었으며, 이후 사용자 공유 AWS 결과가 위에 추가됐습니다. GPU·ARM 배포에는 그대로 사용하지
 말고 해당 연산 패키지와 플랫폼 지원을 별도로 확인합니다. 버전 목록은 전체 의존성 잠금
 파일이 아니며, 빌드 시 `pip check`도 수행합니다.
 
@@ -104,7 +139,7 @@ Docker에서는 `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True`로 모델 공급처
 OpenCV는 현재 Ultralytics와 PaddleX의 의존성 때문에 기본·contrib 배포판이 함께 필요하여
 배포 후보에서는 둘을 4.10.0.84로 맞췄습니다. headless 배포판을 추가로 혼합하지 않습니다.
 Linux 공유 라이브러리 `libgl1`, `libglib2.0-0`, `libgomp1`을 이미지에 설치하며, 이 조합은
-Linux 실제 import·추론 검증이 남아 있습니다. 개발용 NumPy는 통합 AI 조건과 동일하게
+회사 PC에서 Linux 설치·추론을 직접 확인한 것은 아니며 AWS 결과는 위 공유 기록을 따릅니다. 개발용 NumPy는 통합 AI 조건과 동일하게
 1.26.4로 정리했습니다. 이번 작업에서 회사 가상환경 패키지를 재설치하지 않았습니다.
 
 실시간 처리·수동 촬영은 서버에 카메라 장치를 연결한 경우에만 사용할 수 있습니다.
@@ -119,7 +154,7 @@ import 시 GUI·폴더 생성을 하지 않도록 보완했고, 공통 볼륨 �
 주차 API는 누락·권한 오류·잘못된 인코딩·중복 키·NaN·손상 JSON을 503으로 반환합니다.
 편집기의 읽기 전용 저장 실패도 503으로 응답하고, 좌표·점유 결과는 원자적으로 저장합니다.
 전체 `.py` 파일은 실행 없이 구문 검사했습니다. 배포 테스트를 통합 검사에 포함했으며,
-전체 426개는 Windows에서 통과했습니다. 다음 명령으로 실행합니다.
+전체 490개는 Windows에서 통과했습니다. 다음 명령으로 실행합니다.
 
 ```bash
 python -m unittest ai_vision.tests.recognition.test_deployment_runtime
@@ -146,6 +181,94 @@ Linux·GPU 호환성을 검증한 결과는 아닙니다. 회사 캐시는 다�
 녹화·추적 결과 요약도 원자적으로 저장하며, 카메라 해제가 실패해도 영상 저장기는
 계속 해제합니다. 처리 중 발생한 원래 오류는 정리 오류로 바꾸지 않습니다. 다만 OpenCV
 저장기가 디스크 부족 등의 실패를 예외 없이 반환하는 상황까지 탐지하는 것은 아닙니다.
+
+### 배포 후 API 점검
+
+서버가 실행 중일 때 아래 명령을 사용합니다. 기본 대상은 `http://127.0.0.1:8000`이며
+다른 대상은 `--base-url`로 명시합니다. 명령을 실행하는 PC·컨테이너에서 읽을 수 있는
+이미지 경로를 지정해야 합니다. AWS를 꺼둔 동안에는 실행 중인 로컬 서버를 대상으로
+점검하거나 모의 서버 회귀 테스트만 실행할 수 있습니다.
+
+```powershell
+# 상태·준비 여부와 최신 요청 진단 헤더 확인. 이미지는 업로드하지 않습니다.
+.\.venv312\Scripts\python.exe -m ai_vision.recognition.check_deployed_api `
+  --require-diagnostics --output-dir ai_vision/results/api_check/status_01
+
+# 준비한 이미지로 기대 번호판이 포함됐는지 확인합니다. 실제 파일 경로로 바꿔 사용합니다.
+.\.venv312\Scripts\python.exe -m ai_vision.recognition.check_deployed_api `
+  --image "실제_테스트_이미지_경로.jpg" --expected-plate "91소6408" `
+  --require-diagnostics --output-dir ai_vision/results/api_check/plate_01
+
+# 한글 누락 결과의 원문·분류·검토 사유를 함께 확인합니다.
+.\.venv312\Scripts\python.exe -m ai_vision.recognition.check_deployed_api `
+  --image "실제_테스트_이미지_경로.jpg" --expected-ocr-text "10-1557" `
+  --expected-plate-type REVIEW --expected-review-reason KOREAN_CHARACTER_NOT_FOUND `
+  --output-dir ai_vision/results/api_check/review_01
+```
+
+`--expected-vehicle-count 0`으로 차량 없는 이미지를 확인하거나 기대 차량 수를 지정할 수
+있습니다. 기대 번호판은 차량 목록의 `KOREAN_VALID` 결과 중 정확히 같은 문자열이 있는지
+비교합니다. `--expected-ocr-text`는 외국 번호판·한글 누락 문자열도 지정할 수 있으며,
+`--expected-plate-type FOREIGN_OR_OTHER`로 외국 번호판 분류를 확인할 수 있습니다.
+여러 조건을 함께 지정하면 반드시 같은 차량에서 모두 일치해야 합니다. 응답에 검토 사유가
+있으면 원문에서 계산한 사유와 비교합니다. 사유가 없는 이전 서버는 사유 기대값을 지정하면
+실패합니다. 이 비교 옵션은 OCR 보정 기능이 아니며 원문을 보고서에 저장하지 않습니다.
+기대값 없이 이미지만 지정하면 응답 구조를 검사하며 정답 정확도를 판정하지
+않습니다. 이미지가 없으면 `recognition_tested=false`로 기록합니다. 상태·준비 점검이
+실패하면 이미지는 보내지 않습니다. 이 도구는 Vision API만 호출하며 Boot 이벤트는 보내지
+않습니다. 자동 재시도·리다이렉트·프록시 환경 상속을 끄고, 응답은 최대 1MB까지 읽습니다.
+
+결과는 새 출력 폴더의 `api_check.json`에 저장합니다. 요청 식별값·서버 처리 시간·일치 여부·
+차량 수·형식별 건수만 남기며 이미지·번호판 원문·입력 파일 경로·예외 원문은 저장하지
+않습니다. 진단 헤더가 없는 이전 서버도 기본적으로 점검할 수 있고 `--require-diagnostics`
+지정 시 헤더 누락을 실패로 처리합니다. 기본 읽기 시간 제한은 120초이며 `--timeout`으로
+0초 초과 300초 이하를 지정합니다. 종료 코드는 성공 0, 점검 실패 1, 입력·저장 오류 2입니다.
+기존 출력 폴더는 덮어쓰지 않습니다. 입력 오류로 빈 폴더가 남으면 다음 실행에는 새 이름을
+사용합니다. 이 점검의 PASS는 지정한 항목의 통과이며 주행 정확도·부하·DB 연동 성공을
+뜻하지 않습니다.
+
+### 배포 API의 여러 이미지 사례를 묶어서 점검
+
+로컬 JSON 파일에 이미지와 기대값을 적고 아래 명령으로 순차 실행합니다.
+이미지 상대 경로는 JSON 파일이 있는 폴더 기준입니다. 아래 파일명은 예시이며 실제로
+보유한 이미지로 바꿔야 합니다. `id`는 영문자로 시작하는 영문·숫자·밑줄·하이픈
+1~64자로, 사례마다 다르게 지정합니다. 사례는 1~100개이며 각각 기대값이 하나 이상
+필요합니다. 단일 이미지 점검과 같은 기대값 필드를 사용합니다.
+
+```json
+{
+  "cases": [
+    {"id": "empty", "image": "empty.jpg", "expected_vehicle_count": 0},
+    {"id": "korean", "image": "korean.jpg", "expected_plate": "91소6408"},
+    {"id": "review", "image": "car.jpg", "expected_ocr_text": "10-1557", "expected_plate_type": "REVIEW", "expected_review_reason": "KOREAN_CHARACTER_NOT_FOUND"},
+    {"id": "foreign", "image": "foreign.jpg", "expected_plate_type": "FOREIGN_OR_OTHER"}
+  ]
+}
+```
+
+```powershell
+.\.venv312\Scripts\python.exe -m ai_vision.recognition.check_deployed_cases `
+  --manifest "실제_사례목록_경로.json" --require-diagnostics `
+  --output-dir ai_vision/results/api_check/cases_01
+```
+
+실행 전에 모든 입력과 이미지 형식을 검사합니다. 각 사례는 상태·준비 여부를 다시
+확인하고 이미지를 한 번 전송하며 자동 재시도하지 않습니다. 실패한 사례가 있어도
+다음 사례를 점검하므로 실행 시간은 사례 수에 따라 늘어납니다. 준비 점검이 실패한
+사례의 이미지는 전송하지 않습니다. AWS를 꺼둔 상태에서 실제 AWS 주소로 실행할 필요는
+없습니다.
+
+`api_cases.json`에는 사례 순번(목록 첫 항목이 1), 개별 점검 결과, 성공·실패 건수를
+저장합니다. 입력 ID·이미지 경로·번호판 원문은 복사하지 않습니다. 원래 사례와의 대응은
+입력 목록 순서로 확인하므로 실행 후 목록 순서를 바꾸지 마세요. 사례마다 원자적으로
+저장하며 중단된 결과는 `INCOMPLETE`로 남습니다. 기존 출력 폴더는 덮어쓰지 않으며
+중단 후 재개 기능은 없습니다. 재실행하려면 새 출력 폴더를 지정합니다. 종료 코드는
+전체 성공 0, 사례 실패 1, 입력·저장 오류 2입니다. 입력 JSON 자체에는 실제 번호판과
+로컬 경로가 있으므로 개인 테스트 자료로 보관하고 Git에 올릴 파일을 확인해 주세요.
+이 기능은 정지 이미지 응답 점검이며 주행 정확도·Boot·DB 연동을 검증하지 않습니다.
+
+사례 묶음 점검 결과는 `api_cases.json`으로 확인합니다. 별도 HTML 생성과 배포 전후 자동 비교 기능은 제거했습니다.
+사전 검사 후 이미지 변경을 전송 전에 차단하는 기능은 유지합니다.
 
 ### 집·새 PC에서 DB 없이 이어서 작업
 

@@ -25,7 +25,8 @@ def render_review(snapshot, evidence, items, offset=0):
                 image = (f'<img alt="차량 {_text(track)} 번호판 표본" src="data:image/jpeg;base64,{_text(picture["base64"])}">'
                          f'<small>이미지 SHA-256: {_text(picture["sha256"])}</small>')
             samples.append(f'<figure>{image}<figcaption>프레임 {_text(sample["frame_index"])} · '
-                           f'{_text(sample["video_seconds"])}초<br>표본 OCR: {_text(sample["ocr_text"])}</figcaption></figure>')
+                           f'{_text(sample["video_seconds"])}초<br>표본 OCR: {_text(sample["ocr_text"])}'
+                           f'<br>형식 검토 사유: {_text(", ".join(sample.get("review_reasons", [])) or "없음")}</figcaption></figure>')
         if not samples:
             samples.append('<p class="missing">이 차량에는 저장된 OCR 표본이 없습니다.</p>')
         cards.append(f'<section id="track-{_text(track)}"><h2>차량 ID {_text(track)}</h2>'

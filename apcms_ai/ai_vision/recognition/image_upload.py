@@ -9,8 +9,7 @@ import numpy as np
 from PIL import Image, UnidentifiedImageError
 
 
-MAX_UPLOAD_BYTES = 10 * 1024 * 1024
-MAX_IMAGE_PIXELS = 20_000_000
+from ai_vision.upload_policy import MAX_UPLOAD_BYTES, MAX_IMAGE_PIXELS
 
 
 class ImageUploadError(ValueError):

@@ -11,12 +11,13 @@ def render_html(report):
         return escape("" if value is None else str(value), quote=True)
 
     headers = ("차량 ID", "수집 시각", "경과 초", "번호판 상태", "번호판", "표본 수", "판정", "응답 상태", "요청 시도",
-               "채택 표 수", "필요 표 수", "최소 표본 간격(초)")
+               "채택 표 수", "필요 표 수", "최소 표본 간격(초)", "표본 형식 검토 사유")
     keys = ("track_id", "captured_at", "crossing_elapsed_seconds", "plate_status", "plate_number",
             "sample_count", "decision", "receipt_state", "request_attempted",
             "accepted_votes", "required_votes", "minimum_spacing_seconds")
     rows = "".join("<tr>" + "".join(f"<td>{cell('UNKNOWN' if key == 'request_attempted' and row[key] is None else row[key])}</td>"
-                   for key in keys) + "</tr>" for row in report["rows"])
+                   for key in keys) + f'<td>{cell("미기록" if row.get("review_reasons") is None else ", ".join(row["review_reasons"]) or "없음")}</td>'
+                   + "</tr>" for row in report["rows"])
     if not rows:
         rows = f'<tr><td colspan="{len(headers)}">통과 자료가 없습니다.</td></tr>'
     source = "합성 예시" if report["uses_synthetic_source"] else "카메라 실행 기록"
@@ -47,6 +48,14 @@ def render_html(report):
                          f'<p>설정 SHA-256: {cell(context["tracking_config_sha256"])}</p>')
     performance = report.get("performance")
     diagnostics = '<h2>처리 시간과 관찰 통계</h2>'
+    review = report.get("review_summary")
+    if review is not None:
+        diagnostics += (f'<h3>형식 검토 사유 집계</h3><p>통과 건 기준 · 사유 있는 통과 '
+                        f'{cell(review["passages_with_reasons"])}건 / 사유 없는 통과 '
+                        f'{cell(review["passages_without_reasons"])}건 / 미기록 '
+                        f'{cell(review["unrecorded_passages"])}건</p><ul>')
+        diagnostics += ''.join(f'<li>{cell(code)}: {cell(count)}건</li>' for code, count in review["reason_counts"].items())
+        diagnostics += '</ul><p>한 통과에 사유가 여러 개면 각 사유에 집계됩니다. 실제 차량 수·오인식률이 아닙니다.</p>'
     deadline = report.get("deadline")
     if deadline is not None:
         diagnostics += (f'<p>읽기 전 시간 확인: {cell(deadline["checks"])}회 / 마지막 확인 경과: '

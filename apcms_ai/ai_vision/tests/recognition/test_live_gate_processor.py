@@ -18,6 +18,29 @@ def stamp(index):
 
 
 class LiveGateProcessorTests(unittest.TestCase):
+    def test_missing_character_reasons_survive_live_session_and_report(self):
+        from ai_vision.recognition.live_gate_clock import LiveGateClock
+        from ai_vision.recognition.live_gate_session import LiveGateSession
+        from ai_vision.recognition.run_live_gate import execute
+        from ai_vision.recognition.live_gate_report import validate_report
+        from ai_vision.recognition.live_gate_report_html import render_html
+        reader = lambda crop: {"plate_number": "10-1557", "plate_type": "REVIEW",
+                               "review_reasons": ["FORGED_REASON"]}
+        processor = LiveGateProcessor(CONFIG, self.tracker, reader)
+        capture = Mock()
+        capture.read.side_effect = [(True, np.full((100, 100, 3), i, dtype=np.uint8)) for i in range(7)] + [(False, None)]
+        clock = LiveGateClock(monotonic_start=0)
+        session = LiveGateSession("TEST_GATE", "ENTRY", clock=clock)
+        times = iter(i * .3 for i in range(7))
+        report = execute(capture, processor, session, seconds=10, allow_source_end=True,
+                         monotonic_reader=lambda: next(times), deadline_reader=lambda: 0)
+        report["uses_synthetic_source"] = True
+        self.assertEqual(report["results"][0]["review_reasons"], ["KOREAN_CHARACTER_NOT_FOUND"])
+        self.assertEqual(report["results"][0]["decision"], "BLOCKED")
+        self.assertEqual(report["request_attempts"], 0)
+        checked = validate_report(report)
+        self.assertIn("KOREAN_CHARACTER_NOT_FOUND", render_html(checked))
+
     def process_path(self, processor, path):
         passages = []
         for index, (seconds, x, y) in enumerate(path):

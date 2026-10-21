@@ -418,12 +418,79 @@ APPLIED는 가짜 백엔드의 응답 분류일 뿐 실제 입차 완료가 아�
 
 ## 실시간 카메라 세션 실행
 
+### 2026-10-21 로컬 실제 연동 확인
+
+- 수동 지정 번호 `99하0001`: 실제 AI HTTP 클라이언트로 ENTRY·EXIT를 요청해 모두
+  HTTP 200 / PROCESSED를 받았습니다. 이용 기록 번호는 68이며, 사용자가 DB 조회 화면으로
+  해당 차량의 ENTRY_AT·EXIT_AT 저장을 확인했습니다.
+- 실제 `test_images/car12.png`: 로컬 YOLO·PaddleOCR 실행으로 차량 1대와 최종 번호판
+  `91소6408` / KOREAN_VALID를 확인했습니다. 1차 OCR은 `91소66408`, 기존 전처리 재시도는
+  `91소6408`이었습니다. 번호판 탐지 점수는 0.9736이며 OCR 정답 확률이 아닙니다.
+- 사용자가 해당 번호의 테스트를 승인한 뒤, 인식 결과의 번호판과 탐지 점수를 그대로
+  사용해 ENTRY·EXIT를 요청했습니다. 모두 HTTP 200 / PROCESSED, 이용 기록 번호 69를
+  응답받았습니다. 이후 사용자가 DB 조회 화면으로 69번의 차량번호 `91소6408`과
+  ENTRY_AT·EXIT_AT 저장(2026-10-21 12:20:38)을 확인했습니다.
+- 정지 사진에는 통과 방향·실제 통과 시각이 없으므로 방향과 시각은 수동 테스트 값입니다.
+  반복 프레임 합의나 주행 통과를 검증한 것이 아니며, LIVE 출처로 위장하지 않았습니다.
+  AWS 재검증이나 실제 카메라 실행 명령의 하드웨어 검증도 포함하지 않습니다.
+- 원본 인식 및 전송 결과는 로컬 `results/manual_integration/`의
+  `car12_recognition_20261021.json`, `car12_boot_delivery_20261021.json`에 보관했습니다.
+  이 로컬 결과를 Git에 포함했다고 간주하지 않습니다.
+
 `LiveGateClock` → `LiveGateProcessor` → `LiveGateSession` → 기본 비활성
 `VehicleDeliveryFlow`를 `run_live_gate`에서 연결합니다. 기존 웹캠 코드와 sender를
 수정하지 않은 별도 실행 경로입니다. 실제 카메라·주행·실제 모델 OCR 성능 검증은
 아직 하지 않았으며, 이번 검증은 가짜 카메라와 주입한 추적/OCR 함수 기준입니다.
 
-### 카메라·모델·HTTP 없는 실행 확인
+### 실제 Boot 전송을 명시적으로 활성화하기
+
+실제 카메라 모드는 차량 추적·번호판 탐지·OCR 모델을 먼저 생성한 뒤 세션 시계와
+카메라를 시작합니다. 준비 중에는 안내 문구를 표시하며 모델 준비가 실패하면 카메라를
+열지 않습니다. 기본 20초 제한에는 모델 생성 시간이 포함되지 않습니다. 이는 모델
+객체 준비이며 실제 추론 예열이나 첫 추론 지연 제거를 보장하지 않습니다. 합성 데모와
+테스트에서 주입한 추적·OCR 함수에는 실제 모델을 불러오지 않습니다.
+
+`run_live_gate`는 기본적으로 전송하지 않습니다. 실제 카메라 실행에 `--enable-http`를
+추가한 경우에만 활성 클라이언트를 연결합니다. API 키는 Boot와 동일한
+`AI_OCCUPANCY_API_KEY` 환경변수로 지정하며 명령 인자나 결과 파일에 넣지 않습니다.
+관리자 서버 context URL은 `--boot-context-url` 또는 `VISION_BOOT_CONTEXT_URL`로
+지정합니다. 둘 다 지정하면 명령 인자가 우선합니다. 활성화 시 주소·키가 없으면
+모델·카메라를 열기 전에 종료합니다. 환경변수만으로는 전송이 켜지지 않으며,
+`--demo`와 실제 전송 옵션의 조합은 거부합니다.
+
+```powershell
+# 카메라가 연결된 PC에서 실행합니다. 호스트·설정 경로·카메라 ID·방향은 실제 값으로 바꿉니다.
+# AI_OCCUPANCY_API_KEY 환경변수는 Boot와 같은 값으로 실행 전에 준비합니다.
+$env:VISION_BOOT_CONTEXT_URL = "http://관리자서버호스트:81/alpharking/admin"
+.\.venv312\Scripts\python.exe -m ai_vision.recognition.run_live_gate `
+  --camera-id GATE_01 --camera-index 0 --down-direction ENTRY `
+  --config "실제_추적설정_경로.json" --seconds 20 --enable-http `
+  --output-dir ai_vision/results/live_gate/boot_01
+```
+
+이 명령은 확정된 실제 통과 후보가 생기면 DB 변경을 수반하는 요청을 보냅니다.
+DOWN→ENTRY 설정은 실제 카메라 방향에 맞을 때만 사용합니다. 현재 입력은 로컬 장치
+번호이므로 카메라가 연결된 PC에서 실행해야 하며 AWS가 회사 USB 카메라를 직접 열 수는
+없습니다. 다른 호스트의 Boot는 해당 PC에서 접근 가능한 주소를 사용하고, 별도
+컨테이너의 `localhost`를 다른 서버 주소로 사용하지 않습니다.
+
+현재 소스 대조 결과, 요청은 관리자 모듈 `apcms_a`의
+`POST /alpharking/admin/api/parking/ai/vehicle-events`로 보내며 인증 헤더는
+`X-AI-API-Key`입니다. 사용자 모듈 `apcms_u`에는 이 수신 경로가 없습니다.
+기본 설정 포트는 관리자 81입니다. 실제 배포에서 바꿨다면 배포 주소를 사용합니다.
+
+Boot의 ENTRY는 활성 입차 기록이 없고 시각 조건을 통과하면 `PARKING_USAGE`에 추가하며,
+EXIT는 열린 입차 기록의 `EXIT_AT`을 갱신합니다. 이미 입차 상태이면 `UNCHANGED`,
+활성 기록 없는 출차·시각 역전 등은 `PENDING`이 될 수 있습니다. AI는 각각
+`APPLIED`·`UNCHANGED`·`HELD`로 분류합니다. UUID는 DB에 저장하지 않으며, 처리 여부가
+불명확한 타임아웃은 자동 재전송하지 않습니다. 중복 억제는 현재 실행 메모리 범위이므로
+재시작 후 중복 방지를 보장하지 않습니다.
+
+이번 확인은 소스 대조와 모의 HTTP 연결 테스트입니다. 실제 Boot 실행·DB 쓰기 검증은
+아직 하지 않았습니다. 실연동 시 `summary.json`의 `http_enabled`, `request_attempts`,
+각 결과의 `receipt_state`와 DB의 해당 차량 `ENTRY_AT`·`EXIT_AT`을 함께 확인해야 합니다.
+
+### 카메라·모델·HTTP 없는 데모 실행
 
 ```powershell
 .\.venv312\Scripts\python.exe -m ai_vision.recognition.run_live_gate `
