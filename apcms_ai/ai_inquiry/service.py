@@ -136,20 +136,20 @@ async def answer(
                 source = "dev-api:RESERVATION"
 
             elif cat == "PARKING_STATUS":
-                # Spring Boot에서 실시간 주차 공간 조회
-                spaces = await BackendClient().get_public_parking_spaces()
+                # 사용자 JWT로 사용자 서버의 현재 주차 공간을 조회합니다.
+                spaces = await BackendClient().get_public_parking_spaces(token)
 
                 # 전체 주차 공간 수
                 total_count = len(spaces)
 
                 # 주차 가능한 공간 수
                 available_count = sum(
-                    1 for space in spaces if space.get("spaceStatusCode") == "AVAILABLE"
+                    1 for space in spaces if space.get("space_status_code") == "AVAILABLE"
                 )
 
                 # 사용 중인 공간 수
                 occupied_count = sum(
-                    1 for space in spaces if space.get("spaceStatusCode") == "OCCUPIED"
+                    1 for space in spaces if space.get("space_status_code") == "OCCUPIED"
                 )
 
                 # AI에게 전달할 조회 결과
@@ -159,7 +159,7 @@ async def answer(
                     "occupiedCount": occupied_count,
                 }
 
-                source = "public-api:PARKING_STATUS"
+                source = "api:PARKING_STATUS"
 
             elif backend is None:
                 # 기존 MOCK 데이터 조회 기능 유지

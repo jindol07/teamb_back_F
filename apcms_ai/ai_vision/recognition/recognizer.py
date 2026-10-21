@@ -17,6 +17,7 @@ from functools import wraps
 
 from ai_vision.recognition.recognition_models import RecognitionModels
 from ai_vision.recognition.ocr_image_policy import retry_image_size
+from ai_vision.recognition.plate_review import KOREAN_PLATE_PATTERN, plate_review_reasons
 
 
 # 2. 차량 탐지 클래스 설정
@@ -94,7 +95,7 @@ def classify_plate_format(text):
     # \d{2,3}: 숫자 2~3자리
     # [가-힣]: 한글 1자리
     # \d{4}: 숫자 4자리
-    korean_pattern = r"^\d{2,3}[가-힣]\d{4}$"
+    korean_pattern = KOREAN_PLATE_PATTERN
 
     # fullmatch(): 문자열 전체가 정규식에 맞는지 확인
     if re.fullmatch(korean_pattern, text):
@@ -138,7 +139,7 @@ def cleanup_plate_text(text):
     )
 
     # 6-4. 수정 결과가 정상 한국 번호판인지 검사
-    korean_pattern = r"^\d{2,3}[가-힣]\d{4}$"
+    korean_pattern = KOREAN_PLATE_PATTERN
 
     if re.fullmatch(korean_pattern, cleaned_text):
         return cleaned_text
@@ -493,7 +494,9 @@ def recognize_plate(plate_crop):
         "retry_ocr": retry_text,
         "retry_type": retry_type,
         "plate_number": final_text,
-        "plate_type": final_type
+        "plate_type": final_type,
+        # 기존 필드는 유지하고 검토 원인만 추가합니다. 전송 허용 플래그가 아닙니다.
+        "review_reasons": plate_review_reasons(final_text, final_type)
     }
 
 
@@ -567,7 +570,8 @@ def recognize_image(image):
             "first_ocr": "",
             "first_type": "",
             "retry_ocr": "",
-            "retry_type": ""
+            "retry_type": "",
+            "review_reasons": plate_review_reasons("", "NOT_DETECTED")
         }
 
         # 13-7. 차량 영역 추출에 실패하면 다음 차량 처리
@@ -600,6 +604,7 @@ def recognize_image(image):
         # 번호판 영역을 잘라내지 못한 경우
         if plate_crop.size == 0:
             vehicle_data["plate_type"] = "CROP_FAILED"
+            vehicle_data["review_reasons"] = plate_review_reasons("", "CROP_FAILED")
             vehicle_results.append(vehicle_data)
             continue
 

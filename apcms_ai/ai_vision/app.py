@@ -8,15 +8,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from ai_vision.main import router
 from ai_vision.deployment_config import cors_origins
 from ai_vision.recognition.deployment_readiness import check_readiness
+from ai_vision.http_diagnostics import RequestDiagnosticsMiddleware
+from ai_vision.upload_limits import UploadLimitsMiddleware
 
 
 # 1. import 시 모델 생성·카메라 열기·결과 폴더 생성을 하지 않습니다.
 def create_app():
     application = FastAPI(title="APCMS AI Vision")
+    application.add_middleware(UploadLimitsMiddleware)
     origins = cors_origins()
     if origins:
         application.add_middleware(CORSMiddleware, allow_origins=origins,
-                                   allow_methods=["GET", "POST"], allow_headers=["Content-Type", "Authorization"])
+                                   allow_methods=["GET", "POST"], allow_headers=["Content-Type", "Authorization"],
+                                   expose_headers=["X-Request-ID", "Server-Timing"])
+    application.add_middleware(RequestDiagnosticsMiddleware)
     application.include_router(router)
     application.add_api_route("/health", health, methods=["GET"])
     application.add_api_route("/ready", ready, methods=["GET"])

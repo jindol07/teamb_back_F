@@ -3,12 +3,35 @@
 import copy
 import unittest
 
-from ai_vision.recognition.live_gate_report import validate_report
+from ai_vision.recognition.live_gate_report import validate_report, summarize_review_reasons
 from ai_vision.recognition.run_live_gate import _demo
 from ai_vision.recognition.live_gate_context import build_run_context
 
 
 class LiveGateReportTests(unittest.TestCase):
+    def test_review_summary_counts_passages_and_keeps_missing_metadata_separate(self):
+        rows = [{"review_reasons": ["KOREAN_CHARACTER_NOT_FOUND", "NO_OCR_TEXT"]},
+                {"review_reasons": ["KOREAN_CHARACTER_NOT_FOUND"]},
+                {"review_reasons": []}, {"review_reasons": None}]
+        result = summarize_review_reasons(rows)
+        self.assertEqual(result["total_passages"], 4)
+        self.assertEqual((result["recorded_passages"], result["unrecorded_passages"]), (3, 1))
+        self.assertEqual((result["passages_with_reasons"], result["passages_without_reasons"]), (2, 1))
+        self.assertEqual(result["reason_counts"], {"KOREAN_CHARACTER_NOT_FOUND": 2, "NO_OCR_TEXT": 1})
+        self.assertEqual(summarize_review_reasons([])["reason_counts"], {})
+
+    def test_missing_review_metadata_is_unknown_and_invalid_codes_are_rejected(self):
+        from ai_vision.recognition.live_gate_report_html import render_html
+        report = _demo()
+        report["results"][0].pop("review_reasons", None)
+        checked = validate_report(report)
+        self.assertIsNone(checked["rows"][0]["review_reasons"])
+        self.assertIn("미기록", render_html(checked))
+        for reasons in (None, "NO_OCR_TEXT", [None], ["FAKE"], ["NO_OCR_TEXT", "NO_OCR_TEXT"]):
+            report["results"][0]["review_reasons"] = reasons
+            with self.subTest(reasons=reasons), self.assertRaises(ValueError):
+                validate_report(report)
+
     def test_demo_and_empty_session(self):
         # 1. 합성 실행도 실제 생성기의 결과를 그대로 검사합니다.
         source = _demo()

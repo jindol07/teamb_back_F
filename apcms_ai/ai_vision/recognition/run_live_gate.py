@@ -1,8 +1,9 @@
 # D:/finalProjectB/back/apcms_ai/ai_vision/recognition/run_live_gate.py
 
-"""카메라 세션의 추적·OCR 루프. 실행 도구에서는 실제 HTTP를 활성화하지 않습니다."""
+"""카메라 세션의 추적·OCR 루프. 명시적으로 설정한 경우에만 Boot로 전송합니다."""
 
 import argparse
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,7 +19,10 @@ from ai_vision.recognition.live_gate_context import build_run_context
 from ai_vision.recognition.live_gate_deadline import LiveGateDeadline
 from ai_vision.recognition.local_io import read_json, write_json_atomic
 from ai_vision.recognition.plate_consensus import summarize_plate_samples
+from ai_vision.recognition.plate_review import sample_review_reasons
 from ai_vision.recognition.tracking_config import validate_config
+from ai_vision.recognition.vehicle_http import VehicleHTTPClient
+from ai_vision.recognition.vehicle_delivery_flow import VehicleDeliveryFlow
 
 
 def execute(capture, processor, session, seconds=20, max_frames=100000, monotonic_reader=None, performance_reader=None,
@@ -71,7 +75,8 @@ def execute(capture, processor, session, seconds=20, max_frames=100000, monotoni
                     decision = session.consume(passage, stamp)
                     results.append({**decision, "captured_at": stamp.captured_at.isoformat(),
                                     "crossing_elapsed_seconds": stamp.elapsed_seconds,
-                                    "plate_consensus": passage["plate_consensus"], "sample_count": len(passage["samples"])})
+                                    "plate_consensus": passage["plate_consensus"], "sample_count": len(passage["samples"]),
+                                    "review_reasons": sample_review_reasons(passage["samples"])})
     except KeyboardInterrupt:
         stop_reason = "USER_INTERRUPTED"
     except Exception as error:
@@ -127,6 +132,8 @@ def _demo():
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--demo", action="store_true")
+    parser.add_argument("--enable-http", action="store_true", help="실제 카메라의 확정 후보를 Boot로 전송")
+    parser.add_argument("--boot-context-url", help="관리자 Boot context URL. 키는 AI_OCCUPANCY_API_KEY 환경변수 사용")
     parser.add_argument("--camera-index", type=int, default=0)
     parser.add_argument("--camera-id")
     parser.add_argument("--down-direction", choices=["ENTRY", "EXIT"])
@@ -134,6 +141,10 @@ def main(argv=None):
     parser.add_argument("--seconds", type=float, default=20)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.demo and (args.enable_http or args.boot_context_url is not None):
+        parser.error("합성 데모에서는 실제 전송 옵션을 사용할 수 없습니다.")
+    if args.boot_context_url is not None and not args.enable_http:
+        parser.error("관리자 서버 주소를 사용하려면 --enable-http를 명시합니다.")
     output = args.output_dir.resolve()
     if output.is_relative_to((RESULT_DIR / "recognition").resolve()):
         parser.error("영상 분석 원본 폴더 밖에 새 세션 폴더를 지정해 주세요.")
@@ -147,14 +158,22 @@ def main(argv=None):
                 raise ValueError("카메라 ID·방향·해당 구도의 설정이 필요합니다.")
             config = validate_config(read_json(args.config))
             context = build_run_context(config, args.camera_index, args.seconds)
-            session = LiveGateSession(args.camera_id, args.down_direction)
+            # 1. 전송을 명시한 실행만 키를 읽습니다. 키·주소는 요약 파일에 저장하지 않습니다.
+            client = VehicleHTTPClient(
+                context_url=args.boot_context_url or os.environ.get("VISION_BOOT_CONTEXT_URL"),
+                api_key=os.environ.get("AI_OCCUPANCY_API_KEY"), enabled=True
+            ) if args.enable_http else VehicleHTTPClient()
             processor = LiveGateProcessor(config)
+            print("차량·번호판·OCR 모델 준비 중입니다. 아직 카메라 수집은 시작하지 않았습니다.", flush=True)
+            processor.prepare()
+            # 모델 생성 시간을 촬영 제한과 실제 프레임 시각에 포함하지 않습니다.
+            session = LiveGateSession(args.camera_id, args.down_direction, flow=VehicleDeliveryFlow(client))
         else:
             context = build_run_context(None, None, synthetic=True)
         output.mkdir(parents=True, exist_ok=False)
         output_created = True
         write_json_atomic(output / "summary.json", {"record_type": "LIVE_GATE_SESSION", "status": "RUNNING",
-                          "http_enabled": False, "run_context": context})
+                          "http_enabled": session.flow.client.enabled if session is not None else False, "run_context": context})
         phase = "EXECUTION"
         if args.demo:
             report = _demo()
@@ -175,7 +194,8 @@ def main(argv=None):
             saved = save_failure(output, phase, error, cleanup_errors, report)
         evidence = ", ".join(saved) if saved else "별도 실패 기록 저장 불가"
         parser.exit(1, f"카메라 세션 실행 실패 ({phase}): {evidence}. 기존 summary.json을 확인해 주세요.\n")
-    print(f"세션 종료: {report['status']} / 프레임 {report['captured_frames']} / 통과 자료 {report['processed_passages']} / HTTP 비활성")
+    http_state = "활성" if report["http_enabled"] else "비활성"
+    print(f"세션 종료: {report['status']} / 프레임 {report['captured_frames']} / 통과 자료 {report['processed_passages']} / HTTP {http_state} / 요청 시도 {report['request_attempts']}회")
     if report["status"] == "FAILED":
         parser.exit(1)
 
