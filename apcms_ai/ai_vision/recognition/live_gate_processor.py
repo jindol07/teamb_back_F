@@ -10,6 +10,8 @@
 # 1. 필요한 모듈과 의존 기능 불러오기
 # 1-1. os는 YOLO의 자동 설치 동작을 제한하기 위해 사용합니다.
 import os
+from math import isfinite
+from datetime import datetime
 # 1-2. deepcopy는 외부 설정 변경이 실행 중 설정에 영향을 주지 않게 합니다.
 from copy import deepcopy
 # 1-3. deque는 차량별 최근 crop을 양쪽에서 효율적으로 추가·삭제하는 자료구조입니다.
@@ -17,9 +19,11 @@ from collections import deque
 
 # 1-4. 모델 위치, 통과선 판정기, OCR 다중 표본 집계, 설정 검사 함수를 재사용합니다.
 from ai_vision.paths import MODEL_DIR
+from ai_vision.recognition.model_files import require_model_file
 from ai_vision.recognition.line_crossing import LineCrossingCounter
 from ai_vision.recognition.plate_consensus import summarize_plate_samples
 from ai_vision.recognition.tracking_config import validate_config
+from ai_vision.recognition.live_gate_clock import FrameStamp
 
 
 # 2. 실시간 차량 추적 및 번호판 처리기
@@ -38,6 +42,9 @@ class LiveGateProcessor:
         # YOLO는 최초 프레임 처리 시 로드하고, 화면 크기와 통과 판정기도 그때 결정합니다.
         self._model, self._shape, self._counter = None, None, None
         self._closed = False
+        # 처리기 직접 호출에서도 과거 프레임을 다시 연결하지 않도록 마지막 순서를 보관합니다.
+        self._last_frame_index, self._last_seconds = -1, None
+        self._minimum_frame_index = 0
         self.dropped_crops = self.dropped_tracks = 0
         # 누적 통계는 처리 중 이미지 버퍼를 지워도 남습니다.
         self._statistics = {key: 0 for key in ("frames", "observations", "already_counted", "outside_roi",
@@ -49,10 +56,9 @@ class LiveGateProcessor:
         # 3-1. 실제 추적을 처음 실행할 때만 모델을 읽는 지연 로딩 방식입니다.
         if self._model is None:
             os.environ["YOLO_AUTOINSTALL"] = "false"
-            from ultralytics import YOLO
             model = MODEL_DIR / "yolo11n.pt"
-            if not model.is_file():
-                raise FileNotFoundError("차량 모델이 없습니다.")
+            require_model_file(model)
+            from ultralytics import YOLO
             self._model = YOLO(model)
         # 3-2. COCO 클래스 중 승용차·트럭·버스·오토바이만 추적합니다.
         classes = [key for key, name in self._model.names.items() if name in {"car", "truck", "bus", "motorcycle"}]
@@ -98,9 +104,19 @@ class LiveGateProcessor:
         import numpy as np
         if not isinstance(frame, np.ndarray) or frame.dtype != np.uint8 or frame.ndim != 3 or frame.shape[2] != 3 or not frame.size:
             raise ValueError("카메라의 BGR uint8 프레임이 필요합니다.")
+        # 6-1-1. 시각 오류를 crop 정리·추적기 호출보다 먼저 차단합니다.
+        if (not isinstance(stamp, FrameStamp) or type(stamp.frame_index) is not int or
+                stamp.frame_index <= self._last_frame_index or
+                type(stamp.elapsed_seconds) not in (int, float) or not isfinite(stamp.elapsed_seconds) or
+                stamp.elapsed_seconds < 0 or
+                (self._last_seconds is not None and stamp.elapsed_seconds <= self._last_seconds) or
+                not isinstance(stamp.captured_at, datetime) or stamp.captured_at.utcoffset() is None):
+            raise ValueError("프레임 번호·시각이 유효하지 않거나 중복·역행했습니다.")
         if minimum_frame_index is not None and (type(minimum_frame_index) is not int or
-                type(stamp.frame_index) is not int or not 0 <= minimum_frame_index <= stamp.frame_index):
+                not self._minimum_frame_index <= minimum_frame_index <= stamp.frame_index):
             raise ValueError("시각을 검증할 수 있는 최소 프레임 번호가 올바르지 않습니다.")
+        # 6-1-2. 한 번 만료된 시각 경계는 이후 호출에서 생략해도 되돌리지 않습니다.
+        boundary = self._minimum_frame_index if minimum_frame_index is None else minimum_frame_index
         height, width = frame.shape[:2]
         # 6-2. 비율로 저장된 ROI와 기준선 좌표를 실제 픽셀 좌표로 변환합니다.
         if self._shape is None:
@@ -120,10 +136,10 @@ class LiveGateProcessor:
                 self._remove(track)
                 self._statistics["gap_resets"] += 1
                 continue
-            if minimum_frame_index is not None:
+            if boundary:
                 # 6-3-1. 시각 기록에서 제거된 crop은 OCR 전에 버리고 메모리를 반납합니다.
                 entries = self._buffers[track]
-                while entries and entries[0]["frame_index"] < minimum_frame_index:
+                while entries and entries[0]["frame_index"] < boundary:
                     self._bytes -= entries.popleft()["crop"].nbytes
                     self._statistics["expired_history_crops"] += 1
         # 6-4. 주입된 추적기가 있으면 사용하고, 없으면 실제 YOLO로 추적합니다.
@@ -139,6 +155,9 @@ class LiveGateProcessor:
                     not 0 <= box[0] < box[2] <= width or not 0 <= box[1] < box[3] <= height):
                 raise ValueError("추적 ID·차량 상자가 유효하지 않거나 중복됐습니다.")
             seen.add(row["track_id"])
+        # 검증된 입력만 다음 프레임의 순서 기준으로 사용합니다.
+        self._last_frame_index, self._last_seconds = stamp.frame_index, seconds
+        self._minimum_frame_index = boundary
         # 6-5. 관찰 횟수는 프레임마다 반복될 수 있으므로 실제 차량 대수와 다릅니다.
         self._statistics["frames"] += 1
         passages = []

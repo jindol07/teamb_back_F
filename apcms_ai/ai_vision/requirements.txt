@@ -15,7 +15,7 @@ paddlepaddle==3.3.1 # PaddleOCR가 실제 연산을 수행하는 엔진 (프레�
 
 # 4. 이미지 처리
 opencv-contrib-python==4.10.0.84 # cv2를 사용한 이미지 자르기, 확대, grayscale, CLAHE 등의 전처리
-numpy==2.3.5 # 이미지 픽셀 및 배열 연산
+numpy==1.26.4 # 통합 AI의 numpy<2 조건과 일치시키고 기존 회사 환경 기준 유지
 
 # 5. 이미지 관련
 Pillow # Python 이미지 관련 처리를 위한 라이브러리이며 여러 이미지 라이브러리와 함께 사용됨

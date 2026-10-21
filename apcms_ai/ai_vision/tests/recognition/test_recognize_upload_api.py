@@ -66,3 +66,13 @@ class RecognizeUploadAPITests(unittest.TestCase):
                 lease.cancel_pending()
             response = self.client.post("/recognize", files={"file": ("sample.png", self.png, "image/png")})
             self.assertEqual(response.status_code, 200)
+
+    def test_missing_model_or_dependency_returns_503_and_releases_slot(self):
+        for error in (FileNotFoundError("private-path"), PermissionError("private-path"), ImportError("private-path")):
+            with patch.object(self.module, "recognize_image", side_effect=error):
+                response = self.client.post("/recognize", files={"file": ("sample.png", self.png, "image/png")})
+            self.assertEqual(response.status_code, 503)
+            self.assertNotIn("private-path", response.text)
+        with patch.object(self.module, "recognize_image", return_value={"success": True}):
+            response = self.client.post("/recognize", files={"file": ("sample.png", self.png, "image/png")})
+        self.assertEqual(response.status_code, 200)

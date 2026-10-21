@@ -1,3 +1,4 @@
+# D:/finalProjectB/back/apcms_ai/ai_vision/parking/parking_api.py
 # APCMS 실시간 주차면 점유 현황 조회 API
 # parking_realtime.py가 저장한 JSON 파일을 읽어서 React 또는 Spring Boot의 요청에 응답하는 기능
 
@@ -9,6 +10,8 @@ import uvicorn
 from fastapi import APIRouter, FastAPI, HTTPException
 
 from ai_vision.paths import RESULT_DIR
+from ai_vision.recognition.local_io import read_json
+from ai_vision.parking.parking_validation import validate_occupancy
 
 
 # 1. FastAPI 라우터 및 조회 파일 경로 설정
@@ -33,21 +36,16 @@ def get_parking_occupancy():
 
     # 2-2. 결과 파일 존재 여부 확인
     # 아직 실시간 감지를 실행하지 않았다면 JSON 파일이 없을 수 있음
-    if not RESULT_PATH.is_file():
-        raise HTTPException(
-            status_code=503,
-            detail="주차면 점유 감지 결과가 아직 없습니다."
-        )
 
     # 2-3. 결과 JSON 파일 읽기
     try:
-        with open(RESULT_PATH, "r", encoding="utf-8") as file:
-            data = json.load(file) #  JSON 파일 내용을 Python 딕셔너리로 변환
+        # 크기·중복 키·NaN·인코딩 오류를 응답 직렬화 전에 검사합니다.
+        data = validate_occupancy(read_json(RESULT_PATH))
 
     # 2-4. 파일 읽기 또는 JSON 해석 실패 처리
     # OSError : 파일 접근 또는 읽기 관련 오류
     # JSONDecodeError : JSON 형식이 올바르지 않아 해석할 수 없는 경우
-    except (OSError, json.JSONDecodeError) as error:
+    except (OSError, ValueError) as error:
         raise HTTPException(
             status_code=503,
             detail="주차면 점유 감지 결과를 읽을 수 없습니다."

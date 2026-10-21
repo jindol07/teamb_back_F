@@ -10,6 +10,7 @@ from starlette.concurrency import run_in_threadpool
 from .recognition.recognizer import recognize_image
 from .recognition.image_upload import MAX_UPLOAD_BYTES, ImageUploadError, process_uploaded_image
 from .recognition.recognition_admission import RecognitionAdmission
+from .recognition.ocr_configuration import OCRConfigurationError
 
 # 기존 주차면 점유 조회 라우터
 from .parking.parking_api import router as parking_router
@@ -66,6 +67,9 @@ async def recognize(file: UploadFile = File(...)):
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     except HTTPException:
         raise
+    except (FileNotFoundError, PermissionError, ImportError, OCRConfigurationError) as error:
+        # 모델·공유 라이브러리·볼륨 준비 오류는 요청 자체의 오류와 구분합니다.
+        raise HTTPException(status_code=503, detail="인식 모델·패키지·접근 권한 준비 상태를 확인해 주세요.") from error
     except Exception as error:
 
         # 서버 콘솔에 오류 출력

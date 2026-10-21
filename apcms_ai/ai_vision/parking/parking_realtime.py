@@ -1,3 +1,4 @@
+# D:/finalProjectB/back/apcms_ai/ai_vision/parking/parking_realtime.py
 # APCMS 실시간 주차면 점유 감지
 # 빈 주차면 기준 사진과 실시간 웹캠 영상을 비교하여
 # 주차면별 점유 상태를 독립적으로 판단하는 프로그램
@@ -19,6 +20,9 @@ import cv2
 import numpy as np
 
 from ai_vision.paths import DATA_DIR, RESULT_DIR
+from ai_vision.camera_runtime import open_camera
+from ai_vision.recognition.local_io import write_json_atomic, read_json
+from ai_vision.parking.parking_validation import validate_spaces, validate_occupancy
 
 from ai_vision.parking.parking_event_sender import (
     create_occupancy_event,
@@ -229,13 +233,8 @@ def save_results(frame, spaces, results):
 
     # with open() : 파일 사용이 끝나면 자동으로 닫음
     # "w": 쓰기 모드이므로 기존 파일을 덮어씀
-    with open(OUTPUT_PATH, "w", encoding="utf-8") as file:
-        json.dump(
-            output,
-            file,
-            ensure_ascii=False, # ensure_ascii=False: 한글 그대로 저장
-            indent=4 # 들여쓰기 4
-        )
+    # API가 읽는 중에도 반쪽짜리 JSON을 보지 않도록 같은 폴더에서 원자적으로 교체합니다.
+    write_json_atomic(OUTPUT_PATH, validate_occupancy(output))
 
     print("결과 JSON 저장 완료")
 
@@ -259,8 +258,7 @@ def run_realtime():
         print(f"주차면 좌표 파일이 없습니다 : {JSON_PATH}")
         return
 
-    with open(JSON_PATH, "r", encoding="utf-8") as file:
-        data = json.load(file)
+    data = validate_spaces(read_json(JSON_PATH))
 
     # 기준 이미지의 높이, 너비
     height, width = reference.shape[:2]
@@ -324,9 +322,10 @@ def run_realtime():
 
     # 1번 : 기존 주차면 감지용 웹캠
     # CAP_DSHOW : Windows의 DirectShow 백엔드
-    cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)
+    cap = open_camera(1)
 
     if not cap.isOpened():
+        cap.release()
         print("웹캠을 연결할 수 없습니다.")
         return
 

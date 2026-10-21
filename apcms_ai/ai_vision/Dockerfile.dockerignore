@@ -1,0 +1,20 @@
+# 모델·결과·개발 자료·비밀 설정을 이미지 빌드 컨텍스트에서 제외합니다.
+**/.env
+**/.env.*
+**/__pycache__
+**/.venv*
+**/.git
+ai_vision/models
+ai_vision/results
+ai_vision/test_images
+ai_vision/data/videos
+**/*.mp4
+**/*.avi
+**/*.pt
+**/*.ipynb
+# 서버가 사용하지 않는 GUI·구형 단독 실험은 배포 이미지에서 제외합니다.
+ai_vision/parking/space_marker.py
+ai_vision/parking/space_editor.py
+ai_vision/parking/object_detector_test.py
+ai_vision/parking/parking_event_sender_backup.py
+ai_vision/safety/test_fire_smoke_speed.py

@@ -12,6 +12,9 @@ from pathlib import Path
 from time import perf_counter
 
 from ai_vision.paths import MODEL_DIR, RESULT_DIR
+from ai_vision.camera_runtime import release_resources
+from ai_vision.recognition.local_io import write_json_atomic
+from ai_vision.recognition.model_files import require_model_file
 from ai_vision.recognition.line_crossing import LineCrossingCounter
 from ai_vision.recognition.tracking_config import parse_with_config
 
@@ -66,8 +69,7 @@ def run(args):
     from ultralytics import YOLO
 
     model_path = MODEL_DIR / "yolo11n.pt"
-    if not model_path.is_file():
-        raise FileNotFoundError(model_path)
+    require_model_file(model_path)
     cap = cv2.VideoCapture(str(args.source))
     # 2-2. VideoCapture: 영상 파일을 열고 read()를 호출할 때마다 다음 한 장을 읽음
     writer = None
@@ -213,15 +215,12 @@ def run(args):
                    "config_file": str(args.config.resolve()) if args.config else None,
                    "deduplication": "once per tracker ID per run; ID switches may overcount",
                    "http_enabled": False, "elapsed_seconds": round(perf_counter() - started, 2)}
-        (args.output_dir / "summary.json").write_text(
-            json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
+        write_json_atomic(args.output_dir / "summary.json", summary)
         print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
     finally:
         # 5. 정상 종료뿐 아니라 오류가 발생해도 영상 파일과 저장기를 닫습니다.
         # 5-1. writer.release()까지 실행되어야 MP4 저장이 마무리됨
-        cap.release()
-        if writer is not None:
-            writer.release()
+        release_resources(cap, writer)
 
 
 # 6. 실행부 (이 모듈을 직접 실행했을 때만)

@@ -1,3 +1,4 @@
+# D:/finalProjectB/back/apcms_ai/ai_vision/recognition/camera_recognition.py
 # APCMS 웹캠 차량번호 인식 테스트
 # 0번 웹캠 영상을 확인하고 R 키를 누르면
 # 현재 프레임에서 YOLO + PaddleOCR 차량번호 인식 실행
@@ -5,6 +6,7 @@
 import cv2
 
 from ai_vision.recognition.recognizer import recognize_image
+from ai_vision.camera_runtime import open_camera, require_display
 
 
 # 1. 웹캠 설정
@@ -47,9 +49,12 @@ def print_recognition_result(result):
 def run_camera_recognition():
 
     # 3-1. 입출차 전용 웹캠 연결
-    cap = cv2.VideoCapture(CAMERA_ID, cv2.CAP_DSHOW)
+    # GUI 전용 수동 도구이므로 화면 없는 서버에서는 카메라를 열기 전에 안내합니다.
+    require_display()
+    cap = open_camera(CAMERA_ID)
 
     if not cap.isOpened():
+        cap.release()
         print(f"{CAMERA_ID}번 웹캠을 연결할 수 없습니다.")
         return
 
@@ -100,8 +105,10 @@ def run_camera_recognition():
 
     finally:
         # 3-7. 웹캠 및 OpenCV 창 정리
-        cap.release()
-        cv2.destroyAllWindows()
+        try:
+            cap.release()
+        finally:
+            cv2.destroyAllWindows()
 
         print("웹캠 차량번호 인식을 종료합니다.")
 

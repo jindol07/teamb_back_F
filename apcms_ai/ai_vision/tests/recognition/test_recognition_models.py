@@ -64,6 +64,17 @@ class RecognitionModelsTests(unittest.TestCase):
         self.assertIs(models.ocr(), model)
         self.assertEqual(factory.call_count, 2)
 
+    def test_empty_model_is_rejected_before_factory_and_can_be_replaced(self):
+        path = self.root / "yolo11n.pt"
+        path.write_bytes(b"")
+        factory = Mock(return_value=object())
+        models = RecognitionModels(self.root, yolo_factory=factory)
+        with self.assertRaises(FileNotFoundError):
+            models.vehicle()
+        factory.assert_not_called()
+        path.write_bytes(b"restored weights")
+        self.assertIs(models.vehicle(), factory.return_value)
+
     def test_same_role_inference_is_serialized_without_loading(self):
         factory = Mock()
         models = RecognitionModels(self.root, ocr_factory=factory)

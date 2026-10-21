@@ -1,13 +1,9 @@
-import sys
+# D:/finalProjectB/back/apcms_ai/ai_vision/safety/test_fire_smoke_speed.py
 import time
 import cv2
 
-from ultralytics import YOLO
 
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
-
-from paths import MODEL_DIR, TEST_IMAGE_DIR
+from ai_vision.paths import MODEL_DIR, TEST_IMAGE_DIR
 
 
 # 1. CPU 추론 속도 테스트 설정
@@ -34,7 +30,8 @@ TEST_COUNT = 10
 # 2. test_fire_smoke_speed() - CPU 추론 속도 측정
 
 def test_fire_smoke_speed():
-
+    # 측정을 요청할 때에만 모델 라이브러리를 불러옵니다.
+    from ultralytics import YOLO
     # 2-1. 모델 파일과 테스트 이미지 존재 여부 확인
 
     # is_file(): 해당 경로에 실제 파일이 존재하는지 확인

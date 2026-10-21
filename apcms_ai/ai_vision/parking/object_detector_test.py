@@ -1,19 +1,19 @@
+# D:/finalProjectB/back/apcms_ai/ai_vision/parking/object_detector_test.py
 # 원본 프레임 전체 탐지 실험
 from pathlib import Path
 
 import cv2
-from ultralytics import YOLO
+from ai_vision.paths import MODEL_DIR, DATA_DIR, RESULT_DIR as VISION_RESULT_DIR
+from ai_vision.recognition.model_files import require_model_file
 
 # AI 프로젝트 최상위 폴더
-BASE_DIR = Path(__file__).resolve().parent.parent
 
 # 파일 경로
-MODEL_PATH = BASE_DIR / "models" / "yolo11n.pt"
-VIDEO_PATH = BASE_DIR / "data" / "videos" / "parking_test.mp4"
+MODEL_PATH = MODEL_DIR / "yolo11n.pt"
+VIDEO_PATH = DATA_DIR / "videos" / "parking_test.mp4"
 
 # 결과 저장 폴더
-RESULT_DIR = BASE_DIR / "results" / "parking"
-RESULT_DIR.mkdir(parents=True, exist_ok=True)
+RESULT_DIR = VISION_RESULT_DIR / "parking"
 
 
 # COCO 모델의 차량 관련 클래스 번호
@@ -24,7 +24,10 @@ VEHICLE_CLASSES = [2, 3, 5, 7]
 
 
 def detect_objects():
-
+    # import만으로 모델 초기화·폴더 쓰기를 하지 않습니다.
+    from ultralytics import YOLO
+    require_model_file(MODEL_PATH)
+    RESULT_DIR.mkdir(parents=True, exist_ok=True)
     # YOLO 모델 로딩
     model = YOLO(MODEL_PATH)
 
@@ -32,6 +35,7 @@ def detect_objects():
     cap = cv2.VideoCapture(VIDEO_PATH)
 
     if not cap.isOpened():
+        cap.release()
         print("영상을 열 수 없습니다.")
         return
 
@@ -90,7 +94,8 @@ def detect_objects():
     # 결과 이미지 저장
     save_path = RESULT_DIR / "detected_objects.jpg"
 
-    cv2.imwrite(save_path, annotated_frame)
+    if not cv2.imwrite(str(save_path), annotated_frame):
+        raise OSError("탐지 결과 이미지를 저장할 수 없습니다.")
 
     print(f"\n결과 이미지 저장: {save_path}")
 
