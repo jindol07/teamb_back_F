@@ -17,6 +17,10 @@ public interface ReservationRepository
     // 전체 예약 최신순 조회
     List<Reservation> findAllByOrderByParkingReservationIdDesc();
 
+    // 사용자별 확정 및 미만료 예약 조회
+    List<Reservation> findAllByOfficeIdAndStatusCodeAndReservationEndAtGreaterThanEqualOrderByParkingReservationIdDesc(
+            Long officeId, String statusCode, LocalDateTime now);
+
     // 동일 주차 공간의 예약 시간 중복 확인
     @Query("""
         SELECT COUNT(r)
