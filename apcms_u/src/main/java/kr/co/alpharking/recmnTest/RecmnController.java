@@ -26,8 +26,8 @@ import kr.co.alpharking.security.Office;
 
 //import org.springframework.http.MediaType;
 
-@RestController
-@RequestMapping("/api/recmn")
+//@RestController
+//@RequestMapping("/api/recmn")
 public class RecmnController {
 
 	private RecmnService recmnService;

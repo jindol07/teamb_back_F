@@ -8,10 +8,10 @@ import java.util.concurrent.ThreadLocalRandom;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-@Service
+//@Service
 public class RecmnService {
 
-    @Autowired
+    //@Autowired
     private RecmnRepository recmnRepository;
 
     public List<PrkPastHisRes> getPrkPastHisById(Long officeId) {
