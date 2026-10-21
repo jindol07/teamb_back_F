@@ -3,6 +3,7 @@
 import contextlib
 import io
 import json
+import csv
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,6 +15,24 @@ from ai_vision.recognition.run_live_gate import _demo
 
 
 class ExportLiveGateReportTests(unittest.TestCase):
+    def test_cli_exports_optional_review_columns_and_summary_sidecar(self):
+        base = RESULT_DIR / "test_tmp"
+        base.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=base) as temp:
+            root = Path(temp)
+            source, output = root / "summary.json", root / "report"
+            source.write_text(json.dumps(_demo(), ensure_ascii=False), encoding="utf-8")
+            with contextlib.redirect_stdout(io.StringIO()):
+                main(["--summary", str(source), "--output-dir", str(output), "--include-review-reasons"])
+            with (output / "passages.csv").open(encoding="utf-8-sig", newline="") as stream:
+                row = next(csv.DictReader(stream))
+            self.assertEqual(row["review_reason_state"], "NO_REASONS")
+            summary = json.loads((output / "review_summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["total_passages"], 1)
+            self.assertEqual(summary["passages_without_reasons"], 1)
+            self.assertEqual(summary["reason_counts"], {})
+            self.assertIn("형식 검토 사유 집계", (output / "report.html").read_text(encoding="utf-8"))
+
     def test_export_preserves_source_and_existing_output_without_network(self):
         # 1. 별도 새 폴더에만 저장하며 원본 JSON 바이트는 보존합니다.
         base = RESULT_DIR / "test_tmp"

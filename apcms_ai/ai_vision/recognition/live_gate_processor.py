@@ -22,6 +22,7 @@ from ai_vision.paths import MODEL_DIR
 from ai_vision.recognition.model_files import require_model_file
 from ai_vision.recognition.line_crossing import LineCrossingCounter
 from ai_vision.recognition.plate_consensus import summarize_plate_samples
+from ai_vision.recognition.plate_review import sample_review_reasons
 from ai_vision.recognition.tracking_config import validate_config
 from ai_vision.recognition.live_gate_clock import FrameStamp
 
@@ -51,8 +52,8 @@ class LiveGateProcessor:
                             "eligible", "gap_resets", "crossings", "ocr_calls", "peak_buffer_bytes",
                             "roi_resets", "speed_resets", "expired_history_crops")}
 
-    # 3. YOLO를 사용한 프레임별 차량 추적
-    def _track(self, frame):
+    # 3. 촬영 전에 모델을 준비할 때와 첫 추적 때 같은 객체를 재사용합니다.
+    def _prepare_tracker(self):
         # 3-1. 실제 추적을 처음 실행할 때만 모델을 읽는 지연 로딩 방식입니다.
         if self._model is None:
             os.environ["YOLO_AUTOINSTALL"] = "false"
@@ -60,6 +61,20 @@ class LiveGateProcessor:
             require_model_file(model)
             from ultralytics import YOLO
             self._model = YOLO(model)
+
+    def prepare(self):
+        # 카메라·세션 시계 시작 전에 무거운 모델 생성을 마칩니다. 실제 추론 예열은 아닙니다.
+        if self._closed:
+            raise ValueError("종료된 처리기는 준비할 수 없습니다.")
+        if self._tracker is None:
+            self._prepare_tracker()
+        if self._reader is None:
+            from ai_vision.recognition.recognizer import _models
+            _models.plate()
+            _models.ocr()
+
+    def _track(self, frame):
+        self._prepare_tracker()
         # 3-2. COCO 클래스 중 승용차·트럭·버스·오토바이만 추적합니다.
         classes = [key for key, name in self._model.names.items() if name in {"car", "truck", "bus", "motorcycle"}]
         # persist=True는 연속 프레임에서 이전 추적 상태를 유지하게 합니다.
@@ -223,6 +238,7 @@ class LiveGateProcessor:
                     raise ValueError("번호판 인식 결과는 객체여야 합니다.")
                 sample = {"frame_index": entry["frame_index"], "video_seconds": entry["video_seconds"],
                           "plate_number": result.get("plate_number", ""), "plate_type": result.get("plate_type", "NOT_DETECTED")}
+                sample["review_reasons"] = sample_review_reasons([sample])
                 if "plate_detection_confidence" in result:
                     sample["plate_detection_confidence"] = result["plate_detection_confidence"]
                 samples.append(sample)

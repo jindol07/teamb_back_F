@@ -19,6 +19,8 @@ from ai_vision.recognition.run_live_gate import execute, main
 from ai_vision.recognition.local_io import write_json_atomic
 from ai_vision.recognition.live_gate_report import load_report
 from ai_vision.tests.recognition.test_live_gate_processor import CONFIG
+from ai_vision.recognition.vehicle_http import VehicleHTTPClient
+from ai_vision.recognition.vehicle_delivery_flow import VehicleDeliveryFlow
 
 
 class FakeCapture:
@@ -40,6 +42,104 @@ class FakeCapture:
 
 
 class RunLiveGateTests(unittest.TestCase):
+    def test_model_preparation_failure_does_not_start_clock_or_camera(self):
+        root = self.output_folder()
+        config = root / "config.json"
+        config.write_text(json.dumps(CONFIG), encoding="utf-8")
+        with patch("ai_vision.recognition.run_live_gate.LiveGateProcessor") as factory, \
+                patch("ai_vision.recognition.run_live_gate.LiveGateSession") as session, \
+                patch("cv2.VideoCapture") as camera:
+            factory.return_value.prepare.side_effect = RuntimeError("private model path")
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                main(["--config", str(config), "--camera-id", "TEST", "--down-direction", "ENTRY",
+                      "--output-dir", str(root / "run")])
+            session.assert_not_called()
+            camera.assert_not_called()
+            factory.return_value.close.assert_called_once()
+
+    def test_prepare_with_injected_functions_keeps_models_unloaded(self):
+        processor = LiveGateProcessor(CONFIG, lambda frame: [], lambda crop: {})
+        with patch.object(processor, "_prepare_tracker") as tracker:
+            processor.prepare()
+            tracker.assert_not_called()
+        processor.close()
+        with self.assertRaises(ValueError):
+            processor.prepare()
+
+    def test_demo_rejects_http_options_before_camera_or_network(self):
+        for options in (["--enable-http"], ["--boot-context-url", "http://localhost:81/alpharking/admin"]):
+            with patch("cv2.VideoCapture") as camera, patch("requests.Session") as network:
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    main(["--demo", "--output-dir", str(self.output_folder() / "run"), *options])
+                camera.assert_not_called()
+                network.assert_not_called()
+
+    def test_http_requires_key_and_url_before_models_and_camera(self):
+        root = self.output_folder()
+        config = root / "config.json"
+        config.write_text(json.dumps(CONFIG), encoding="utf-8")
+        for environment in ({}, {"VISION_BOOT_CONTEXT_URL": "http://localhost:81/alpharking/admin"},
+                            {"AI_OCCUPANCY_API_KEY": "PRIVATE_KEY"}):
+            with patch.dict("os.environ", environment, clear=True), patch("cv2.VideoCapture") as camera, \
+                    patch("ai_vision.recognition.run_live_gate.LiveGateProcessor") as processor:
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    main(["--enable-http", "--config", str(config), "--camera-id", "TEST", "--down-direction", "ENTRY",
+                          "--output-dir", str(root / "run")])
+                camera.assert_not_called()
+                processor.assert_not_called()
+
+    def test_cli_wires_enabled_flow_without_exposing_key_or_url(self):
+        root = self.output_folder()
+        config = root / "config.json"
+        config.write_text(json.dumps(CONFIG), encoding="utf-8")
+        seen = []
+        prepared = []
+        def finish(capture, processor, session, **kwargs):
+            self.assertEqual(prepared, [True])
+            seen.append(session.flow.client.enabled)
+            session.close()
+            return {**session.summary(), "status": "STOPPED"}
+        with patch.dict("os.environ", {"AI_OCCUPANCY_API_KEY": "PRIVATE_KEY"}), \
+                patch("ai_vision.recognition.run_live_gate.LiveGateProcessor") as processor_factory, patch("cv2.VideoCapture"), \
+                patch("ai_vision.recognition.run_live_gate.execute", side_effect=finish), \
+                contextlib.redirect_stdout(io.StringIO()) as stdout:
+            processor_factory.return_value.prepare.side_effect = lambda: prepared.append(True)
+            main(["--enable-http", "--boot-context-url", "http://private-host:81/alpharking/admin", "--config", str(config),
+                  "--camera-id", "TEST", "--down-direction", "ENTRY", "--output-dir", str(root / "run")])
+        self.assertEqual(seen, [True])
+        summary = (root / "run" / "summary.json").read_text(encoding="utf-8")
+        self.assertTrue(json.loads(summary)["http_enabled"])
+        for private in ("PRIVATE_KEY", "private-host"):
+            self.assertNotIn(private, summary + stdout.getvalue())
+
+    def test_confirmed_crossing_reaches_admin_contract_once_with_mock_http(self):
+        frames = [np.full((100, 100, 3), i, dtype=np.uint8) for i in range(7)]
+        def tracker(frame):
+            index = int(frame[0, 0, 0])
+            y = 20 if index < 3 else (50 if index == 3 else 80)
+            return [{"track_id": 7, "box": [40, y - 10, 60, y + 10]}]
+        processor = LiveGateProcessor(CONFIG, tracker, lambda crop: {
+            "plate_number": "91소6408", "plate_type": "KOREAN_VALID", "plate_detection_confidence": .8})
+        network = Mock()
+        def post(url, **kwargs):
+            event = kwargs["json"]
+            response = Mock(status_code=200)
+            response.iter_content.return_value = [json.dumps({"eventId": event["event_id"], "eventType": "VEHICLE_PASSAGE",
+                "plateNumber": event["plate_number"], "spaceCode": None, "parkingUsageId": 1, "outcome": "PROCESSED"}).encode("utf-8")]
+            return response
+        network.post.side_effect = post
+        client = VehicleHTTPClient("http://boot:81/alpharking/admin", "TEST_KEY", True, session_factory=lambda: network)
+        session = self.session()
+        session.flow = VehicleDeliveryFlow(client)
+        report = execute(FakeCapture(frames), processor, session, monotonic_reader=iter(i * .3 for i in range(7)).__next__,
+                         allow_source_end=True)
+        self.assertEqual(report["request_attempts"], 1)
+        self.assertEqual(report["results"][0]["receipt_state"], "APPLIED")
+        network.post.assert_called_once()
+        self.assertEqual(network.post.call_args.args[0], "http://boot:81/alpharking/admin/api/parking/ai/vehicle-events")
+        self.assertEqual(network.post.call_args.kwargs["json"]["direction"], "ENTRY")
+        self.assertEqual(network.post.call_args.kwargs["headers"], {"X-AI-API-Key": "TEST_KEY"})
+
     def output_folder(self):
         base = RESULT_DIR / "test_tmp"
         base.mkdir(parents=True, exist_ok=True)
@@ -136,7 +236,7 @@ class RunLiveGateTests(unittest.TestCase):
             config = root / "config.json"
             config.write_text(json.dumps(CONFIG), encoding="utf-8")
             capture = FakeCapture([], opened=False)
-            with patch("cv2.VideoCapture", return_value=capture):
+            with patch("cv2.VideoCapture", return_value=capture), patch.object(LiveGateProcessor, "prepare"):
                 with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit):
                     main(["--config", str(config), "--camera-id", "TEST_GATE", "--down-direction", "ENTRY", "--output-dir", str(output)])
             self.assertTrue(capture.released)
@@ -210,7 +310,7 @@ class RunLiveGateTests(unittest.TestCase):
             config.write_text('{}', encoding="utf-8")
             return False, None
         capture.read = read
-        with patch("cv2.VideoCapture", return_value=capture):
+        with patch("cv2.VideoCapture", return_value=capture), patch.object(LiveGateProcessor, "prepare"):
             with contextlib.redirect_stdout(io.StringIO()), self.assertRaises(SystemExit) as stopped:
                 main(["--config", str(config), "--camera-id", "TEST_GATE", "--down-direction", "EXIT",
                       "--camera-index", "2", "--seconds", "15", "--output-dir", str(output)])

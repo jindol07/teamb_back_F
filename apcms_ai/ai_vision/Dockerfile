@@ -23,4 +23,4 @@ EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3).close()"
 # 중복 억제·요청 제한이 프로세스 메모리 기준이므로 우선 worker는 하나만 사용합니다.
-CMD ["python", "-m", "uvicorn", "ai_vision.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1"]
+CMD ["python", "-m", "uvicorn", "ai_vision.app:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "1", "--no-access-log"]

@@ -11,6 +11,7 @@ from PIL import Image
 
 from ai_vision.recognition.local_io import iter_jsonl
 from ai_vision.recognition.result_validation import public_passage
+from ai_vision.recognition.plate_review import sample_review_reasons
 
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
 MAX_TOTAL_IMAGE_BYTES = 24 * 1024 * 1024
@@ -70,7 +71,8 @@ def load_evidence(catalog, run_id, snapshot, track_ids=None):
             # 2. OCR 문자열만 표시하고 로그의 경로·내부 오류는 가져오지 않습니다.
             text = sample.get("plate_number", "")
             samples.append({"frame_index": sample["frame_index"], "video_seconds": sample["video_seconds"],
-                            "ocr_text": text[:200] if isinstance(text, str) else "", "image": image})
+                            "ocr_text": text[:200] if isinstance(text, str) else "", "image": image,
+                            "review_reasons": sample_review_reasons([sample])})
         evidence[track] = samples
     if seen != set(expected):
         raise ValueError("일부 검토 차량의 OCR 표본이 누락됐습니다.")

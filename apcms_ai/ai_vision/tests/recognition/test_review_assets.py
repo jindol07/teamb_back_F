@@ -15,6 +15,23 @@ from ai_vision.recognition.review_assets import load_evidence, read_plate_image
 
 
 class ReviewAssetsTests(unittest.TestCase):
+    def test_review_reason_is_derived_without_invalidating_existing_snapshot(self):
+        from ai_vision.recognition.review_html import render_review
+        self.row["samples"][0].update(plate_number="10-1557", plate_type="REVIEW")
+        self.row["plate_consensus"] = summarize_plate_samples(self.row["samples"])
+        self.log.write_text(json.dumps(self.row), encoding="utf-8")
+        snapshot = self.catalog.review_snapshot("ocr")
+        # 표시용 메타데이터 추가만으로 기존 검토 대상 식별값이 바뀌지 않아야 합니다.
+        self.row["samples"][0]["review_reasons"] = ["FORGED_REASON"]
+        self.log.write_text(json.dumps(self.row), encoding="utf-8")
+        self.assertEqual(self.catalog.review_snapshot("ocr")["snapshot_sha256"], snapshot["snapshot_sha256"])
+        evidence = load_evidence(self.catalog, "ocr", snapshot)
+        self.assertEqual(evidence[7][0]["review_reasons"], ["KOREAN_CHARACTER_NOT_FOUND"])
+        html = render_review(snapshot, evidence, snapshot["items"])
+        self.assertIn("10-1557", html)
+        self.assertIn("KOREAN_CHARACTER_NOT_FOUND", html)
+        self.assertNotIn("FORGED_REASON", html)
+
     def setUp(self):
         base = RESULT_DIR / "test_tmp"
         base.mkdir(parents=True, exist_ok=True)
