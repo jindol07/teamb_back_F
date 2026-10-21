@@ -8,7 +8,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from ai_vision.paths import RESULT_DIR
+from ai_vision.paths import BASE_DIR, RESULT_DIR
 from ai_vision.recognition.live_gate_clock import LiveGateClock
 from ai_vision.recognition.live_gate_processor import LiveGateProcessor
 from ai_vision.recognition.live_gate_session import LiveGateSession
@@ -23,6 +23,21 @@ from ai_vision.recognition.plate_review import sample_review_reasons
 from ai_vision.recognition.tracking_config import validate_config
 from ai_vision.recognition.vehicle_http import VehicleHTTPClient
 from ai_vision.recognition.vehicle_delivery_flow import VehicleDeliveryFlow
+from ai_vision.recognition.vehicle_contract import validate_camera_id
+
+
+def _create_http_client(enabled, context_url=None, env_file=None):
+    # 1. 기본 실행에서는 설정 파일·키를 읽지 않고 비활성 클라이언트를 반환합니다.
+    if not enabled:
+        return VehicleHTTPClient()
+    from dotenv import dotenv_values
+    settings = dotenv_values(BASE_DIR.parent / ".env" if env_file is None else env_file,
+                             encoding="utf-8-sig", interpolate=False)
+    # 2. 명령의 주소 > 운영체제 환경변수 > 프로젝트 .env 순서로 선택합니다.
+    # 빈 환경변수도 명시적인 설정으로 취급하여 다른 키로 조용히 바꾸지 않습니다.
+    url = context_url if context_url is not None else os.environ.get("VISION_BOOT_CONTEXT_URL", settings.get("VISION_BOOT_CONTEXT_URL"))
+    key = os.environ.get("AI_OCCUPANCY_API_KEY", settings.get("AI_OCCUPANCY_API_KEY"))
+    return VehicleHTTPClient(context_url=url, api_key=key, enabled=True)
 
 
 def execute(capture, processor, session, seconds=20, max_frames=100000, monotonic_reader=None, performance_reader=None,
@@ -135,13 +150,14 @@ def main(argv=None):
     parser.add_argument("--enable-http", action="store_true", help="실제 카메라의 확정 후보를 Boot로 전송")
     parser.add_argument("--boot-context-url", help="관리자 Boot context URL. 키는 AI_OCCUPANCY_API_KEY 환경변수 사용")
     parser.add_argument("--camera-index", type=int, default=0)
+    parser.add_argument("--vision-api-url", help="지정하면 차량 추적은 현장 PC, 번호판 인식은 해당 Vision API에서 수행")
     parser.add_argument("--camera-id")
     parser.add_argument("--down-direction", choices=["ENTRY", "EXIT"])
     parser.add_argument("--config", type=Path)
     parser.add_argument("--seconds", type=float, default=20)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
-    if args.demo and (args.enable_http or args.boot_context_url is not None):
+    if args.demo and (args.enable_http or args.boot_context_url is not None or args.vision_api_url is not None):
         parser.error("합성 데모에서는 실제 전송 옵션을 사용할 수 없습니다.")
     if args.boot_context_url is not None and not args.enable_http:
         parser.error("관리자 서버 주소를 사용하려면 --enable-http를 명시합니다.")
@@ -159,21 +175,26 @@ def main(argv=None):
             config = validate_config(read_json(args.config))
             context = build_run_context(config, args.camera_index, args.seconds)
             # 1. 전송을 명시한 실행만 키를 읽습니다. 키·주소는 요약 파일에 저장하지 않습니다.
-            client = VehicleHTTPClient(
-                context_url=args.boot_context_url or os.environ.get("VISION_BOOT_CONTEXT_URL"),
-                api_key=os.environ.get("AI_OCCUPANCY_API_KEY"), enabled=True
-            ) if args.enable_http else VehicleHTTPClient()
-            processor = LiveGateProcessor(config)
-            print("차량·번호판·OCR 모델 준비 중입니다. 아직 카메라 수집은 시작하지 않았습니다.", flush=True)
+            client = _create_http_client(args.enable_http, args.boot_context_url)
+            remote_reader = None
+            if args.vision_api_url is not None:
+                from ai_vision.recognition.remote_plate_reader import RemotePlateReader
+                remote_reader = RemotePlateReader(args.vision_api_url)
+            validate_camera_id(args.camera_id)
+            # 저장할 수 없는 실행은 무거운 모델 준비 전에 중단합니다.
+            output.mkdir(parents=True, exist_ok=False)
+            output_created = True
+            processor = LiveGateProcessor(config, plate_reader=remote_reader.read) if remote_reader else LiveGateProcessor(config)
+            print("차량 추적 모델 준비 중입니다. 번호판 인식은 원격 API를 사용합니다." if remote_reader else
+                  "차량·번호판·OCR 모델 준비 중입니다. 아직 카메라 수집은 시작하지 않았습니다.", flush=True)
             processor.prepare()
-            # 모델 생성 시간을 촬영 제한과 실제 프레임 시각에 포함하지 않습니다.
-            session = LiveGateSession(args.camera_id, args.down_direction, flow=VehicleDeliveryFlow(client))
         else:
             context = build_run_context(None, None, synthetic=True)
-        output.mkdir(parents=True, exist_ok=False)
-        output_created = True
+            output.mkdir(parents=True, exist_ok=False)
+            output_created = True
         write_json_atomic(output / "summary.json", {"record_type": "LIVE_GATE_SESSION", "status": "RUNNING",
-                          "http_enabled": session.flow.client.enabled if session is not None else False, "run_context": context})
+                          "http_enabled": client.enabled if not args.demo else False, "run_context": context,
+                          "recognition_mode": "REMOTE_API" if args.vision_api_url else "LOCAL"})
         phase = "EXECUTION"
         if args.demo:
             report = _demo()
@@ -181,8 +202,11 @@ def main(argv=None):
             # 파일 경로·URL을 받지 않고 물리 카메라 정수 인덱스만 엽니다.
             import cv2
             capture = cv2.VideoCapture(args.camera_index)
+            # 카메라 생성에 걸린 시간도 촬영 시간과 프레임 시각에서 제외합니다.
+            session = LiveGateSession(args.camera_id, args.down_direction, flow=VehicleDeliveryFlow(client))
             report = {**execute(capture, processor, session, seconds=args.seconds), "uses_synthetic_source": False}
-        report = {**report, "run_context": context}
+        # 서버 주소·키는 결과에 남기지 않고 인식 위치만 구분합니다.
+        report = {**report, "run_context": context, "recognition_mode": "REMOTE_API" if args.vision_api_url else "LOCAL"}
         execution_finished = True
         phase = "FINAL_SAVE"
         write_json_atomic(output / "summary.json", report)

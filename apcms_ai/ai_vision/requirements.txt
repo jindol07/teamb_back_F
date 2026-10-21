@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # APCMS AI 프로젝트 requirements.txt
 
 # 1. FastAPI 서버

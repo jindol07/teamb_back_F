@@ -3,6 +3,7 @@
 import contextlib
 import io
 import json
+import os
 import sys
 import tempfile
 import unittest
@@ -11,11 +12,12 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import numpy as np
+import requests
 from ai_vision.paths import RESULT_DIR
 from ai_vision.recognition.live_gate_clock import LiveGateClock
 from ai_vision.recognition.live_gate_processor import LiveGateProcessor
 from ai_vision.recognition.live_gate_session import LiveGateSession
-from ai_vision.recognition.run_live_gate import execute, main
+from ai_vision.recognition.run_live_gate import execute, main, _create_http_client
 from ai_vision.recognition.local_io import write_json_atomic
 from ai_vision.recognition.live_gate_report import load_report
 from ai_vision.tests.recognition.test_live_gate_processor import CONFIG
@@ -42,6 +44,149 @@ class FakeCapture:
 
 
 class RunLiveGateTests(unittest.TestCase):
+    def test_remote_samples_reach_consensus_and_single_boot_attempt(self):
+        from ai_vision.recognition.remote_plate_reader import RemotePlateReader
+        from ai_vision.tests.recognition.test_remote_plate_reader import make_session
+        cloud = make_session([{'plate_number': '91소6408', 'plate_type': 'KOREAN_VALID', 'plate_confidence': .9}])
+        reader = RemotePlateReader('http://vision', session_factory=lambda: cloud)
+        frames = [np.full((100, 100, 3), i, dtype=np.uint8) for i in range(7)]
+        def tracker(frame):
+            index = int(frame[0, 0, 0])
+            y = 20 if index < 3 else (50 if index == 3 else 80)
+            return [{'track_id': 7, 'box': [40, y - 10, 60, y + 10]}]
+        processor = LiveGateProcessor(CONFIG, tracker, reader.read)
+        boot = Mock()
+        boot.post.side_effect = requests.Timeout()
+        client = VehicleHTTPClient('http://boot/alpharking/admin', 'BOOT_KEY', True, session_factory=lambda: boot)
+        session = self.session()
+        session.flow = VehicleDeliveryFlow(client)
+        result = execute(FakeCapture(frames), processor, session,
+                         monotonic_reader=iter(i * .3 for i in range(7)).__next__, allow_source_end=True)
+        self.assertGreaterEqual(cloud.post.call_count, 2)
+        self.assertEqual(result['processed_passages'], 1)
+        self.assertEqual(result['request_attempts'], 1)
+        self.assertEqual(result['results'][0]['plate_consensus']['plate_number'], '91소6408')
+        self.assertEqual(result['results'][0]['receipt_state'], 'DELIVERY_UNKNOWN')
+        boot.post.assert_called_once()
+        self.assertNotIn('headers', cloud.post.call_args.kwargs)
+
+    def test_remote_mode_injects_reader_without_local_ocr_or_boot_requests(self):
+        root = self.output_folder()
+        config = root / 'config.json'
+        config.write_text(json.dumps(CONFIG), encoding='utf-8')
+        def finish(capture, processor, session, **kwargs):
+            self.assertFalse(session.flow.client.enabled)
+            session.close()
+            return {**session.summary(), 'status': 'STOPPED'}
+        with patch('ai_vision.recognition.remote_plate_reader.RemotePlateReader') as remote, \
+                patch('ai_vision.recognition.run_live_gate.LiveGateProcessor') as processor, \
+                patch('cv2.VideoCapture'), patch('ai_vision.recognition.run_live_gate.execute', side_effect=finish), \
+                contextlib.redirect_stdout(io.StringIO()):
+            main(['--config', str(config), '--camera-id', 'TEST', '--down-direction', 'ENTRY',
+                  '--vision-api-url', 'http://cloud-private:8000', '--output-dir', str(root / 'run')])
+        processor.assert_called_once_with(CONFIG, plate_reader=remote.return_value.read)
+        remote.assert_called_once_with('http://cloud-private:8000')
+        summary = (root / 'run' / 'summary.json').read_text(encoding='utf-8')
+        self.assertEqual(json.loads(summary)['recognition_mode'], 'REMOTE_API')
+        self.assertNotIn('cloud-private', summary)
+
+    def test_demo_rejects_remote_camera_inference(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            main(['--demo', '--vision-api-url', 'http://cloud', '--output-dir', str(self.output_folder() / 'run')])
+
+    def test_enabled_http_reads_project_settings_without_mutating_process_environment(self):
+        path = self.output_folder() / ".env"
+        path.write_text('VISION_BOOT_CONTEXT_URL=http://file-host:81/alpharking/admin\nAI_OCCUPANCY_API_KEY=FILE_KEY\n', encoding="utf-8-sig")
+        with patch.dict("os.environ", {}, clear=True):
+            client = _create_http_client(True, env_file=path)
+            self.assertTrue(client.enabled)
+            self.assertEqual(client._url, "http://file-host:81/alpharking/admin/api/parking/ai/vehicle-events")
+            self.assertEqual(client._api_key, "FILE_KEY")
+            self.assertNotIn("AI_OCCUPANCY_API_KEY", os.environ)
+
+    def test_explicit_environment_and_command_override_file_settings(self):
+        path = self.output_folder() / ".env"
+        path.write_text('VISION_BOOT_CONTEXT_URL=http://file-host\nAI_OCCUPANCY_API_KEY=FILE_KEY\n', encoding="utf-8")
+        with patch.dict("os.environ", {"VISION_BOOT_CONTEXT_URL": "http://env-host", "AI_OCCUPANCY_API_KEY": "ENV_KEY"}, clear=True):
+            client = _create_http_client(True, "http://command-host", path)
+            self.assertEqual(client._url, "http://command-host/api/parking/ai/vehicle-events")
+            self.assertEqual(client._api_key, "ENV_KEY")
+            self.assertEqual(_create_http_client(True, env_file=path)._url, "http://env-host/api/parking/ai/vehicle-events")
+            with patch.dict("os.environ", {"AI_OCCUPANCY_API_KEY": ""}):
+                with self.assertRaises(ValueError):
+                    _create_http_client(True, env_file=path)
+
+    def test_disabled_http_does_not_read_env_file(self):
+        with patch("dotenv.dotenv_values", side_effect=AssertionError("설정 파일 접근 금지")):
+            self.assertFalse(_create_http_client(False).enabled)
+
+    def test_existing_real_output_stops_before_model_preparation(self):
+        root = self.output_folder()
+        config = root / "config.json"
+        config.write_text(json.dumps(CONFIG), encoding="utf-8")
+        output = root / "run"
+        output.mkdir()
+        with patch("ai_vision.recognition.run_live_gate.LiveGateProcessor") as processor, \
+                patch("cv2.VideoCapture") as camera, contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            main(["--config", str(config), "--camera-id", "TEST", "--down-direction", "ENTRY", "--output-dir", str(output)])
+        processor.assert_not_called()
+        camera.assert_not_called()
+
+    def test_session_clock_starts_after_camera_creation(self):
+        root = self.output_folder()
+        config = root / "config.json"
+        config.write_text(json.dumps(CONFIG), encoding="utf-8")
+        order = []
+        def camera(index):
+            order.append("camera")
+            return Mock()
+        def session(*args, **kwargs):
+            order.append("session")
+            return LiveGateSession(*args, **kwargs)
+        def finish(capture, processor, session, **kwargs):
+            session.close()
+            return {**session.summary(), "status": "STOPPED"}
+        with patch("ai_vision.recognition.run_live_gate.LiveGateProcessor") as factory, \
+                patch("cv2.VideoCapture", side_effect=camera), \
+                patch("ai_vision.recognition.run_live_gate.LiveGateSession", side_effect=session), \
+                patch("ai_vision.recognition.run_live_gate.execute", side_effect=finish), contextlib.redirect_stdout(io.StringIO()):
+            factory.return_value.prepare.side_effect = lambda: order.append("prepare")
+            main(["--config", str(config), "--camera-id", "TEST", "--down-direction", "ENTRY",
+                  "--output-dir", str(root / "run")])
+        self.assertEqual(order, ["prepare", "camera", "session"])
+
+    def test_both_crossing_directions_and_uncertain_plates_with_enabled_http(self):
+        # 실제 영상 정확도가 아니라 프레임 처리부터 송신 판단까지의 연결을 확인합니다.
+        for reverse, down, text, kind in ((False, "EXIT", "91소6408", "KOREAN_VALID"),
+                                          (True, "ENTRY", "91소6408", "KOREAN_VALID"),
+                                          (True, "EXIT", "91소6408", "KOREAN_VALID"),
+                                          (False, "ENTRY", "10-1557", "REVIEW"),
+                                          (False, "ENTRY", "ABC123", "FOREIGN_OR_OTHER")):
+            with self.subTest(reverse=reverse, down=down, kind=kind):
+                frames = [np.full((100, 100, 3), i, dtype=np.uint8) for i in range(7)]
+                def tracker(frame):
+                    index = int(frame[0, 0, 0])
+                    y = 20 if index < 3 else (50 if index == 3 else 80)
+                    y = 100 - y if reverse else y
+                    return [{"track_id": 7, "box": [40, y - 10, 60, y + 10]}]
+                processor = LiveGateProcessor(CONFIG, tracker, lambda crop: {
+                    "plate_number": text, "plate_type": kind, "plate_detection_confidence": .8})
+                network = Mock()
+                network.post.side_effect = requests.Timeout()
+                client = VehicleHTTPClient("http://boot:81/alpharking/admin", "TEST", True, session_factory=lambda: network)
+                session = LiveGateSession("TEST", down, self.session().clock, VehicleDeliveryFlow(client))
+                result = execute(FakeCapture(frames), processor, session,
+                                 monotonic_reader=iter(i * .3 for i in range(7)).__next__, allow_source_end=True)
+                self.assertEqual(result["processed_passages"], 1)
+                if kind == "KOREAN_VALID":
+                    network.post.assert_called_once()
+                    expected = down if not reverse else {"ENTRY": "EXIT", "EXIT": "ENTRY"}[down]
+                    self.assertEqual(network.post.call_args.kwargs["json"]["direction"], expected)
+                    self.assertEqual(result["results"][0]["receipt_state"], "DELIVERY_UNKNOWN")
+                else:
+                    network.post.assert_not_called()
+                    self.assertEqual(result["decision_counts"], {"BLOCKED": 1})
+
     def test_model_preparation_failure_does_not_start_clock_or_camera(self):
         root = self.output_folder()
         config = root / "config.json"
@@ -81,7 +226,8 @@ class RunLiveGateTests(unittest.TestCase):
         for environment in ({}, {"VISION_BOOT_CONTEXT_URL": "http://localhost:81/alpharking/admin"},
                             {"AI_OCCUPANCY_API_KEY": "PRIVATE_KEY"}):
             with patch.dict("os.environ", environment, clear=True), patch("cv2.VideoCapture") as camera, \
-                    patch("ai_vision.recognition.run_live_gate.LiveGateProcessor") as processor:
+                    patch("ai_vision.recognition.run_live_gate.LiveGateProcessor") as processor, \
+                    patch("ai_vision.recognition.run_live_gate.BASE_DIR", root / "ai_vision"):
                 with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
                     main(["--enable-http", "--config", str(config), "--camera-id", "TEST", "--down-direction", "ENTRY",
                           "--output-dir", str(root / "run")])
