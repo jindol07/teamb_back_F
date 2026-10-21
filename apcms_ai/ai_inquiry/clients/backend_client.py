@@ -96,17 +96,12 @@ class BackendClient:
     async def conversation_history(self, token, conversation_id):
         return await self.request('GET', f'api/chatbot/conversations/{conversation_id}/messages', token)
 
-    async def get_public_parking_spaces(self):
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                response = await client.get(
-                    "http://127.0.0.1:81/alpharking/admin/api/parking/spaces/public"
-                )
-                response.raise_for_status()
-                return response.json()
-
-        except httpx.HTTPError as e:
-            raise BackendError("실시간 주차 현황 조회 실패") from e
+    async def get_public_parking_spaces(self, token):
+        # 기존 사용자 서버 주소와 JWT 전달 방식을 그대로 재사용합니다.
+        data = await self.request("GET", "api/parking/spaces", token)
+        if not isinstance(data, list) or any(not isinstance(row, dict) for row in data):
+            raise BackendError("사용자 주차 현황 API 응답이 목록 형식이 아닙니다.")
+        return data
 
     # ----------로그인시 삭제해야함
     async def get_test_reservations(self):
