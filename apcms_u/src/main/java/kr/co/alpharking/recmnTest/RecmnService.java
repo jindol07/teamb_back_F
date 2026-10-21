@@ -1,5 +1,6 @@
 package kr.co.alpharking.recmnTest;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
@@ -8,10 +9,10 @@ import java.util.concurrent.ThreadLocalRandom;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
-//@Service
+@Service
 public class RecmnService {
 
-    //@Autowired
+    @Autowired
     private RecmnRepository recmnRepository;
 
     public List<PrkPastHisRes> getPrkPastHisById(Long officeId) {
@@ -43,6 +44,38 @@ public class RecmnService {
         return result;
     }
 
+    // 주차 이력이 없는 사용자는 예약 가능한 전체 공간 중 무작위 추천
+    public ParkingRecommendationResponse recommendRandomParking(
+            ParkingRecommendationRequest request
+    ) {
+        if (request.getStartDate() == null || request.getEndDate() == null) {
+            throw new IllegalArgumentException("예약 시작일과 종료일을 선택해 주세요.");
+        }
+        if (request.getEndDate().isBefore(request.getStartDate())) {
+            throw new IllegalArgumentException("종료일은 시작일보다 빠를 수 없습니다.");
+        }
+
+        LocalDateTime startAt = request.getStartDate().atStartOfDay();
+        LocalDateTime endAt = request.getEndDate()
+                .plusDays(1)
+                .atStartOfDay()
+                .minusNanos(1);
+        List<Object[]> availableSpaces =
+                recmnRepository.findAvailableSpaces(startAt, endAt);
+
+        if (availableSpaces.isEmpty()) {
+            throw new IllegalArgumentException("선택한 기간에 예약 가능한 공간이 없습니다.");
+        }
+
+        Object[] selectedSpace = availableSpaces.get(
+                ThreadLocalRandom.current().nextInt(availableSpaces.size()));
+        return new ParkingRecommendationResponse(
+                ((Number) selectedSpace[0]).longValue(),
+                ((Number) selectedSpace[1]).intValue(),
+                String.valueOf(selectedSpace[2]),
+                Integer.parseInt(String.valueOf(selectedSpace[3]).trim())
+        );
+    }
     // 선택한 기간에 이용 가능한 공간 중 과거 이용이 가장 많았던 층의 공간을 추천
     public ParkingRecommendationResponse recommendParking(
             Long officeId,
