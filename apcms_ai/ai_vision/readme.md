@@ -14,7 +14,7 @@
 - 저장 영상의 차량 추적 → 화면 방향 UP/DOWN 판정 → 통과 ID별 OCR → 결과 저장
 - 저장 결과 조회·검색·CSV, 수동 번호판 정답 비교, 오프라인 이미지 검토, 로그 연결 진단
 - 입출차 요청 검증·초안·메모리 중복 억제·응답 분류·기본 비활성 HTTP 클라이언트
-- 최근 기능 작업의 자동 테스트 490개 통과. 제거한 부가 도구의 전용 테스트도 함께 정리
+- 복구한 Python 3.12.7 가상환경의 자동 테스트 508개 통과
 - 카메라 프레임 수집·추적·OCR·기본 비활성 전송 판단의 세션 루프 구현
 - 종료된 실시간 세션 요약 검사와 HTML·CSV 보고서 생성
 - 카메라 실행 전 설정·설치 정보·모델 파일 점검, 선택적인 한 프레임 장치 확인
@@ -37,7 +37,9 @@
 - DB 없는 회귀 검사 단일 명령과 PC별 Python·패키지 버전 비교
 - 별도 프로세스에서 API·영상·OCR 패키지 import 실패·시간 초과 점검
 - 로컬 수동 요청과 정지 사진 인식값의 Boot 입출차 처리 및 DB 저장을 확인
-- 실제 카메라 하드웨어·한국 번호판 주행·카메라 자동 전송의 통합 검증은 아직 남음
+- 실제 USB 카메라에서 5초간 63프레임 처리와 정상 종료 확인(HTTP 비활성)
+- 현장 USB 카메라 추적과 원격 Vision API 번호판 인식을 연결하는 실행 옵션 추가
+- 실제 출입구 구도·한국 번호판 주행·카메라 자동 전송의 통합 검증은 아직 남음
 - 한국 번호판 주행 영상의 정확도는 미검증. traffic 영상은 외국 번호판 영상
 - 사용자 공유 AWS 결과: Docker 빌드·재시작·한국 번호판 정지 이미지 인식 성공 (아래 기록 참조)
 
@@ -46,6 +48,70 @@
 확인 없이 ENTRY/EXIT로 매핑하지 않습니다. UUID는 DB에 저장하지 않는 설계입니다.
 
 ## 작업 환경과 서버 실행
+
+### 2026-10-21 가상환경 복구 완료
+
+기존 `.venv312`의 사본은 조사한 위치에서 찾지 못해 Python 3.12.7로
+`apcms_ai/.venv312`를 새로 구성했습니다. 시스템 기본 Python이나 Anaconda를 바꾸지
+않고 이 프로젝트의 가상환경에만 패키지를 설치했습니다. 실행 기준 폴더는
+`D:\finalProjectB\back\apcms_ai`입니다.
+
+```powershell
+# 활성화 여부와 관계없이 복구한 인터프리터를 직접 지정할 수 있습니다.
+.\.venv312\Scripts\python.exe -m ai_vision.tests.run_checks
+```
+
+- `pip check`: 의존성 충돌 없음
+- 전체 회귀 테스트: 복구한 가상환경에서 **508개 실행 통과**
+- 실제 `test_images/car12.png`: 차량 1대, 최종 `91소6408` / KOREAN_VALID 확인
+- 1차 OCR `91소66408`은 기존 전처리 재시도에서 `91소6408`로 인식
+- 이번 복구 검증에서는 Boot·DB 요청을 보내지 않았으며 카메라·주행도 실행하지 않음
+
+설치는 `requirements-runtime.txt`를 사용했고 Starlette 1.8.0·httpx2 2.13.1은 이전
+회사 환경 기록에 맞췄습니다. 기존 기록과 비교한 관리 대상 버전의 차이는
+`opencv-python` 4.11.0.86 → 4.10.0.84 하나입니다. 두 OpenCV 배포판을 현재
+requirements에 맞춰 4.10.0.84로 통일한 결과입니다. 기록에 없는 간접 의존성까지
+과거와 완전히 동일하다는 뜻은 아닙니다.
+
+- 기존 기록: [company_windows_py312.json](data/runtime/company_windows_py312.json)
+- 복구 기록: [company_windows_py312_restored_20261021.json](data/runtime/company_windows_py312_restored_20261021.json)
+- 전체 고정 버전: [company_windows_py312_restored_20261021.txt](data/runtime/company_windows_py312_restored_20261021.txt)
+
+다시 구성할 때는 Python 3.12로 가상환경을 만든 뒤 위 전체 버전 파일을 사용합니다.
+이 파일은 이번 Windows 복구 환경의 목록이며 Docker에는 기존 Linux용 requirements를
+사용합니다. Windows에서 한글 주석을 읽도록 Vision requirements 두 파일에는 UTF-8
+선언을 추가했습니다.
+
+```powershell
+.\.venv312\Scripts\python.exe -X utf8 -m pip install -r ai_vision/data/runtime/company_windows_py312_restored_20261021.txt
+.\.venv312\Scripts\python.exe -m pip check
+```
+
+기본 `models` 폴더의 두 파일은 `D:\finalProjectB\my\ai\models`에서 복사해
+복구했고 원본·사본 SHA-256 일치를 확인했습니다. 기존 OCR 모델 캐시도 실제 인식에
+재사용했습니다. `.env`는 보완한 `.env.example`에서 재생성했으며 전송은 기본
+비활성입니다. 기존 API 키는 원본을 찾지 못해 재생성 시 빈 값으로 두었습니다.
+최종 점검에서는 로컬 `.env`의 `AI_OCCUPANCY_API_KEY`에 값이 입력된 상태를 확인했으며
+그 값은 출력하거나 덮어쓰지 않았습니다. Boot와의 일치 여부는 이번에 확인하지 않았고
+기존 sender용 `PARKING_AI_API_KEY`는 빈 값입니다. `.env`·가상환경·모델은 Git에
+포함하지 않습니다.
+
+이전 PR 커밋 `26a2330a2`에는 핵심 모듈의 사용 코드는 포함됐지만 새 구현 파일은
+포함되지 않았습니다. 다음 구현과 대응 테스트는 유지하고 다음 커밋에 함께 추가해야
+합니다. 수정 파일만 커밋하면 다른 PC·배포 환경에서 import가 실패합니다.
+
+| 유지할 파일 | 사용하는 기능 |
+| --- | --- |
+| `recognition/plate_review.py` | 번호판 인식·실시간 처리·검토 사유 표시 |
+| `upload_policy.py` | 이미지·multipart 공통 용량 제한 |
+| `http_diagnostics.py` | 서버 요청 ID·처리 시간·오류 기록 |
+| `upload_limits.py` | 업로드 수신·동시 요청 제한과 파일 정리 |
+| `recognition/check_deployed_api.py` | 단일 이미지 API 점검 |
+| `recognition/check_deployed_cases.py` | 여러 이미지 JSON 점검 |
+
+`run_checks.py`의 등록과 실제 파일·내부 import 대상 검사도 복구했습니다. 별도
+HTML·배포 전후 비교 도구와 전용 테스트는 삭제한 상태를 유지합니다. 기존 가상환경과
+로컬 설정이 사라진 시점·원인은 확인된 기록이 없어 단정하지 않습니다.
 
 ### Linux·Docker 배포 준비
 
@@ -154,7 +220,7 @@ import 시 GUI·폴더 생성을 하지 않도록 보완했고, 공통 볼륨 �
 주차 API는 누락·권한 오류·잘못된 인코딩·중복 키·NaN·손상 JSON을 503으로 반환합니다.
 편집기의 읽기 전용 저장 실패도 503으로 응답하고, 좌표·점유 결과는 원자적으로 저장합니다.
 전체 `.py` 파일은 실행 없이 구문 검사했습니다. 배포 테스트를 통합 검사에 포함했으며,
-전체 490개는 Windows에서 통과했습니다. 다음 명령으로 실행합니다.
+전체 508개는 복구한 Windows 가상환경에서 통과했습니다. 다음 명령으로 실행합니다.
 
 ```bash
 python -m unittest ai_vision.tests.recognition.test_deployment_runtime
