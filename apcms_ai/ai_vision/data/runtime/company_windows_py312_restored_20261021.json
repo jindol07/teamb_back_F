@@ -1,0 +1,30 @@
+{
+  "record_type": "VISION_RUNTIME_SNAPSHOT",
+  "python": "3.12.7",
+  "implementation": "CPython",
+  "system": "Windows",
+  "machine": "AMD64",
+  "virtualenv": true,
+  "packages": {
+    "fastapi": "0.143.2",
+    "starlette": "1.8.0",
+    "httpx": "0.28.1",
+    "httpx2": "2.13.1",
+    "anyio": "4.15.1",
+    "uvicorn": "0.54.0",
+    "python-multipart": "0.0.32",
+    "numpy": "1.26.4",
+    "opencv-python": "4.10.0.84",
+    "opencv-contrib-python": "4.10.0.84",
+    "ultralytics": "8.4.178",
+    "lap": "0.5.13",
+    "torch": "2.14.1",
+    "paddlepaddle": "3.3.1",
+    "paddlepaddle-gpu": null,
+    "paddleocr": "3.7.0",
+    "paddlex": "3.7.2",
+    "Pillow": "12.3.0",
+    "requests": "2.34.2",
+    "python-dotenv": "1.2.4"
+  }
+}
