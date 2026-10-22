@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from ai_vision.recognition.local_io import read_json, write_json_atomic
 
 RECEIPTS = frozenset({'IN_FLIGHT', 'NOT_ALLOWED', 'UPDATED', 'UNCHANGED', 'DUPLICATE',
-                     'SKIPPED_PROTECTED', 'SKIPPED_BEFORE_CORRECTION', 'REJECTED', 'DELIVERY_UNKNOWN'})
+                     'SKIPPED_PROTECTED', 'SKIPPED_BEFORE_CORRECTION', 'REJECTED', 'DELIVERY_UNKNOWN',
+                     'QUEUED', 'CANCELLED_BEFORE_SEND', 'NOT_SENT_QUEUE_FULL'})
 STATUSES = frozenset({'RUNNING', 'COMPLETED', 'INCOMPLETE', 'STOPPED', 'CANCELLED', 'FAILED', 'DELIVERY_STOPPED'})
 
 
@@ -52,6 +53,7 @@ def inspect_report(path):
     review = uncertain > 0 or (not report['dry_run'] and report['status'] in ('RUNNING', 'FAILED', 'DELIVERY_STOPPED'))
     review = review or (not report['dry_run'] and (unrecorded > 0 or attempts > len(deliveries)))
     review = review or any(counts.get(key, 0) for key in ('REJECTED', 'SKIPPED_PROTECTED', 'SKIPPED_BEFORE_CORRECTION'))
+    review = review or any(counts.get(key, 0) for key in ('QUEUED', 'CANCELLED_BEFORE_SEND', 'NOT_SENT_QUEUE_FULL'))
     action = '서버 반영 여부·구획 보호·오류 원인을 확인한 뒤 새 세션을 시작하세요.' if review else '자동 재전송은 없습니다. 현재 구도와 구획 상태를 확인한 뒤 새 세션을 시작하세요.'
     return {'status': report['status'], 'dry_run': report['dry_run'], 'event_count': len(events),
             'receipt_counts': counts, 'uncertain_count': uncertain, 'unrecorded_count': unrecorded,
@@ -89,21 +91,35 @@ def checkpoint(output_dir, report, processor, delivery=None):
     write_json_atomic(output_dir / 'parking_camera_check.json', report)
 
 
-def deliver_changes(output_dir, report, processor, delivery, events):
+def deliver_changes(output_dir, report, processor, delivery, events, worker=None):
     # 2. HTTP 호출 전 시도 예정 이벤트를 기록하며, 재시작 후 자동 재생하지 않습니다.
     for event in events:
         if event['space_code'] not in delivery.settings['allowed_codes']:
             report['deliveries'].append({'event_id': event['event_id'], 'status': 'NOT_ALLOWED'})
             continue
-        receipt = {'event_id': event['event_id'], 'status': 'IN_FLIGHT'}
+        receipt = {'event_id': event['event_id'], 'status': 'QUEUED' if worker is not None else 'IN_FLIGHT'}
         report['deliveries'].append(receipt)
         checkpoint(output_dir, report, processor, delivery)
+        if worker is not None:
+            if not worker.enqueue(event, receipt):
+                receipt['status'] = 'NOT_SENT_QUEUE_FULL'
+                worker.cancel_queued()
+                report['status'] = 'DELIVERY_STOPPED'
+                checkpoint(output_dir, report, processor, delivery)
+                return False
+            continue
         receipt.update(delivery.send(event))
         checkpoint(output_dir, report, processor, delivery)
         if delivery.blocked:
             report['status'] = 'DELIVERY_STOPPED'
             checkpoint(output_dir, report, processor, delivery)
             return False
+    if worker is not None:
+        active = worker.poll(lambda: checkpoint(output_dir, report, processor, delivery))
+        if not active:
+            report['status'] = 'DELIVERY_STOPPED'
+            checkpoint(output_dir, report, processor, delivery)
+        return active
     return True
 
 

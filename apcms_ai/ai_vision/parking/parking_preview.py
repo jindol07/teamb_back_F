@@ -14,7 +14,7 @@ class ParkingPreview:
         self.enable_http = enable_http
         self.source_label = source_label
 
-    def show(self, frame, preparing=False):
+    def show(self, frame, preparing=False, pending_http=0):
         # 1. 원본 영상은 변경하지 않고 좌표와 조작 안내만 덧그립니다.
         image = frame.copy()
         if self.config is not None:
@@ -26,7 +26,7 @@ class ParkingPreview:
                 cv2.polylines(image, [points], True, (0, 255, 255), 2)
         text = 'SPACE: start / Q: cancel' if preparing else 'Q: stop'
         if self.enable_http:
-            text = 'LIVE HTTP | ' + text
+            text = f'LIVE HTTP pending={pending_http} | ' + text
         cv2.putText(image, text, (10, 25), cv2.FONT_HERSHEY_SIMPLEX, .6, (0, 255, 0), 2)
         if self.source_label:
             cv2.putText(image, self.source_label, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, .6, (0, 255, 255), 2)

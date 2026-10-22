@@ -573,7 +573,7 @@ class ParkingOperationalTests(ParkingSceneFixture, unittest.TestCase):
                                            enable_http=True, allowed_codes=['1F-A01'],
                                            environment={'AI_OCCUPANCY_API_KEY': 'secret'})
             self.assertEqual(report['status'], 'DELIVERY_STOPPED')
-            self.assertEqual(report['deliveries'][0]['status'], 'IN_FLIGHT')
+            self.assertEqual(report['deliveries'][0]['status'], 'DELIVERY_UNKNOWN')
             self.assertEqual(report['http_requests'], 1)
             capture.release.assert_called_once()
 
@@ -776,6 +776,13 @@ class ParkingReportRecoveryTests(unittest.TestCase):
     def test_skipped_and_rejected_receipts_require_operator_review(self):
         from ai_vision.parking.inspect_parking_camera import inspect_report
         for receipt in ('SKIPPED_PROTECTED', 'SKIPPED_BEFORE_CORRECTION', 'REJECTED'):
+            with self.subTest(receipt=receipt):
+                self.save(receipt=receipt)
+                self.assertTrue(inspect_report(self.path)['requires_review'])
+
+    def test_queued_cancelled_and_overflow_records_require_review(self):
+        from ai_vision.parking.inspect_parking_camera import inspect_report
+        for receipt in ('QUEUED', 'CANCELLED_BEFORE_SEND', 'NOT_SENT_QUEUE_FULL'):
             with self.subTest(receipt=receipt):
                 self.save(receipt=receipt)
                 self.assertTrue(inspect_report(self.path)['requires_review'])
