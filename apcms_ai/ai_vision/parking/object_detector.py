@@ -1,17 +1,17 @@
+# D:/finalProjectB/back/apcms_ai/ai_vision/parking/object_detector.py
 # 12개 영역 분할 탐지 실험 (레이어를 나누어 탐지)
 from pathlib import Path
 from collections import Counter
 
 import cv2
-from ultralytics import YOLO
 
-BASE_DIR = Path(__file__).resolve().parent.parent
+from ai_vision.paths import MODEL_DIR, DATA_DIR, RESULT_DIR as VISION_RESULT_DIR
+from ai_vision.recognition.model_files import require_model_file
 
-MODEL_PATH = BASE_DIR / "models" / "yolo11n.pt"
-VIDEO_PATH = BASE_DIR / "data" / "videos" / "parking_test.mp4"
+MODEL_PATH = MODEL_DIR / "yolo11n.pt"
+VIDEO_PATH = DATA_DIR / "videos" / "parking_test.mp4"
 
-RESULT_DIR = BASE_DIR / "results" / "parking"
-RESULT_DIR.mkdir(parents=True, exist_ok=True)
+RESULT_DIR = VISION_RESULT_DIR / "parking"
 
 # 분할 크기
 ROWS = 3
@@ -22,12 +22,17 @@ VEHICLE_CLASSES = [2, 3, 5, 7]
 
 
 def detect_objects():
-
+    # 모델 누락 시 YOLO의 자동 다운로드를 시도하지 않고 원인을 알립니다.
+    require_model_file(MODEL_PATH)
+    from ultralytics import YOLO
+    # 읽기 전용 코드 폴더에서도 import는 가능하며 실제 실행 시에만 결과 폴더를 만듭니다.
+    RESULT_DIR.mkdir(parents=True, exist_ok=True)
     model = YOLO(MODEL_PATH)
 
     cap = cv2.VideoCapture(VIDEO_PATH)
 
     if not cap.isOpened():
+        cap.release()
         print("영상을 열 수 없습니다.")
         return
 

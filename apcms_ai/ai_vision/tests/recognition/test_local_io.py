@@ -3,6 +3,7 @@
 import tempfile
 import unittest
 import os
+import io
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +12,30 @@ from ai_vision.recognition.local_io import decode_object, iter_jsonl, read_json,
 
 
 class LocalIOTests(unittest.TestCase):
+    def test_excessive_json_nesting_is_validation_error(self):
+        with self.assertRaises(ValueError):
+            decode_object('{"nested":' * 2000 + '{}' + '}' * 2000)
+
+    def test_json_read_is_bounded_even_when_file_metadata_is_unreliable(self):
+        # 파일이 자라는 상황에서도 read()가 무제한 호출되지 않는지 확인합니다.
+        class Stream(io.BytesIO):
+            def read(inner, size=-1):
+                self.assertEqual(size, 9)
+                return super().read(size)
+        with patch("pathlib.Path.open", return_value=Stream(b"{}" + b" " * 100)):
+            with self.assertRaises(ValueError):
+                read_json(self.root / "growing.json", max_bytes=8)
+
+    def test_exact_byte_limit_bom_and_invalid_limits(self):
+        path = self.root / "bounded.json"
+        path.write_bytes(b"\xef\xbb\xbf{}")
+        self.assertEqual(read_json(path, max_bytes=5), {})
+        with self.assertRaises(ValueError):
+            read_json(path, max_bytes=4)
+        for limit in (0, -1, True, 1.5):
+            with self.assertRaises(ValueError):
+                read_json(path, max_bytes=limit)
+
     def test_transient_windows_lock_retried(self):
         path = self.root / "locked.json"
         replace = os.replace

@@ -1,49 +1,80 @@
+# D:/finalProjectB/back/apcms_ai/ai_vision/parking/capture_empty_reference.py
+"""구도를 확인한 뒤 빈 주차면 기준 사진을 새 파일로 저장합니다."""
+
+import argparse
+from pathlib import Path
 import cv2
-
+from ai_vision.camera_runtime import open_camera, CAMERA_BACKENDS, validate_camera_backend
+from ai_vision.parking.parking_preview import ParkingPreview
 from ai_vision.paths import DATA_DIR
+from ai_vision.parking.parking_calibration import configure_resolution, validate_resolution, validate_frame_resolution
 
-SAVE_PATH = DATA_DIR / "parking_spaces" / "empty_reference.jpg" # 빈 주차면 기준 이미지 저장 경로
+SAVE_PATH = DATA_DIR / "parking_spaces" / "empty_reference.jpg"
 
 
-# 1. capture_empty_reference() - 빈 주차면 기준 이미지 촬영
-def capture_empty_reference():
-
-    # 기본 웹캠 연결
-    # 0: 기본 웹캠, CAP_DSHOW: Windows DirectShow 사용
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
-
-    if not cap.isOpened():
-        print("웹캠을 연결할 수 없습니다.")
-        return
-
+def capture_empty_reference(camera_index=0, output_path=None, width=None, height=None, camera_backend='default'):
+    # 1. 기존 기준 사진을 실수로 덮어쓰지 않도록 새 경로만 허용합니다.
+    output_path = Path(output_path) if output_path is not None else SAVE_PATH
+    if type(camera_index) is not int or not 0 <= camera_index <= 99:
+        raise ValueError('카메라 번호는 0~99 정수여야 합니다.')
+    if output_path.suffix.lower() not in ('.jpg', '.jpeg', '.png'):
+        raise ValueError('저장 형식은 jpg 또는 png로 지정하세요.')
+    if output_path.exists():
+        raise ValueError('기준 사진이 이미 있습니다. 새 저장 경로를 지정하세요.')
+    if (width is None) != (height is None):
+        raise ValueError('너비와 높이는 함께 지정하세요.')
+    if width is not None:
+        validate_resolution(width, height)
+    validate_camera_backend(camera_backend)
+    preview = ParkingPreview(source_label=f'Camera {camera_index} / {camera_backend}')
+    capture = None
     try:
-        frame = None
-
-        # 카메라에서 30프레임 읽기(카메라 초기 노출 및 밝기 안정화)
-        # 마지막으로 읽은 프레임을 기준 이미지로 사용
-        for _ in range(30):
-            ret, frame = cap.read()
-
-            if not ret:
-                print("웹캠 촬영에 실패했습니다.")
-                return
-
-        # 이미지 저장 폴더 생성
-        SAVE_PATH.parent.mkdir(parents=True, exist_ok=True)
-
-        # 기준 이미지 저장 및 결과 출력
-        if cv2.imwrite(str(SAVE_PATH), frame):
-            print("빈 주차면 기준 이미지 저장 완료!")
-            print("저장 위치:", SAVE_PATH)
-            print("이미지 크기:", frame.shape[1], "x", frame.shape[0])
+        capture = open_camera(camera_index, backend=camera_backend)
+        if not capture.isOpened():
+            raise OSError('웹캠을 연결할 수 없습니다.')
+        if width is not None:
+            configure_resolution(capture, width, height)
+        # 2. 빈 장면과 구도를 사용자가 확인한 뒤 스페이스바로 촬영합니다.
+        frame = preview.wait_until_ready(capture)
+        if frame is None:
+            print('기준 사진 촬영을 취소했습니다.')
+            return False
+        if width is not None:
+            validate_frame_resolution(frame, width, height)
         else:
-            print("이미지 저장에 실패했습니다.")
-
+            validate_resolution(frame.shape[1], frame.shape[0])
+        ok, encoded = cv2.imencode(output_path.suffix, frame)
+        if not ok:
+            raise OSError('사진을 인코딩하지 못했습니다.')
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        # 3. 촬영 중 다른 프로그램이 같은 파일을 만들었어도 덮어쓰지 않습니다.
+        with output_path.open('xb') as handle:
+            handle.write(encoded.tobytes())
+        print(f'기준 사진 저장: {output_path} / {frame.shape[1]} x {frame.shape[0]}')
+        return True
     finally:
-        # 성공 또는 실패 여부와 관계없이 웹캠 해제
-        cap.release()
+        try:
+            if capture is not None:
+                capture.release()
+        finally:
+            preview.close()
 
 
-# 프로그램 실행부
-if __name__ == "__main__":
-    capture_empty_reference()
+def main(argv=None):
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--camera-index', type=int, default=0)
+    parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--width', type=int, help='촬영 너비, 높이와 함께 지정')
+    parser.add_argument('--height', type=int, help='촬영 높이, 너비와 함께 지정')
+    parser.add_argument('--camera-backend', choices=CAMERA_BACKENDS, default='default', help='카메라 연결 방식')
+    args = parser.parse_args(argv)
+    try:
+        capture_empty_reference(args.camera_index, args.output, args.width, args.height, args.camera_backend)
+    except (ValueError, OSError, RuntimeError) as error:
+        print(f'촬영 실패: {error}')
+        return 1
+    return 0
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

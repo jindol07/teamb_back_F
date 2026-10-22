@@ -1,3 +1,4 @@
+# D:/finalProjectB/back/apcms_ai/ai_vision/recognition/make_motion_video.py
 # APCMS 입출차 방향 판별용 테스트 영상 생성
 # 기존 car12.png 사진을 좌우로 이동시켜
 # ENTRY와 EXIT 방향 테스트에 사용할 영상 생성
@@ -5,12 +6,12 @@
 import cv2
 import numpy as np
 
-from ai_vision.paths import BASE_DIR, RESULT_DIR
+from ai_vision.paths import TEST_IMAGE_DIR, RESULT_DIR
 
 
 # 1. 이미지 및 영상 경로 설정
 
-IMAGE_PATH = BASE_DIR / "test_images" / "car12.png"
+IMAGE_PATH = TEST_IMAGE_DIR / "car12.png"
 SAVE_DIR = RESULT_DIR / "recognition"
 
 # 1-1. 출력 영상 설정

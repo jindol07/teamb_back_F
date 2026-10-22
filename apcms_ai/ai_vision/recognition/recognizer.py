@@ -13,10 +13,12 @@ import re
 import tempfile
 import unicodedata
 import cv2
+import numpy as np
 from functools import wraps
 
 from ai_vision.recognition.recognition_models import RecognitionModels
 from ai_vision.recognition.ocr_image_policy import retry_image_size
+from ai_vision.recognition.plate_review import KOREAN_PLATE_PATTERN, plate_review_reasons
 
 
 # 2. 차량 탐지 클래스 설정
@@ -94,7 +96,7 @@ def classify_plate_format(text):
     # \d{2,3}: 숫자 2~3자리
     # [가-힣]: 한글 1자리
     # \d{4}: 숫자 4자리
-    korean_pattern = r"^\d{2,3}[가-힣]\d{4}$"
+    korean_pattern = KOREAN_PLATE_PATTERN
 
     # fullmatch(): 문자열 전체가 정규식에 맞는지 확인
     if re.fullmatch(korean_pattern, text):
@@ -138,7 +140,7 @@ def cleanup_plate_text(text):
     )
 
     # 6-4. 수정 결과가 정상 한국 번호판인지 검사
-    korean_pattern = r"^\d{2,3}[가-힣]\d{4}$"
+    korean_pattern = KOREAN_PLATE_PATTERN
 
     if re.fullmatch(korean_pattern, cleaned_text):
         return cleaned_text
@@ -148,6 +150,38 @@ def cleanup_plate_text(text):
 
 
 # 7. run_paddleocr() - 번호판 OCR 실행
+
+def _join_plate_ocr(texts, polygons):
+    # 7-1. 번호판 아래의 작은 영문 장식만 구분합니다. 번호 일부를 추측해서 복원하지 않습니다.
+    original = normalize_plate_text("".join(texts))
+    if len(texts) != len(polygons) or not texts:
+        return original
+    normalized = [normalize_plate_text(text) for text in texts]
+    decorations = [i for i, text in enumerate(normalized) if re.fullmatch(r"[A-Z]{3,}", text)]
+    main = [i for i in range(len(texts)) if i not in decorations]
+    candidate = cleanup_plate_text("".join(normalized[i] for i in main))
+    if not decorations or not main or classify_plate_format(candidate) != "KOREAN_VALID":
+        return original
+    # 7-2. 좌표가 없거나 잘못되면 문자를 버리지 않고 원래 결과를 유지합니다.
+    bounds = []
+    for polygon in polygons:
+        try:
+            points = np.asarray(polygon, dtype=float)
+        except (TypeError, ValueError):
+            return original
+        if points.shape != (4, 2) or not np.isfinite(points).all():
+            return original
+        top, bottom = float(points[:, 1].min()), float(points[:, 1].max())
+        if bottom <= top:
+            return original
+        bounds.append((bottom - top, (top + bottom) / 2))
+    height = min(bounds[i][0] for i in main)
+    center = max(bounds[i][1] for i in main)
+    # 7-3. 본문보다 충분히 작고 아래에 있는 영문만 제외합니다. 큰 글자·같은 줄은 유지합니다.
+    if all(bounds[i][0] <= height * .4 and bounds[i][1] > center + height * .5
+           for i in decorations):
+        return candidate
+    return original
 
 @_serialize_inference("ocr")
 def run_paddleocr(image):
@@ -184,14 +218,16 @@ def run_paddleocr(image):
         results = _models.ocr().predict(temp_path)
 
         texts = []
+        polygons = []
 
         # 7-5. 인식된 문자열만 추출
         # rec_texts: PaddleOCR가 인식한 문자 목록
         for item in results:
             texts.extend(item["rec_texts"])
+            polygons.extend(item.get("rec_polys", []))
 
         # 7-6. 여러 문자열을 하나의 번호판 문자열로 연결
-        text = "".join(texts)
+        text = _join_plate_ocr(texts, polygons)
 
     # 7-7. 공백 등을 정리한 문자열 반환
     return normalize_plate_text(text)
@@ -493,7 +529,9 @@ def recognize_plate(plate_crop):
         "retry_ocr": retry_text,
         "retry_type": retry_type,
         "plate_number": final_text,
-        "plate_type": final_type
+        "plate_type": final_type,
+        # 기존 필드는 유지하고 검토 원인만 추가합니다. 전송 허용 플래그가 아닙니다.
+        "review_reasons": plate_review_reasons(final_text, final_type)
     }
 
 
@@ -567,7 +605,8 @@ def recognize_image(image):
             "first_ocr": "",
             "first_type": "",
             "retry_ocr": "",
-            "retry_type": ""
+            "retry_type": "",
+            "review_reasons": plate_review_reasons("", "NOT_DETECTED")
         }
 
         # 13-7. 차량 영역 추출에 실패하면 다음 차량 처리
@@ -600,6 +639,7 @@ def recognize_image(image):
         # 번호판 영역을 잘라내지 못한 경우
         if plate_crop.size == 0:
             vehicle_data["plate_type"] = "CROP_FAILED"
+            vehicle_data["review_reasons"] = plate_review_reasons("", "CROP_FAILED")
             vehicle_results.append(vehicle_data)
             continue
 

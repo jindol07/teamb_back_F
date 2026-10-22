@@ -71,6 +71,16 @@ public class NoticeController {
 		// 파일 저장 전에 인증을 확인하고, 프론트가 보낸 작성자 ID도 덮어씁니다.
 		galleryVO.setWriterAdminId(Math.toIntExact(getAuthenticatedAdminId(authentication)));
 
+		// 빈 파일 항목은 기존처럼 무시하고, 실제 첨부파일은 저장 전에 최대 1개로 제한합니다.
+		int attachmentCount = 0;
+		if (images != null) {
+			for (MultipartFile file : images) {
+				if (!file.isEmpty() && ++attachmentCount > 1) {
+					return ResponseEntity.badRequest().body("첨부파일은 1개만 등록할 수 있습니다.");
+				}
+			}
+		}
+
 		// 첨부파일 정보를 저장할 목록
 		List<NoticeFiles> imageList = new ArrayList<>();
 
@@ -252,7 +262,11 @@ public class NoticeController {
 	// 6. 공지사항 변경 이력 조회
 	// ========================================
 	@GetMapping("/{noticeId}/history")
-	public ResponseEntity<List<NoticeHistory>> getNoticeHistoryList(@PathVariable("noticeId") Integer noticeId) {
+	public ResponseEntity<List<NoticeHistory>> getNoticeHistoryList(@PathVariable("noticeId") Integer noticeId,
+			Authentication authentication) {
+
+		// 보안 필터뿐 아니라 실제 이력 조회 직전에도 인증된 관리자인지 확인합니다.
+		getAuthenticatedAdminId(authentication);
 
 		// NOTICE_HISTORY 테이블에서 이력 조회
 		List<NoticeHistory> historyList = noticeService.getNoticeHistoryList(noticeId);

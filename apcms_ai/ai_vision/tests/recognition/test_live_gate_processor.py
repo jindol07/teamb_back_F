@@ -18,6 +18,29 @@ def stamp(index):
 
 
 class LiveGateProcessorTests(unittest.TestCase):
+    def test_missing_character_reasons_survive_live_session_and_report(self):
+        from ai_vision.recognition.live_gate_clock import LiveGateClock
+        from ai_vision.recognition.live_gate_session import LiveGateSession
+        from ai_vision.recognition.run_live_gate import execute
+        from ai_vision.recognition.live_gate_report import validate_report
+        from ai_vision.recognition.live_gate_report_html import render_html
+        reader = lambda crop: {"plate_number": "10-1557", "plate_type": "REVIEW",
+                               "review_reasons": ["FORGED_REASON"]}
+        processor = LiveGateProcessor(CONFIG, self.tracker, reader)
+        capture = Mock()
+        capture.read.side_effect = [(True, np.full((100, 100, 3), i, dtype=np.uint8)) for i in range(7)] + [(False, None)]
+        clock = LiveGateClock(monotonic_start=0)
+        session = LiveGateSession("TEST_GATE", "ENTRY", clock=clock)
+        times = iter(i * .3 for i in range(7))
+        report = execute(capture, processor, session, seconds=10, allow_source_end=True,
+                         monotonic_reader=lambda: next(times), deadline_reader=lambda: 0)
+        report["uses_synthetic_source"] = True
+        self.assertEqual(report["results"][0]["review_reasons"], ["KOREAN_CHARACTER_NOT_FOUND"])
+        self.assertEqual(report["results"][0]["decision"], "BLOCKED")
+        self.assertEqual(report["request_attempts"], 0)
+        checked = validate_report(report)
+        self.assertIn("KOREAN_CHARACTER_NOT_FOUND", render_html(checked))
+
     def process_path(self, processor, path):
         passages = []
         for index, (seconds, x, y) in enumerate(path):
@@ -159,3 +182,55 @@ class LiveGateProcessorTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 processor.process(np.zeros((100, 100, 3), dtype=np.uint8), stamp(0), minimum_frame_index=value)
         tracker.assert_not_called()
+
+    def test_duplicate_and_reversed_frames_preserve_previous_state(self):
+        tracker = Mock(return_value=[{"track_id": 1, "box": [20, 20, 40, 40]}])
+        processor = LiveGateProcessor(CONFIG, tracker)
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        processor.process(frame, stamp(2))
+        before = (processor.statistics(), processor._bytes, list(processor._buffers[1]))
+        for invalid in (stamp(2), stamp(1), FrameStamp(3, .6, stamp(3).captured_at),
+                        FrameStamp(3, .5, stamp(3).captured_at)):
+            with self.assertRaises(ValueError):
+                processor.process(frame, invalid)
+        self.assertEqual(tracker.call_count, 1)
+        self.assertEqual((processor.statistics(), processor._bytes, list(processor._buffers[1])), before)
+        processor.process(frame, stamp(3))
+        self.assertEqual(tracker.call_count, 2)
+
+    def test_invalid_stamp_fields_never_reach_tracker(self):
+        tracker = Mock()
+        processor = LiveGateProcessor(CONFIG, tracker)
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        invalid = [None, FrameStamp(True, 0, stamp(0).captured_at),
+                   FrameStamp(-1, 0, stamp(0).captured_at),
+                   FrameStamp(0, 0, datetime(2020, 1, 1))]
+        invalid += [FrameStamp(0, seconds, stamp(0).captured_at)
+                    for seconds in (True, -1, float("nan"), float("inf"), "0")]
+        for value in invalid:
+            with self.assertRaises(ValueError):
+                processor.process(frame, value)
+        tracker.assert_not_called()
+        self.assertIsNone(processor._shape)
+        self.assertEqual(processor.statistics()["frames"], 0)
+
+    def test_history_boundary_cannot_move_backwards(self):
+        tracker = Mock(return_value=[])
+        processor = LiveGateProcessor(CONFIG, tracker)
+        frame = np.zeros((100, 100, 3), dtype=np.uint8)
+        processor.process(frame, stamp(2), minimum_frame_index=2)
+        with self.assertRaises(ValueError):
+            processor.process(frame, stamp(3), minimum_frame_index=1)
+        self.assertEqual(tracker.call_count, 1)
+        processor.process(frame, stamp(3))
+        self.assertEqual(processor._minimum_frame_index, 2)
+
+    def test_long_gap_drops_old_crops_and_does_not_create_false_crossing(self):
+        reader = Mock(side_effect=AssertionError("이전 차량 표본 재사용 금지"))
+        processor = LiveGateProcessor(CONFIG, plate_reader=reader)
+        path = [(0, 50, 20), (.3, 50, 20), (.6, 50, 20),
+                (2, 50, 80), (2.3, 50, 80), (2.6, 50, 80)]
+        self.assertEqual(self.process_path(processor, path), [])
+        self.assertEqual(processor.statistics()["gap_resets"], 1)
+        self.assertTrue(all(row["frame_index"] >= 3 for row in processor._buffers[7]))
+        reader.assert_not_called()

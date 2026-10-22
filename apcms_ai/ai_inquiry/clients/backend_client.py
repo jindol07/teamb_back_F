@@ -96,35 +96,22 @@ class BackendClient:
     async def conversation_history(self, token, conversation_id):
         return await self.request('GET', f'api/chatbot/conversations/{conversation_id}/messages', token)
 
-    async def get_public_parking_spaces(self):
-        try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                response = await client.get(
-                    "http://127.0.0.1:81/alpharking/admin/api/parking/spaces/public"
-                )
-                response.raise_for_status()
-                return response.json()
-
-        except httpx.HTTPError as e:
-            raise BackendError("실시간 주차 현황 조회 실패") from e
+    async def get_public_parking_spaces(self, token):
+        # 기존 사용자 서버 주소와 JWT 전달 방식을 그대로 재사용합니다.
+        data = await self.request("GET", "api/parking/spaces", token)
+        if not isinstance(data, list) or any(not isinstance(row, dict) for row in data):
+            raise BackendError("사용자 주차 현황 API 응답이 목록 형식이 아닙니다.")
+        return data
 
     # ----------로그인시 삭제해야함
-    async def get_test_reservations(self):
+    async def get_test_reservations(self, token=None):
         if (
             self.cfg["env"] != "development"
             or self.cfg["mode"] != "MOCK"
             or not self.cfg["test_reservation_enabled"]
         ):
             raise PermissionError("개발용 예약 조회가 비활성화되어 있습니다.")
-        try:
-            async with httpx.AsyncClient(
-                base_url=self.cfg["base_url"], timeout=15
-            ) as client:
-                response = await client.get("api/chatbot/reservations/1")
-                response.raise_for_status()
-                return response.json()
-
-        except httpx.HTTPError as e:
-            raise BackendError("테스트 예약 조회 실패") from e
+        # 개발용 호출도 고정 ID를 사용하지 않고 JWT로 인증된 본인만 조회합니다.
+        return await self.request("GET", "api/chatbot/reservations", token)
 
     # ----------------

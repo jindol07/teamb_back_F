@@ -55,3 +55,45 @@ class LiveGatePreflightTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             run_preflight(self.config, "TEST", "ENTRY", probe=True, camera_checker=camera)
         camera.assert_not_called()
+
+    # 1. import 실패가 있을 때 실제 카메라를 열지 않는지 확인합니다.
+    def test_import_failure_blocks_camera_but_preserves_both_reports(self):
+        camera = Mock()
+        checker = Mock(side_effect=[{"status": "FAILED"}, {"status": "PASSED"}])
+        report = run_preflight(self.config, "TEST", "ENTRY", probe=True,
+            environment_checker=lambda: [], camera_checker=camera,
+            check_imports=True, import_timeout=12, import_checker=checker)
+        self.assertEqual(report["status"], "BLOCKED")
+        self.assertEqual(report["imports"]["status"], "FAILED")
+        self.assertEqual(checker.call_args_list[0].args, ("vision", 12))
+        self.assertEqual(checker.call_args_list[1].args, ("ocr", 12))
+        camera.assert_not_called()
+
+    def test_successful_imports_allow_requested_camera(self):
+        camera = Mock(return_value={"status": "FRAME_READ"})
+        report = run_preflight(self.config, "TEST", "ENTRY", probe=True,
+            environment_checker=lambda: [], camera_checker=camera, check_imports=True,
+            import_checker=lambda *args: {"status": "PASSED"})
+        self.assertEqual(report["status"], "CHECKED")
+        self.assertEqual(report["imports"]["status"], "PASSED")
+        self.assertIn("PACKAGE_IMPORT_AND_COMPATIBILITY", report["unverified"])
+        camera.assert_called_once()
+
+    def test_default_and_missing_packages_do_not_import(self):
+        checker = Mock(side_effect=AssertionError("import forbidden"))
+        report = run_preflight(self.config, "TEST", "ENTRY", environment_checker=lambda: [],
+                               import_checker=checker)
+        self.assertEqual(report["imports"]["status"], "NOT_CHECKED")
+        report = run_preflight(self.config, "TEST", "ENTRY", check_imports=True,
+            environment_checker=lambda: [{"name": "lap", "status": "MISSING"}], import_checker=checker)
+        self.assertEqual(report["imports"]["status"], "SKIPPED_MISSING_ENVIRONMENT")
+        self.assertEqual(report["status"], "BLOCKED")
+        checker.assert_not_called()
+
+    def test_invalid_import_options_rejected_before_environment_check(self):
+        checker = Mock()
+        for options in ({"check_imports": 1}, {"import_timeout": 0},
+                        {"import_timeout": float("nan")}, {"import_timeout": 301}):
+            with self.assertRaises(ValueError):
+                run_preflight(self.config, "TEST", "ENTRY", environment_checker=checker, **options)
+        checker.assert_not_called()

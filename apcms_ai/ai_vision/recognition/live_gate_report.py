@@ -13,6 +13,7 @@ from ai_vision.recognition.live_gate_metrics import validate_metrics, validate_p
 from ai_vision.recognition.live_gate_context import validate_run_context
 from ai_vision.recognition.live_gate_deadline import validate_deadline
 from ai_vision.recognition.plate_consensus import validate_plate_summary
+from ai_vision.recognition.plate_review import REVIEW_REASON_CODES
 
 
 DECISIONS = {"DISABLED", "BLOCKED", "NEW_CANDIDATE", "SUPPRESSED_SAME_TRACK",
@@ -111,11 +112,16 @@ def validate_report(report):
                 "AUTH_REQUIRED", "DELIVERY_UNKNOWN"}:
             raise ValueError("응답 상태가 올바르지 않습니다.")
         consensus = validate_plate_summary(row["plate_consensus"], samples)
+        reasons = row.get("review_reasons")
+        if "review_reasons" in row and (not isinstance(reasons, list) or
+                any(not isinstance(value, str) or value not in REVIEW_REASON_CODES for value in reasons) or
+                reasons != sorted(set(reasons))):
+            raise ValueError("검토 사유 코드가 올바르지 않습니다.")
         attempts += row["request_attempted"] is True
         # 2. 원본 응답·추가 필드는 보고서에 옮기지 않고 표시용 항목만 선택합니다.
         checked.append({key: row[key] for key in ("track_id", "decision", "captured_at",
                         "crossing_elapsed_seconds", "sample_count", "receipt_state", "request_attempted")}
-                       | consensus)
+                       | consensus | {"review_reasons": reasons})
     if Counter(row["decision"] for row in checked) != decisions or attempts != requests or (count and not frames):
         raise ValueError("판정·요청 건수가 원본 행과 일치하지 않습니다.")
     # 4. 이전 버전의 파일은 허용하되 새 진단 항목이 있으면 건수도 검사합니다.
@@ -140,7 +146,20 @@ def validate_report(report):
         "run_context": context,
         "deadline": deadline,
         "source_end_expected": source_end_expected,
+        "review_summary": summarize_review_reasons(checked),
         "unknown_request_attempts": sum(row["request_attempted"] is None for row in checked)}
+
+
+def summarize_review_reasons(rows):
+    # 합집합으로 저장한 표본 사유이므로 같은 사유는 차량 통과 한 건당 한 번만 집계합니다.
+    known = [row["review_reasons"] for row in rows if row["review_reasons"] is not None]
+    counts = Counter(reason for reasons in known for reason in reasons)
+    return {"record_type": "LIVE_GATE_REVIEW_SUMMARY", "count_basis": "PASSAGES",
+            "total_passages": len(rows), "recorded_passages": len(known),
+            "unrecorded_passages": len(rows) - len(known),
+            "passages_with_reasons": sum(bool(reasons) for reasons in known),
+            "passages_without_reasons": sum(not reasons for reasons in known),
+            "reason_counts": dict(sorted(counts.items()))}
 
 
 def load_report(path):

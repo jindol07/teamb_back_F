@@ -41,6 +41,18 @@ async def generate_answer(question, context, history):
 11. 개발용 테스트 데이터는 실제 사용자 본인의 정보라고 표현하지 않는다.
 12. 조회 범위가 최근 50건이면 전체 내역이나 특정 기간 전체라고 단정하지 않는다.
 13. 입차·출차 시각이 없는 항목은 추정하지 않는다. 실제 주차 위치와 예약 위치를 구분한다.
+14. 일반 텍스트로 답한다. 마크다운 제목(#), 강조(**), 코드 블록, 표, HTML은 사용하지 않는다.
+15. 첫 문장에 질문의 결론을 먼저 답하고, 세부 내용은 실제 줄바꿈으로 구분한다.
+16. 여러 내역은 '1. ', '2. '처럼 번호로 구분하고 내역 사이에는 빈 줄을 넣는다.
+    각 내역의 차량번호, 주차면, 이용 기간, 상태는 각각 다른 줄에 표시한다.
+    조회한 모든 내역이 아니라 일부만 표시한다면 그 사실을 명시한다.
+17. 예약 상태 CONFIRMED는 '확정', CANCELED 또는 CANCELLED는 '취소'로 표시한다.
+    의미를 모르는 상태 코드는 임의로 해석하지 않고 원래 값을 유지한다.
+18. 날짜와 시각은 근거 값 그대로 'YYYY-MM-DD HH:mm' 형식으로 읽기 쉽게 표시하고, 초가 있으면 초도 유지한다.
+    다른 날짜의 시작·종료는 각각 날짜를 표시하고, 시간대 변환이나 값의 생략으로 기간을 왜곡하지 않는다.
+19. 정책 출처는 설명 중간에 반복하지 않고 답변 마지막에 '근거: POL-...' 형식으로 모아 표시한다.
+20. 빈자리 질문에는 '현재 빈자리는 N개입니다.'처럼 조회된 개수를 먼저 답한다.
+    현재 비어 있는 자리 수를 특정 시간대의 예약 가능 수라고 표현하지 않는다.
 """,
             ),
             (
@@ -130,26 +142,25 @@ async def answer(
         for cat in category_list:
 
             if cat == "RESERVATION" and use_test_reservation:
-                # 개발용 Spring Boot 예약 DB 조회
-                # 인증된 본인 데이터가 아닌 테스트 데이터
-                data = await BackendClient().get_test_reservations()
+                # 개발용 분기에서도 사용자 JWT로 인증된 본인 예약만 조회합니다.
+                data = await BackendClient().get_test_reservations(token)
                 source = "dev-api:RESERVATION"
 
             elif cat == "PARKING_STATUS":
-                # Spring Boot에서 실시간 주차 공간 조회
-                spaces = await BackendClient().get_public_parking_spaces()
+                # 사용자 JWT로 사용자 서버의 현재 주차 공간을 조회합니다.
+                spaces = await BackendClient().get_public_parking_spaces(token)
 
                 # 전체 주차 공간 수
                 total_count = len(spaces)
 
                 # 주차 가능한 공간 수
                 available_count = sum(
-                    1 for space in spaces if space.get("spaceStatusCode") == "AVAILABLE"
+                    1 for space in spaces if space.get("space_status_code") == "AVAILABLE"
                 )
 
                 # 사용 중인 공간 수
                 occupied_count = sum(
-                    1 for space in spaces if space.get("spaceStatusCode") == "OCCUPIED"
+                    1 for space in spaces if space.get("space_status_code") == "OCCUPIED"
                 )
 
                 # AI에게 전달할 조회 결과
@@ -159,7 +170,7 @@ async def answer(
                     "occupiedCount": occupied_count,
                 }
 
-                source = "public-api:PARKING_STATUS"
+                source = "api:PARKING_STATUS"
 
             elif backend is None:
                 # 기존 MOCK 데이터 조회 기능 유지

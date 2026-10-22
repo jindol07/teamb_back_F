@@ -16,6 +16,8 @@ def main(argv=None):
     parser.add_argument("--down-direction", choices=["ENTRY", "EXIT"], required=True)
     parser.add_argument("--camera-index", type=int, default=0)
     parser.add_argument("--probe-camera", action="store_true", help="카메라 한 프레임 읽기와 해제를 추가로 확인")
+    parser.add_argument("--probe-imports", action="store_true", help="영상·OCR 패키지의 실제 import 점검")
+    parser.add_argument("--import-timeout", type=float, default=30, help="패키지 하나당 제한 시간(1~300초)")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
     try:
@@ -25,7 +27,8 @@ def main(argv=None):
         if args.output is not None and not args.output.parent.is_dir():
             raise ValueError("출력 부모 폴더를 먼저 만들어 주세요.")
         report = run_preflight(args.config, args.camera_id, args.down_direction,
-                               args.camera_index, args.probe_camera)
+                               args.camera_index, args.probe_camera,
+                               check_imports=args.probe_imports, import_timeout=args.import_timeout)
         if args.output is not None:
             with args.output.open("x", encoding="utf-8") as stream:
                 json.dump(report, stream, ensure_ascii=False, indent=2, allow_nan=False)

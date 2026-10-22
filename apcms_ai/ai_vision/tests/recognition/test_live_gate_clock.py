@@ -6,6 +6,30 @@ from ai_vision.recognition.live_gate_clock import LiveGateClock
 
 
 class LiveGateClockTests(unittest.TestCase):
+    def test_retained_original_stamp_survives_history_eviction_until_released(self):
+        clock = LiveGateClock(monotonic_start=0, history_limit=1)
+        original = clock.capture(0, 0)
+        token = clock.retain([0])
+        clock.capture(1, 1)
+        self.assertIs(clock.lookup(0), original)
+        clock.release_retained(token)
+        with self.assertRaises(ValueError):
+            clock.lookup(0)
+
+    def test_retention_limit_and_missing_stamp_do_not_partially_mutate(self):
+        clock = LiveGateClock(monotonic_start=0)
+        clock.capture(0, 0)
+        for indices in ([0, 99], [True], list(range(5))):
+            with self.assertRaises(ValueError):
+                clock.retain(indices)
+            self.assertFalse(clock._retained)
+        first, second = clock.retain([0]), clock.retain([0])
+        with self.assertRaises(ValueError):
+            clock.retain([0])
+        self.assertEqual(len(clock._retained), 2)
+        clock.release_retained(first)
+        clock.release_retained(second)
+
     def setUp(self):
         self.start = datetime(2020, 1, 1, tzinfo=timezone.utc)
         self.clock = LiveGateClock(self.start, 10)

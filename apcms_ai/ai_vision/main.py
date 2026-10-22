@@ -10,6 +10,9 @@ from starlette.concurrency import run_in_threadpool
 from .recognition.recognizer import recognize_image
 from .recognition.image_upload import MAX_UPLOAD_BYTES, ImageUploadError, process_uploaded_image
 from .recognition.recognition_admission import RecognitionAdmission
+from .recognition.ocr_configuration import OCRConfigurationError
+from .http_diagnostics import log_inference_error
+from .upload_limits import SingleImageUploadRoute
 
 # 기존 주차면 점유 조회 라우터
 from .parking.parking_api import router as parking_router
@@ -20,7 +23,7 @@ from .recognition.results_api import router as results_router
 
 # APIRouter(): 관련 API들을 하나로 묶는 객체
 # 이 router를 상위 main.py에서 include_router()로 등록
-router = APIRouter(tags=["Vision"])
+router = APIRouter(tags=["Vision"], route_class=SingleImageUploadRoute)
 _recognition_admission = RecognitionAdmission(capacity=2)
 
 
@@ -66,11 +69,15 @@ async def recognize(file: UploadFile = File(...)):
         raise HTTPException(status_code=error.status_code, detail=str(error)) from error
     except HTTPException:
         raise
+    except (FileNotFoundError, PermissionError, ImportError, OCRConfigurationError) as error:
+        log_inference_error(error)
+        # 모델·공유 라이브러리·볼륨 준비 오류는 요청 자체의 오류와 구분합니다.
+        raise HTTPException(status_code=503, detail="인식 모델·패키지·접근 권한 준비 상태를 확인해 주세요.") from error
     except Exception as error:
 
         # 서버 콘솔에 오류 출력
         # 외부 사용자에게는 내부 오류 내용을 노출하지 않음
-        print(f"AI 처리 오류: {error}")
+        log_inference_error(error)
 
         raise HTTPException(
             status_code=500,

@@ -23,7 +23,18 @@ public class ParkingSpaceQueryRepository {
                        z.ZONE_CODE AS zoneCode,
                        s.SPACE_NUMBER AS spaceNumber,
                        s.SPACE_TYPE_CODE AS spaceTypeCode,
-                       s.SPACE_STATUS_CODE AS spaceStatusCode,
+                       CASE
+                           WHEN s.SPACE_STATUS_CODE IN ('AVAILABLE', 'EMPTY')
+                            AND EXISTS (
+                                SELECT 1
+                                  FROM PARKING_RESERVATION r
+                                 WHERE r.PARKING_SPACE_ID = s.PARKING_SPACE_ID
+                                   AND r.STATUS_CODE = 'CONFIRMED'
+                                   AND r.RESERVATION_START_AT <= SYSDATE
+                                   AND r.RESERVATION_END_AT >= SYSDATE
+                            ) THEN 'RESERVED'
+                           ELSE s.SPACE_STATUS_CODE
+                       END AS spaceStatusCode,
                        s.X_POSITION AS xPosition,
                        s.Y_POSITION AS yPosition,
                        s.WIDTH AS width,

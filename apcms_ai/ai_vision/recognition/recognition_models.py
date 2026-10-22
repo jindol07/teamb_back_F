@@ -11,6 +11,8 @@ from pathlib import Path
 
 # 1-3. MODEL_DIR은 차량·번호판 탐지 모델 파일이 보관된 프로젝트 기준 폴더입니다.
 from ai_vision.paths import MODEL_DIR
+from ai_vision.recognition.model_files import require_model_file
+from ai_vision.recognition.ocr_configuration import local_ocr_options
 
 
 # 2. 차량 탐지, 번호판 탐지, 문자 인식(OCR) 모델의 지연 로딩 관리자
@@ -36,20 +38,28 @@ class RecognitionModels:
             if role not in self._models:
                 # 3-2. 문자 인식 역할(ocr)은 PaddleOCR을 생성합니다.
                 if role == "ocr":
+                    options = local_ocr_options(self.model_dir)
                     factory = self._ocr_factory
                     if factory is None:
                         # 실제로 OCR이 필요할 때에만 라이브러리를 import합니다.
                         from paddleocr import PaddleOCR
                         factory = PaddleOCR
                     # 한국어 인식 모델을 사용하고 문서 회전·왜곡 등의 별도 기능은 비활성화합니다.
-                    model = factory(lang="korean", use_doc_orientation_classify=False,
-                                    use_doc_unwarping=False, use_textline_orientation=False, enable_mkldnn=False)
+                    language_options = options if options else {"lang": "korean"}
+                    # 번호판은 좁고 긴 이미지이므로 짧은 변 기준 확대 대신 긴 변 상한을 사용합니다.
+                    # CPU 스레드도 제한하지만 실제 최대 메모리는 배포 환경에서 별도로 측정해야 합니다.
+                    model = factory(
+                        use_doc_orientation_classify=False,
+                        use_doc_unwarping=False, use_textline_orientation=False,
+                        enable_mkldnn=False, cpu_threads=2,
+                        text_det_limit_side_len=960, text_det_limit_type="max",
+                        **language_options,
+                    )
                 else:
                     # 3-3. 차량 탐지는 yolo11n.pt, 번호판 탐지는 license_plate_yolov8n.pt를 사용합니다.
                     filename = "yolo11n.pt" if role == "vehicle" else "license_plate_yolov8n.pt"
                     path = self.model_dir / filename
-                    if not path.is_file():
-                        raise FileNotFoundError(f"인식 모델이 없습니다: {filename}")
+                    require_model_file(path)
                     factory = self._yolo_factory
                     if factory is None:
                         # 실제 차량/번호판 탐지가 필요할 때에만 YOLO 라이브러리를 import합니다.

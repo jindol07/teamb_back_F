@@ -2,6 +2,37 @@
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
  "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="kr.co.alpharking.dao.parking.ParkingSpaceDao">
+    <!-- 구획별 전체 예약 기록: 지난 예약과 취소 기록도 상태를 구분하여 조회한다. -->
+    <select id="findReservationHistory" resultType="kr.co.alpharking.dto.parking.ParkingReservationRow">
+        SELECT r.PARKING_RESERVATION_ID AS "parkingReservationId",
+               r.PARKING_SPACE_ID AS "parkingSpaceId",
+               r.VEHICLE_NUMBER AS "vehicleNumber",
+               TO_CHAR(r.RESERVATION_START_AT, 'YYYY-MM-DD"T"HH24:MI:SS') AS "reservationStartAt",
+               TO_CHAR(r.RESERVATION_END_AT, 'YYYY-MM-DD"T"HH24:MI:SS') AS "reservationEndAt",
+               r.STATUS_CODE AS "statusCode"
+          FROM PARKING_RESERVATION r
+         WHERE r.PARKING_SPACE_ID = #{spaceId}
+         ORDER BY r.RESERVATION_START_AT DESC, r.PARKING_RESERVATION_ID DESC
+    </select>
+    <!-- 선택일 시작 이후에 종료하고 다음 날 시작 전에 시작하는 예약. 자정 경계 중복 제외. -->
+    <select id="findReservations" resultType="kr.co.alpharking.dto.parking.ParkingReservationRow">
+        SELECT r.PARKING_RESERVATION_ID AS "parkingReservationId",
+               r.PARKING_SPACE_ID AS "parkingSpaceId",
+               r.VEHICLE_NUMBER AS "vehicleNumber",
+               TO_CHAR(r.RESERVATION_START_AT, 'YYYY-MM-DD"T"HH24:MI:SS') AS "reservationStartAt",
+               TO_CHAR(r.RESERVATION_END_AT, 'YYYY-MM-DD"T"HH24:MI:SS') AS "reservationEndAt",
+               r.STATUS_CODE AS "statusCode"
+          FROM PARKING_RESERVATION r
+         WHERE r.STATUS_CODE = 'CONFIRMED' AND r.CANCELLED_AT IS NULL
+           AND r.RESERVATION_END_AT &gt; #{startAt}
+        <if test="endAt != null">
+           AND r.RESERVATION_START_AT &lt; #{endAt}
+        </if>
+        <if test="spaceId != null">
+           AND r.PARKING_SPACE_ID = #{spaceId}
+        </if>
+         ORDER BY r.RESERVATION_START_AT, r.PARKING_RESERVATION_ID
+    </select>
     <sql id="publicColumns">
         s.PARKING_SPACE_ID AS "parkingSpaceId",
         f.FLOOR_NO AS "floorNo",
@@ -49,10 +80,11 @@
         SELECT s.PARKING_SPACE_ID AS "parkingSpaceId",
                s.SPACE_STATUS_CODE AS "spaceStatusCode",
                s.SPACE_TYPE_CODE AS "spaceTypeCode",
-               s.MEMO AS "memo"
+               s.MEMO AS "memo",
+               TO_CHAR(s.UPDATED_AT, 'YYYY-MM-DD"T"HH24:MI:SS') AS "updatedAt"
           FROM PARKING_SPACE s
          WHERE s.PARKING_SPACE_ID = #{id}
-         FOR UPDATE
+         FOR UPDATE NOWAIT
     </select>
 
     <update id="updateAdminSpace">
@@ -95,5 +127,38 @@
           JOIN PARKING_ZONE z ON z.PARKING_ZONE_ID = s.PARKING_ZONE_ID
           JOIN PARKING_FLOOR f ON f.PARKING_FLOOR_ID = z.PARKING_FLOOR_ID
          WHERE s.PARKING_SPACE_ID = #{id}
+    </select>
+
+    <select id="findHistory" resultType="kr.co.alpharking.dto.parking.ParkingSpaceHistoryRow">
+        SELECT * FROM (
+            SELECT PARKING_SPACE_HISTORY_ID AS "parkingSpaceHistoryId",
+                   SPACE_STATUS_CODE AS "spaceStatusCode", SPACE_TYPE_CODE AS "spaceTypeCode",
+                   MEMO AS "memo", CHANGE_REASON AS "changeReason",
+                   CHANGED_BY_ADMIN_ID AS "changedByAdminId", CHANGE_SOURCE_CODE AS "changeSourceCode",
+                   TO_CHAR(VALID_FROM, 'YYYY-MM-DD"T"HH24:MI:SS') AS "validFrom",
+                   TO_CHAR(VALID_TO, 'YYYY-MM-DD"T"HH24:MI:SS') AS "validTo"
+              FROM PARKING_SPACE_HISTORY WHERE PARKING_SPACE_ID = #{id}
+             ORDER BY PARKING_SPACE_HISTORY_ID DESC
+        ) WHERE ROWNUM &lt;= 30
+    </select>
+    <select id="latestHistoryId" resultType="long">
+        SELECT MAX(PARKING_SPACE_HISTORY_ID) FROM PARKING_SPACE_HISTORY WHERE PARKING_SPACE_ID = #{id}
+    </select>
+    <select id="latestAdminChangedAt" resultType="java.sql.Timestamp">
+        SELECT MAX(VALID_FROM) FROM PARKING_SPACE_HISTORY
+         WHERE PARKING_SPACE_ID = #{id} AND CHANGE_SOURCE_CODE = 'ADMIN'
+    </select>
+    <!-- 문자/바이트 길이는 실제 기존 컬럼 정의를 기준으로 검증한다. 내용은 자르지 않는다. -->
+    <select id="countValidTextColumns" resultType="int">
+        SELECT COUNT(*) FROM USER_TAB_COLUMNS
+         WHERE (TABLE_NAME = 'PARKING_SPACE' AND COLUMN_NAME = 'MEMO'
+                AND NVL(CASE WHEN CHAR_USED = 'C' THEN LENGTH(#{memo,jdbcType=VARCHAR})
+                             ELSE LENGTHB(#{memo,jdbcType=VARCHAR}) END, 0)
+                    &lt;= CASE WHEN CHAR_USED = 'C' THEN CHAR_LENGTH ELSE DATA_LENGTH END)
+            OR (TABLE_NAME = 'PARKING_SPACE_HISTORY' AND COLUMN_NAME IN ('CHANGE_REASON', 'MEMO')
+                AND NVL(CASE WHEN CHAR_USED = 'C' THEN
+                            LENGTH(CASE WHEN COLUMN_NAME = 'MEMO' THEN #{memo,jdbcType=VARCHAR} ELSE #{reason} END)
+                         ELSE LENGTHB(CASE WHEN COLUMN_NAME = 'MEMO' THEN #{memo,jdbcType=VARCHAR} ELSE #{reason} END) END, 0)
+                    &lt;= CASE WHEN CHAR_USED = 'C' THEN CHAR_LENGTH ELSE DATA_LENGTH END)
     </select>
 </mapper>

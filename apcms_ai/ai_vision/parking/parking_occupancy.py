@@ -1,3 +1,4 @@
+# D:/finalProjectB/back/apcms_ai/ai_vision/parking/parking_occupancy.py
 # OpenCV를 이용해 빈 주차장 사진과 현재 웹캠 사진을 비교하고, 주차면에 변화가 발생했는지 판단
 
 # 1. 기준 이미지
@@ -21,6 +22,8 @@ import cv2
 import numpy as np
 
 from ai_vision.paths import DATA_DIR, RESULT_DIR
+from ai_vision.recognition.local_io import write_json_atomic, read_json
+from ai_vision.parking.parking_validation import validate_spaces, validate_occupancy
 
 SAVE_DIR = RESULT_DIR / "parking" # 결과를 저장할 폴더
 REFERENCE_PATH = DATA_DIR / "parking_spaces" / "empty_reference.jpg" # 빈 주차장 기준 사진
@@ -55,8 +58,7 @@ def detect_occupancy():
     # 2. JSON에서 주차면 좌표 가져오기
     
     # parking_space_annotation.ipynb 에서 만든 json 파일(parking_spots.json) 읽어오기
-    with open(JSON_PATH, "r", encoding="utf-8") as f:
-        data = json.load(f) # JSON 파일의 내용을 Python 딕셔너리로 변환(역직렬화)
+    data = validate_spaces(read_json(JSON_PATH))
 
     height, width = current.shape[:2] # (높이, 너비, 채널 개수) 에서 높이, 너비 까지 가져옴
 
@@ -222,8 +224,8 @@ def detect_occupancy():
     else:
         print("결과 이미지 저장 실패")
 
-    with open(output_path, "w", encoding="utf-8") as f:
-        json.dump(output, f, ensure_ascii=False, indent=4)
+    # 저장 중 종료되더라도 기존 JSON을 보존합니다.
+    write_json_atomic(output_path, validate_occupancy(output))
 
     print("\n=== 전체 주차면 현황 ===")
     print(f"전체: {output['total_spaces']}개")

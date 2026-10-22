@@ -1,0 +1,23 @@
+# -*- coding: utf-8 -*-
+# Vision CPU 서버 전용. Notebook·문의·추천 의존성은 설치하지 않습니다.
+# Linux 컨테이너 빌드 후 pip check·import·실제 추론 검증이 필요합니다.
+fastapi==0.143.2
+uvicorn==0.54.0
+python-multipart==0.0.32
+httpx==0.28.1
+numpy==1.26.4
+Pillow==12.3.0
+requests==2.34.2
+python-dotenv==1.2.4
+PyYAML>=6,<7
+ultralytics==8.4.178
+lap==0.5.13
+torch==2.14.1
+torchvision==0.29.1
+paddleocr==3.7.0
+paddlepaddle==3.3.1
+paddlex==3.7.2
+# 두 상위 의존성이 각각 요구하는 OpenCV 배포판의 바이너리 버전을 맞춥니다.
+# GUI 함수를 사용하지 않아도 full wheel import에 필요한 Linux 공유 라이브러리는 필요합니다.
+opencv-python==4.10.0.84
+opencv-contrib-python==4.10.0.84

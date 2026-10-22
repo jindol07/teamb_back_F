@@ -5,11 +5,26 @@ import io
 import unittest
 
 from ai_vision.recognition.live_gate_report import validate_report
-from ai_vision.recognition.live_gate_report_csv import FIELDS, render_csv
+from ai_vision.recognition.live_gate_report_csv import FIELDS, REVIEW_FIELDS, render_csv
 from ai_vision.recognition.run_live_gate import _demo
 
 
 class LiveGateReportCsvTests(unittest.TestCase):
+    def test_optional_review_columns_preserve_original_prefix_and_distinguish_unknown(self):
+        report = validate_report(_demo())
+        for reasons, state, codes in ((None, "UNRECORDED", ""), ([], "NO_REASONS", ""),
+                                      (["KOREAN_CHARACTER_NOT_FOUND", "NO_OCR_TEXT"], "HAS_REASONS",
+                                       "KOREAN_CHARACTER_NOT_FOUND|NO_OCR_TEXT")):
+            report["rows"][0]["review_reasons"] = reasons
+            rows = list(csv.DictReader(io.StringIO(render_csv(report, True))))
+            self.assertEqual(tuple(rows[0]), FIELDS + REVIEW_FIELDS)
+            self.assertEqual((rows[0]["review_reason_state"], rows[0]["review_reasons"]), (state, codes))
+            self.assertEqual(tuple(next(csv.DictReader(io.StringIO(render_csv(report))))), FIELDS)
+
+    def test_non_boolean_column_option_is_rejected(self):
+        with self.assertRaises(ValueError):
+            render_csv(validate_report(_demo()), "true")
+
     def test_columns_values_and_empty_receipt(self):
         report = validate_report(_demo())
         rows = list(csv.DictReader(io.StringIO(render_csv(report))))
