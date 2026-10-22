@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="kr.co.alpharking.dao.vehiclehistory.VehiclehistoryDao">
+
+	<!-- 차량 스냅샷 이력 추가 -->
+	<insert id="add">
+		INSERT INTO vehicle_history (
+		vehicle_history_id,
+		vehicle_id,
+		office_id,
+		vehicle_number,
+		vehicle_model,
+		owner_name,
+		vehicle_type_code,
+		registration_type_code,
+		registration_status_code,
+		registered_at,
+		rejected_reason,
+		created_at,
+		updated_at,
+		deleted_at,
+		changed_by_admin_id,
+		actor_type_code,
+		actor_id,
+		change_type_code,
+		change_reason,
+		valid_from,
+		valid_to
+		) VALUES (
+		seq_vehicle_history.NEXTVAL,
+		#{vehicleid},
+		#{officeid},
+		#{vehiclenumber},
+		#{vehiclemodel},
+		#{ownername},
+		#{vehicletypecode},
+		#{registrationtypecode},
+		#{registrationstatuscode},
+		#{registeredat},
+		#{rejectedreason},
+		#{createdat},
+		#{updatedat},
+		#{deletedat},
+		#{changedbyadminid},
+		#{actortypecode},
+		#{actorid},
+		#{changetypecode},
+		#{changereason},
+		SYSDATE,
+		NULL
+		)
+	</insert>
+
+	<!-- 차량 이력 조회: 최신 이력이 먼저 표시됨 -->
+	<select id="list"
+		resultType="kr.co.alpharking.dto.vehiclehistory.VehiclehistoryDto">
+		SELECT
+		vehicle_history_id AS vehiclehistoryid,
+		vehicle_id AS vehicleid,
+		office_id AS officeid,
+		vehicle_number AS vehiclenumber,
+		vehicle_model AS vehiclemodel,
+		owner_name AS ownername,
+		vehicle_type_code AS vehicletypecode,
+		registration_type_code AS registrationtypecode,
+		registration_status_code AS registrationstatuscode,
+		registered_at AS registeredat,
+		rejected_reason AS rejectedreason,
+		created_at AS createdat,
+		updated_at AS updatedat,
+		deleted_at AS deletedat,
+		changed_by_admin_id AS changedbyadminid,
+		actor_type_code AS actortypecode,
+		actor_id AS actorid,
+		change_type_code AS changetypecode,
+		change_reason AS changereason,
+		valid_from AS validfrom,
+		valid_to AS validto
+		FROM vehicle_history
+		ORDER BY valid_from DESC, vehicle_history_id DESC
+	</select>
+
+	<!-- 새 이력을 넣기 전 기존 최신 이력의 유효 기간을 종료 -->
+	<update id="closeCurrent">
+		UPDATE vehicle_history
+		SET valid_to = SYSDATE
+		WHERE vehicle_id = #{vehicleid}
+		AND valid_to IS NULL
+	</update>
+</mapper>

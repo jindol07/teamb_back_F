@@ -9,14 +9,18 @@ import org.springframework.web.server.ResponseStatusException;
 
 import kr.co.alpharking.dao.mileage.MileagehistoryDao;
 import kr.co.alpharking.dto.mileage.MileagehistoryDto;
+import kr.co.alpharking.security.Office;
+import kr.co.alpharking.security.UserRepository;
 
 @Service
 public class MileagehistoryService {
 
     private final MileagehistoryDao mileagehistoryDao;
+    private final UserRepository userRepository;
 
-    public MileagehistoryService(MileagehistoryDao mileagehistoryDao) {
+    public MileagehistoryService(MileagehistoryDao mileagehistoryDao, UserRepository userRepository) {
         this.mileagehistoryDao = mileagehistoryDao;
+        this.userRepository = userRepository;
     }
 
     @Transactional(readOnly = true)
@@ -34,10 +38,11 @@ public class MileagehistoryService {
     public MileagehistoryDto create(MileagehistoryDto mileagehistory) {
         validate(mileagehistory);
         mileagehistory.setMileagehistoryid(null);
+        mileagehistory.setOffice(resolveOffice(mileagehistory.getOffice().getOffice_id()));
         if (mileagehistory.getCreatedat() == null) {
             mileagehistory.setCreatedat(new java.util.Date());
         }
-        return mileagehistoryDao.save(mileagehistory);
+        return mileagehistoryDao.saveAndFlush(mileagehistory);
     }
 
     @Transactional
@@ -49,14 +54,22 @@ public class MileagehistoryService {
         current.setReferencetypecode(request.getReferencetypecode());
         current.setReferenceid(request.getReferenceid());
         current.setDescription(request.getDescription());
-        current.setOffice(request.getOffice());
-        return mileagehistoryDao.save(current);
+        current.setOffice(resolveOffice(request.getOffice().getOffice_id()));
+        return mileagehistoryDao.saveAndFlush(current);
     }
 
     @Transactional
     public void delete(Long id) {
         MileagehistoryDto current = findById(id);
         mileagehistoryDao.delete(current);
+    }
+
+    private Office resolveOffice(Long officeId) {
+        if (officeId == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "office.office_id가 필요합니다.");
+        }
+        return userRepository.findById(officeId)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "해당 office_id의 사무실을 찾을 수 없습니다."));
     }
 
     private static void validate(MileagehistoryDto mileagehistory) {
