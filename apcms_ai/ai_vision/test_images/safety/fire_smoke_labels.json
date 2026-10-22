@@ -1,0 +1,8 @@
+[
+  {"file": "fire_test.jpg", "expected": "FIRE"},
+  {"file": "smoke_test1.jpg", "expected": "SMOKE"},
+  {"file": "smoke_test2.jpg", "expected": "SMOKE"},
+  {"file": "normal_test1.jpg", "expected": "NORMAL"},
+  {"file": "normal_test2.jpg", "expected": "NORMAL"},
+  {"file": "normal_test3.jpg", "expected": "NORMAL"}
+]

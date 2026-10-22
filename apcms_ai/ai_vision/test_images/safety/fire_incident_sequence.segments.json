@@ -1,0 +1,42 @@
+{
+  "purpose": "TEST_ONLY_FIRE_CLEAR_REOPEN_AND_NEW_INCIDENT",
+  "output_video": "fire_incident_sequence.mp4",
+  "fps": 15,
+  "width": 960,
+  "height": 540,
+  "total_frames": 900,
+  "total_seconds": 60.0,
+  "segments": [
+    {
+      "scene": "FIRE",
+      "start_seconds": 0.0,
+      "end_seconds": 6.0,
+      "frames": 90
+    },
+    {
+      "scene": "NORMAL",
+      "start_seconds": 6.0,
+      "end_seconds": 12.0,
+      "frames": 90
+    },
+    {
+      "scene": "FIRE",
+      "start_seconds": 12.0,
+      "end_seconds": 18.0,
+      "frames": 90
+    },
+    {
+      "scene": "NORMAL",
+      "start_seconds": 18.0,
+      "end_seconds": 54.0,
+      "frames": 540
+    },
+    {
+      "scene": "FIRE",
+      "start_seconds": 54.0,
+      "end_seconds": 60.0,
+      "frames": 90
+    }
+  ],
+  "note": "예상 구간 정보이며 실제 탐지 성능이나 화재 진위를 보증하지 않습니다."
+}

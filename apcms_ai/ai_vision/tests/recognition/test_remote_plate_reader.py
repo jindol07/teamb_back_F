@@ -56,6 +56,19 @@ class RemotePlateReaderTests(unittest.TestCase):
         with self.assertRaisesRegex(RemotePlateError, '^REMOTE_AMBIGUOUS_VEHICLES$'):
             RemotePlateReader('http://vision', session_factory=lambda: session).read(np.zeros((20, 20, 3), dtype=np.uint8))
 
+    def test_valid_shaped_review_from_api_cannot_become_confirmed(self):
+        # 서버가 색상·전체 번호 문제로 보류한 값은 원격 클라이언트도 보류해야 합니다.
+        from ai_vision.recognition.plate_consensus import summarize_plate_samples
+        vehicle = {'plate_number': '59바3151', 'plate_type': 'REVIEW', 'plate_confidence': .95}
+        reader = RemotePlateReader('http://vision', session_factory=lambda: make_session([vehicle]))
+        samples = []
+        for index in (0, 10):
+            sample = reader.read(np.zeros((20, 20, 3), dtype=np.uint8))
+            self.assertEqual(sample['plate_type'], 'REVIEW')
+            self.assertNotIn('plate_detection_confidence', sample)
+            samples.append(dict(sample, frame_index=index, video_seconds=index / 30))
+        self.assertEqual(summarize_plate_samples(samples)['status'], 'NO_VALID_KOREAN_PLATE')
+
     def test_invalid_confidence_or_plate_is_rejected(self):
         for text, confidence in (('10-1557', .9), ('91소6408', None), ('91소6408', True), ('91소6408', 2)):
             session = make_session([{'plate_number': text, 'plate_type': 'KOREAN_VALID', 'plate_confidence': confidence}])

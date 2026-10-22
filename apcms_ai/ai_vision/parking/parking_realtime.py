@@ -127,6 +127,14 @@ def detect_spaces(reference_gray, frame, spaces):
 
 # 3. save_results() - 확정된 점유 상태 저장
 
+def save_snapshot(results):
+    # 3-0. 관찰이 계속되는 동안 JSON만 갱신하며 이미지·HTTP 이벤트는 만들지 않습니다.
+    occupied = sum(row['status'] == 'OCCUPIED' for row in results)
+    output = {'total_spaces': len(results), 'occupied_count': occupied,
+              'empty_count': len(results) - occupied, 'spaces': results}
+    write_json_atomic(OUTPUT_PATH, validate_occupancy(output))
+
+
 def save_results(frame, spaces, results):
 
     # 3-1. 결과 저장 폴더 생성
@@ -176,20 +184,6 @@ def save_results(frame, spaces, results):
             1
         )
 
-    # 3-3. 전체 주차면 현황 계산
-
-    # OCCUPIED 상태인 주차면의 개수
-    occupied_count = sum(1 for result in results if result["status"] == "OCCUPIED")
-
-    # 기존 JSON 응답 구조를 그대로 유지
-    # parking_api.py에서 이 데이터를 조회함
-    output = {
-        "total_spaces": len(results),
-        "occupied_count": occupied_count,
-        "empty_count": len(results) - occupied_count,
-        "spaces": results
-    }
-
     # 3-4. 결과 이미지 저장
 
     # 한글 경로에서도 바이트로 저장하고, 실패하면 JSON만 성공한 것처럼 갱신하지 않습니다.
@@ -204,7 +198,7 @@ def save_results(frame, spaces, results):
     # with open() : 파일 사용이 끝나면 자동으로 닫음
     # "w": 쓰기 모드이므로 기존 파일을 덮어씀
     # API가 읽는 중에도 반쪽짜리 JSON을 보지 않도록 같은 폴더에서 원자적으로 교체합니다.
-    write_json_atomic(OUTPUT_PATH, validate_occupancy(output))
+    save_snapshot(results)
 
     print("결과 JSON 저장 완료")
 
