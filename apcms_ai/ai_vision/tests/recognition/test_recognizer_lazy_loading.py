@@ -16,6 +16,45 @@ from ai_vision.recognition.recognition_models import RecognitionModels
 
 
 class RecognizerLazyLoadingTests(unittest.TestCase):
+    def test_small_lower_decoration_requires_complete_plate_and_geometry(self):
+        # 1. 실제 영상에서 번호 두 조각 아래에 영문 장식이 함께 검출된 상황입니다.
+        module = self.load_module()
+        def box(top, bottom):
+            return [[0, top], [100, top], [100, bottom], [0, bottom]]
+        main = [box(10, 70), box(20, 80)]
+        self.assertEqual(module._join_plate_ocr(
+            ["30저", "9516", "FOMYUNDRI"], main + [box(90, 100)]), "30저9516")
+        # 2. 충돌하는 숫자·한글, 큰 영문, 좌표 누락은 임의로 제거하지 않습니다.
+        for texts, polygons in [
+            (["30저", "9516", "AB123"], main + [box(90, 100)]),
+            (["30저", "9516", "서울"], main + [box(90, 100)]),
+            (["30저", "9516", "HYUNDAI"], main + [box(10, 70)]),
+            (["30저", "9516", "HYUNDAI"], main + [box(50, 60)]),
+            (["30저", "9516", "HYUNDAI"], []),
+            (["30", "9516", "HYUNDAI"], main + [box(90, 100)]),
+            (["30저9516", "31라0567", "HYUNDAI"], main + [box(90, 100)]),
+            (["30저", "9516", "HYUNDAI"], main + [box(float("nan"), 100)]),
+        ]:
+            with self.subTest(texts=texts, polygons=polygons):
+                self.assertEqual(module._join_plate_ocr(texts, polygons), "".join(texts))
+
+    def test_ocr_uses_text_regions_to_exclude_lower_decoration(self):
+        # 3. 좌표 처리 규칙이 실제 OCR 호출 경로에도 적용되는지 검사합니다.
+        module = self.load_module()
+        models = MagicMock()
+        models.ocr.return_value.predict.return_value = [{
+            "rec_texts": ["30저", "9516", "FOMYUNDRI"],
+            "rec_polys": [np.array(p) for p in [
+                [[89, 13], [226, 22], [221, 79], [85, 69]],
+                [[246, 20], [429, 33], [424, 94], [241, 81]],
+                [[232, 88], [290, 93], [289, 103], [231, 98]]]]}]
+        with patch.object(module, "_models", models), \
+                patch.object(module.cv2, "imwrite", return_value=True), \
+                patch.object(module.tempfile, "TemporaryDirectory") as temporary:
+            temporary.return_value.__enter__.return_value = "unused-test-path"
+            result = module.recognize_plate(np.zeros((120, 500, 3), dtype=np.uint8))
+        self.assertEqual((result["plate_number"], result["plate_type"]), ("30저9516", "KOREAN_VALID"))
+
     def load_module(self):
         spec = importlib.util.spec_from_file_location("ai_vision._recognizer_lazy_test", BASE_DIR / "recognition/recognizer.py")
         module = importlib.util.module_from_spec(spec)

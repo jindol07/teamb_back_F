@@ -11,6 +11,55 @@ import numpy as np
 from ai_vision.recognition.local_io import read_json
 from ai_vision.recognition.tracking_config import validate_config
 from ai_vision.recognition.read_camera_frame import read_camera_frame
+from ai_vision.camera_runtime import require_display
+
+
+class LiveGatePreview:
+    """실시간 시험의 ROI·기준선을 보여줍니다. 프레임 파일은 저장하지 않습니다."""
+
+    def __init__(self, config, down_direction):
+        # 1. 화면 없는 서버에서는 Qt 창을 만들기 전에 안내합니다.
+        self.config = validate_config(config)
+        if down_direction not in {'ENTRY', 'EXIT'}:
+            raise ValueError("화면 아래쪽의 입출차 방향을 지정하세요.")
+        require_display()
+        self.direction = down_direction
+        self._shown = False
+        self._name = 'APCMS Live Gate - Q to stop'
+
+    def __call__(self, frame):
+        # 2. 원본 프레임 대신 복사본에 선을 그려 OCR 입력을 훼손하지 않습니다.
+        rendered = render_preview(frame, self.config, self.direction)
+        self._shown = True
+        cv2.imshow(self._name, rendered)
+        return (cv2.waitKey(1) & 0xFF) != ord('q')
+
+    def wait_until_ready(self, capture):
+        # 측정 시계·세션을 만들기 전에 구도를 맞춥니다. 준비 시간은 60초 제한에 포함하지 않습니다.
+        print("카메라 구도를 맞추세요. 창을 클릭하고 스페이스바를 누르면 측정을 시작합니다. Q는 취소입니다.", flush=True)
+        if not capture.isOpened():
+            raise ValueError("카메라를 열 수 없습니다.")
+        while True:
+            ok, frame = capture.read()
+            if not ok:
+                raise ValueError("준비 중 카메라 프레임을 읽지 못했습니다.")
+            rendered = render_preview(frame, self.config, self.direction)
+            cv2.putText(rendered, 'SPACE: start / Q: quit', (4, 55), cv2.FONT_HERSHEY_SIMPLEX,
+                        .5, (0, 255, 255), 1, cv2.LINE_AA)
+            self._shown = True
+            cv2.imshow(self._name, rendered)
+            key = cv2.waitKey(20) & 0xFF
+            if key == ord('q'):
+                return False
+            if key == ord(' '):
+                print("준비 완료. 지금부터 측정을 시작합니다.", flush=True)
+                return True
+
+    def close(self):
+        # 3. 이 도구가 연 창만 닫습니다. 다른 프로그램의 OpenCV 창은 유지합니다.
+        if self._shown:
+            self._shown = False
+            cv2.destroyWindow(self._name)
 
 
 def render_preview(frame, config, down_direction):

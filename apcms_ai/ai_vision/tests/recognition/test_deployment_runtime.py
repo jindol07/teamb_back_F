@@ -21,6 +21,29 @@ from ai_vision.recognition.record_gate_video import record
 
 
 class DeploymentRuntimeTests(unittest.TestCase):
+    def test_explicit_backend_maps_to_platform_capture_code(self):
+        import cv2
+        for platform, backend, code in [('win32', 'msmf', cv2.CAP_MSMF),
+                                         ('win32', 'dshow', cv2.CAP_DSHOW),
+                                         ('linux', 'v4l2', cv2.CAP_V4L2)]:
+            with self.subTest(platform=platform, backend=backend), \
+                    patch('ai_vision.camera_runtime.sys.platform', platform), patch('cv2.VideoCapture') as capture:
+                open_camera(1, backend=backend)
+                capture.assert_called_once_with(1, code)
+
+    def test_auto_backend_uses_platform_selection(self):
+        with patch('cv2.VideoCapture') as capture:
+            open_camera(1, backend='auto')
+        capture.assert_called_once_with(1)
+
+    def test_incompatible_backend_is_rejected_before_camera_open(self):
+        for platform, backend in [('linux', 'msmf'), ('linux', 'dshow'), ('win32', 'v4l2'), ('win32', 'unknown')]:
+            with self.subTest(platform=platform, backend=backend), \
+                    patch('ai_vision.camera_runtime.sys.platform', platform), patch('cv2.VideoCapture') as capture:
+                with self.assertRaises(ValueError):
+                    open_camera(1, backend=backend)
+            capture.assert_not_called()
+
     def test_development_tools_import_without_writing_or_opening_gui(self):
         names = ("parking.space_marker", "parking.space_editor", "parking.object_detector_test",
                  "safety.test_fire_smoke_speed", "recognition.make_motion_video",

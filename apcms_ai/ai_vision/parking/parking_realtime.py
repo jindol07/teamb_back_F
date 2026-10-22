@@ -8,36 +8,22 @@
 # 3. 웹캠에서 현재 프레임 읽기
 # 4. 기준 이미지와 현재 이미지의 픽셀 차이 분석
 # 5. 같은 상태가 5회 연속 감지되면 확정
-# 6. 최초 확정 또는 상태 변경 시 Spring Boot 이벤트 생성
+# 6. 이후 실행·전송은 run_parking_camera에 위임
 # 7. 모든 주차면 상태가 확정되면 결과 이미지와 JSON 저장
-# 8. 실제 전송 모드에서는 실패 이벤트 재전송
+# 8. 카메라 실행과 전송 정책은 run_parking_camera에서 공통 관리
 
 # 자동차를 직접 인식하는 YOLO 방식이 아니라 기준 이미지 대비 픽셀 변화율로 점유 상태를 판단함
 
-import json
-import time
 import cv2
-import numpy as np
 
-from ai_vision.paths import DATA_DIR, RESULT_DIR
-from ai_vision.camera_runtime import open_camera
-from ai_vision.recognition.local_io import write_json_atomic, read_json
-from ai_vision.parking.parking_validation import validate_spaces, validate_occupancy
+from ai_vision.paths import RESULT_DIR
+from ai_vision.recognition.local_io import write_json_atomic
+from ai_vision.parking.parking_validation import validate_occupancy
 
-from ai_vision.parking.parking_event_sender import (
-    create_occupancy_event,
-    queue_occupancy_event,
-    retry_pending_events
-)
+
 
 
 # 1. 경로 및 설정값
-
-# 1-1. 빈 주차면 기준 사진
-REFERENCE_PATH = DATA_DIR / "parking_spaces" / "empty_reference.jpg"
-
-# 1-2. 주차면 ID 및 다각형 좌표가 저장된 JSON
-JSON_PATH = DATA_DIR / "parking_spaces" / "parking_spots.json"
 
 # 1-3. 결과 이미지와 JSON을 저장할 폴더
 SAVE_DIR = RESULT_DIR / "parking"
@@ -52,19 +38,6 @@ PIXEL_THRESHOLD = 35
 # 1-5. 주차면 점유 판단 임계값
 # 주차면 내부 픽셀 중 5% 이상이 변하면 OCCUPIED
 OCCUPANCY_THRESHOLD = 0.05
-
-# 1-6. 웹캠 분석 간격
-# 0.5초마다 주차면 점유 상태 분석
-CHECK_INTERVAL = 0.5
-
-# 1-7. 상태 확정에 필요한 연속 판정 횟수
-# 같은 상태가 연속 5회 감지되어야 확정
-STABLE_FRAMES = 5
-
-# 1-8. Spring Boot 전송 실패 이벤트 재시도 간격
-# 실제 전송 모드에서만 의미가 있음
-RETRY_INTERVAL = 5.0
-
 
 # 2. detect_spaces() - 현재 프레임의 점유 상태 분석
 
@@ -219,15 +192,12 @@ def save_results(frame, spaces, results):
 
     # 3-4. 결과 이미지 저장
 
-    saved = cv2.imwrite(
-        str(IMAGE_PATH),
-        annotated
-    )
-
-    if saved:
-        print("결과 이미지 저장 성공")
-    else:
-        print("결과 이미지 저장 실패")
+    # 한글 경로에서도 바이트로 저장하고, 실패하면 JSON만 성공한 것처럼 갱신하지 않습니다.
+    saved, encoded = cv2.imencode('.jpg', annotated)
+    if not saved:
+        raise OSError('결과 이미지를 인코딩하지 못했습니다.')
+    IMAGE_PATH.write_bytes(encoded.tobytes())
+    print('결과 이미지 저장 성공')
 
     # 3-5. 결과 JSON 파일 저장
 
@@ -239,277 +209,11 @@ def save_results(frame, spaces, results):
     print("결과 JSON 저장 완료")
 
 
-# 4. run_realtime() - 웹캠 실시간 감지 실행
+# 4. 이전 실행 이름도 공식 실행부를 사용하여 카메라 루프를 한 곳에서 관리합니다.
+def run_realtime(argv=None):
+    from ai_vision.parking.run_parking_camera import main
+    return main(argv)
 
-def run_realtime():
 
-    # 4-1. 빈 주차면 기준 이미지 읽기
-
-    # cv2.imread() : 이미지 파일을 NumPy 배열로 읽음
-    reference = cv2.imread(REFERENCE_PATH)
-    
-    if reference is None:
-        print("빈 주차면 기준 이미지를 읽을 수 없습니다.")
-        return
-
-    # 4-2. 주차면 좌표 JSON 불러오기
-
-    if not JSON_PATH.is_file():
-        print(f"주차면 좌표 파일이 없습니다 : {JSON_PATH}")
-        return
-
-    data = validate_spaces(read_json(JSON_PATH))
-
-    # 기준 이미지의 높이, 너비
-    height, width = reference.shape[:2]
-
-    # 주차면 좌표가 작성된 이미지 해상도와 실제 기준 이미지 해상도가 일치하는지 확인
-    if (data["image_width"] != width or data["image_height"] != height):
-        print("기준 이미지와 JSON 좌표의 해상도가 다릅니다.")
-        return
-
-    # 4-3. 등록된 주차면이 있는지 확인
-
-    # 주차면이 0개라면 감지할 영역이 없으므로 종료
-    # 빈 리스트에서 all()을 사용할 때 생기는 잘못된 상태 확정을 방지하는 목적도 있음
-    if not data["spaces"]:
-        print("등록된 주차면이 없습니다.")
-        print("parking_spots.json의 spaces를 확인하세요.")
-        return
-
-    # 4-4. 각 주차면의 분석 마스크 생성
-
-    spaces = []
-
-    # 주차면 테두리 부분의 오차를 줄일 축소 커널
-    kernel = np.ones((7, 7), dtype=np.uint8)
-
-    for item in data["spaces"]:
-
-        # 주차면의 ID와 다각형 꼭짓점
-        space_id = item["id"]
-
-        # JSON에 저장된 좌표 리스트를 정수 배열로 변환
-        points = np.array(item["points"], dtype=np.int32)
-
-        # zeros() : 기준 이미지와 같은 크기의 검은색 마스크 생성
-        mask = np.zeros((height, width), dtype=np.uint8)
-
-        # fillPoly() : 주차면 다각형 내부를 흰색으로 채움
-        cv2.fillPoly(mask, [points], 255)
-
-        # erode() : 테두리 부근을 분석에서 제외하기 위해 흰색 영역을 조금 축소
-        mask = cv2.erode(mask, kernel)
-
-        # 축소 후에도 분석할 영역이 남아 있는지 확인
-        if cv2.countNonZero(mask) == 0:
-            print(f"{space_id} : 주차면 영역 오류")
-            return
-
-        # 주차면별 ID, 좌표, 마스크 저장
-        spaces.append({
-            "id": space_id,
-            "points": points,
-            "mask": mask
-        })
-
-    # 4-5. 기준 이미지 전처리
-
-    reference_gray = cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY)
-    reference_gray = cv2.GaussianBlur(reference_gray, (5, 5), 0)
-
-    # 4-6. 웹캠 연결
-
-    # 1번 : 기존 주차면 감지용 웹캠
-    # CAP_DSHOW : Windows의 DirectShow 백엔드
-    cap = open_camera(1)
-
-    if not cap.isOpened():
-        cap.release()
-        print("웹캠을 연결할 수 없습니다.")
-        return
-
-    try:
-        # 4-7. 웹캠 초기 안정화
-
-        # 웹캠 연결 직후에는 자동 노출 및 밝기 조절이 진행될 수 있어 처음 30프레임을 읽고 지나감
-        for _ in range(30):
-            ret, frame = cap.read()
-
-            if not ret:
-                print("웹캠 초기 촬영에 실패했습니다.")
-                return
-
-        print("실시간 점유 감지를 시작합니다. 종료 : Ctrl+C")
-
-        # 4-8. 주차면별 상태 관리 딕셔너리 생성
-
-        states = {}
-
-        for space in spaces:
-
-            states[space["id"]] = {
-                "previous": None, # 직전 프레임에서 판단한 임시 상태
-                "same_count": 0, # 동일 임시 상태가 연속 등장한 횟수
-                "confirmed": None, # 5회 연속 판정 후 확정한 상태
-                "change_ratio": 0.0 # 확정 시점의 픽셀 변화율
-            }
-
-        # 4-9. 분석 및 재시도 시간 초기화
-
-        # time.monotonic() : 단조 시계, 시스템 시계가 바뀌어도 경과 시간 측정에 적합
-        last_check = 0.0
-        last_retry = time.monotonic()
-
-        # 4-10. 웹캠 프레임 반복 읽기
-
-        while True:
-
-            ret, frame = cap.read()
-
-            if not ret:
-                print("웹캠 프레임을 읽지 못했습니다.")
-                break
-
-            # 기준 이미지와 웹캠 해상도가 달라지면 같은 위치의 픽셀을 비교할 수 없으므로 종료
-            if frame.shape != reference.shape:
-                print("웹캠 이미지와 기준 이미지의 크기가 다릅니다.")
-                break
-
-            # 4-11. 분석 간격 확인
-
-            now = time.monotonic()
-
-            # 아직 0.5초가 지나지 않았다면 현재 프레임은 분석하지 않고 다음 프레임 읽기
-            if now - last_check < CHECK_INTERVAL:
-                continue
-
-            last_check = now
-
-            # 4-12. 현재 프레임 점유 상태 분석
-
-            # 결과는 아직 확정되지 않은 임시 상태
-            results = detect_spaces(reference_gray, frame, spaces)
-
-            # 이번 분석에서 확정 상태 변경이 있었는지 확인
-            state_changed = False
-
-            # 4-13. 주차면별 연속 판정
-
-            for result in results:
-
-                space_id = result["space_id"]
-                status = result["status"]
-
-                # 해당 주차면의 상태 관리 정보
-                state = states[space_id]
-
-                # 직전 임시 상태와 같다면 횟수 증가
-                if status == state["previous"]:
-                    state["same_count"] += 1
-
-                # 상태가 다르면 새로운 연속 판정 시작
-                else:
-                    state["previous"] = status
-                    state["same_count"] = 1
-
-                # 4-14. 동일 상태 5회 연속 확인
-
-                if state["same_count"] < STABLE_FRAMES:
-                    continue
-
-                # 이미 확정한 상태와 같다면 새로운 이벤트를 만들지 않음
-                if status == state["confirmed"]:
-                    continue
-
-                # 4-15. 최초 상태 확정 또는 상태 변경
-
-                old_status = state["confirmed"]
-
-                state["confirmed"] = status
-                state["change_ratio"] = result["change_ratio"]
-
-                state_changed = True
-
-                if old_status is None:
-                    print(
-                        f"[초기 확정] {space_id} : {status}"
-                        f"({result["change_ratio"]:.2%})"
-                    )
-
-                else:
-                    print(
-                        f"[상태 변경] {space_id}: "
-                        f"{old_status} -> {status} "
-                        f'({result["change_ratio"]:.2%})'
-                    )
-
-                # 4-16. Spring Boot 전송용 이벤트 생성
-
-                # parking_event_sender.py 의 create_occupancy_event() 함수
-                # 같은 확정 상태가 반복되는 동안에는 이 코드가 다시 실행되지 않음
-                event = create_occupancy_event(
-                    space_id, # AI의 A-01 같은 ID를 1F-A01 등으로 변환
-                    status, # EMPTY는 AVAILABLE로 변환
-                    result["change_ratio"] # 이벤트별 UUID와 감지 시각 생성
-                )
-
-                # 4-17. 생성된 이벤트 등록
-
-                # parking_event_sender.py 의 queue_occupancy_event() 함수
-                # 기본 테스트 모드 : JSON만 콘솔에 출력하며 외부 전송하지 않음
-                # 실제 전송 모드 : 대기 파일에 저장하고 POST 시도
-                queue_occupancy_event(event)
-
-            # 4-18. 모든 주차면 상태가 확정됐는지 확인
-
-            # all() : 모든 주차면의 confirmed가 None이 아니면 True
-            all_confirmed = all(state["confirmed"] is not None for state in states.values())
-
-            # 4-19. 결과 이미지 및 JSON 갱신
-
-            # 모든 주차면의 최초 확정이 완료됐고 이번 분석에서 상태 변경이 발생했을 때만 저장
-            # 주차면별 API 이벤트 생성은 위에서 이미 수행
-            if all_confirmed and state_changed:
-
-                confirmed_results = []
-
-                for space in spaces:
-
-                    space_id = space["id"]
-                    state = states[space_id]
-
-                    confirmed_results.append({
-                        "space_id": space_id,
-                        "status": state["confirmed"],
-                        "change_ratio": state["change_ratio"]
-                    })
-
-                save_results(frame, spaces, confirmed_results)
-
-            # 4-20. 전송 실패 이벤트 재시도
-
-            # 현재 점유 상태가 변경되지 않더라도 RETRY_INTERVAL마다 대기 이벤트 전송 시도
-            # 테스트 모드에서는 함수가 바로 종료되어 실제 HTTP 요청이 발생하지 않음
-            if now - last_retry >= RETRY_INTERVAL:
-                retry_pending_events()
-                last_retry = time.monotonic()
-
-    # 4-21. 사용자가 Ctrl+C로 종료한 경우
-    except KeyboardInterrupt:
-
-        print("\n실시간 점유 감지를 종료합니다.")
-        print(f"결과 이미지 경로: {IMAGE_PATH}")
-        print(f"결과 JSON 경로: {OUTPUT_PATH}")
-
-    # 4-22. 프로그램 종료 시 웹캠 해제
-    finally:
-        # release() : 카메라 장치를 해제하여 다른 프로그램에서도 웹캠을 사용할 수 있도록 함
-        cap.release()
-
-
-# 5. 프로그램 실행부
-
-# python -m ai_vision.parking.parking_realtime
 if __name__ == "__main__":
-    run_realtime()
+    raise SystemExit(run_realtime())

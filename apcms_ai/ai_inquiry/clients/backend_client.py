@@ -104,22 +104,14 @@ class BackendClient:
         return data
 
     # ----------로그인시 삭제해야함
-    async def get_test_reservations(self):
+    async def get_test_reservations(self, token=None):
         if (
             self.cfg["env"] != "development"
             or self.cfg["mode"] != "MOCK"
             or not self.cfg["test_reservation_enabled"]
         ):
             raise PermissionError("개발용 예약 조회가 비활성화되어 있습니다.")
-        try:
-            async with httpx.AsyncClient(
-                base_url=self.cfg["base_url"], timeout=15
-            ) as client:
-                response = await client.get("api/chatbot/reservations/1")
-                response.raise_for_status()
-                return response.json()
-
-        except httpx.HTTPError as e:
-            raise BackendError("테스트 예약 조회 실패") from e
+        # 개발용 호출도 고정 ID를 사용하지 않고 JWT로 인증된 본인만 조회합니다.
+        return await self.request("GET", "api/chatbot/reservations", token)
 
     # ----------------

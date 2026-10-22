@@ -19,7 +19,8 @@ live_gate_lifecycle live_gate_storage inspect_live_gate live_gate_metrics asynci
 live_gate_deadline read_camera_frame recognition_models recognizer_lazy_loading recognize_api_threading image_upload
 recognize_upload_api recognition_admission ocr_image_policy run_checks runtime_environment check_runtime_environment
 probe_runtime_imports deployment_runtime parking_deployment deployment_config deployment_readiness ocr_configuration
-aws_recognition_cases http_diagnostics upload_limits check_deployed_api check_deployed_api_cli check_deployed_cases""".split()
+aws_recognition_cases http_diagnostics upload_limits check_deployed_api check_deployed_api_cli check_deployed_cases
+remote_plate_reader camera_recognition latest_frame_capture async_gate_processor parking_delivery_worker""".split()
 MODULES = tuple("ai_vision.tests.recognition.test_" + name for name in NAMES)
 
 

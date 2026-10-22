@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 # Vision CPU 서버 전용. Notebook·문의·추천 의존성은 설치하지 않습니다.
 # Linux 컨테이너 빌드 후 pip check·import·실제 추론 검증이 필요합니다.
 fastapi==0.143.2
