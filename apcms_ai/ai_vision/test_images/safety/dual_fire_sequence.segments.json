@@ -1,0 +1,69 @@
+{
+  "purpose": "TWO_SEPARATE_FIRE_REGIONS_TEST_ONLY",
+  "source_video": "fire_video.mp4",
+  "output_video": "dual_fire_sequence.mp4",
+  "fps": 15,
+  "width": 1280,
+  "height": 720,
+  "total_frames": 720,
+  "total_seconds": 48.0,
+  "regions": {
+    "LEFT": [
+      70,
+      101,
+      530,
+      619
+    ],
+    "RIGHT": [
+      750,
+      101,
+      1210,
+      619
+    ]
+  },
+  "segments": [
+    {
+      "scene": "BOTH",
+      "start_seconds": 0.0,
+      "end_seconds": 8.0,
+      "left_fire": true,
+      "right_fire": true
+    },
+    {
+      "scene": "RIGHT_ONLY",
+      "start_seconds": 8.0,
+      "end_seconds": 16.0,
+      "left_fire": false,
+      "right_fire": true
+    },
+    {
+      "scene": "BOTH",
+      "start_seconds": 16.0,
+      "end_seconds": 24.0,
+      "left_fire": true,
+      "right_fire": true
+    },
+    {
+      "scene": "LEFT_ONLY",
+      "start_seconds": 24.0,
+      "end_seconds": 32.0,
+      "left_fire": true,
+      "right_fire": false
+    },
+    {
+      "scene": "BOTH",
+      "start_seconds": 32.0,
+      "end_seconds": 40.0,
+      "left_fire": true,
+      "right_fire": true
+    },
+    {
+      "scene": "NONE",
+      "start_seconds": 40.0,
+      "end_seconds": 48.0,
+      "left_fire": false,
+      "right_fire": false
+    }
+  ],
+  "note": "같은 원본 화재 영상의 2화면 합성입니다. 실제 독립 화재의 물리적 검증 자료가 아닙니다."
+}
