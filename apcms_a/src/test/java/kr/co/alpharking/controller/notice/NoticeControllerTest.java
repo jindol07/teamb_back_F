@@ -48,6 +48,33 @@ class NoticeControllerTest {
     }
 
     @Test
+    void authenticatedAdminCanReadHistory() {
+        when(service.getNoticeHistoryList(10)).thenReturn(List.of());
+        assertEquals(HttpStatus.OK, controller.getNoticeHistoryList(10, adminAuthentication(7)).getStatusCode());
+        verify(service).getNoticeHistoryList(10);
+    }
+
+    @Test
+    void unauthenticatedHistoryNeverReachesService() {
+        assertEquals(HttpStatus.UNAUTHORIZED, assertThrows(ResponseStatusException.class,
+                () -> controller.getNoticeHistoryList(10, null)).getStatusCode());
+        verifyNoInteractions(service);
+    }
+
+    @Test
+    void officeAndForgedAdminPrincipalsCannotReadHistory() {
+        Authentication office = new UsernamePasswordAuthenticationToken("user", null,
+                List.of(new SimpleGrantedAuthority("OFFICE")));
+        Authentication forgedAdmin = new UsernamePasswordAuthenticationToken("user", null,
+                List.of(new SimpleGrantedAuthority("ADMIN")));
+        assertEquals(HttpStatus.FORBIDDEN, assertThrows(ResponseStatusException.class,
+                () -> controller.getNoticeHistoryList(10, office)).getStatusCode());
+        assertEquals(HttpStatus.FORBIDDEN, assertThrows(ResponseStatusException.class,
+                () -> controller.getNoticeHistoryList(10, forgedAdmin)).getStatusCode());
+        verifyNoInteractions(service);
+    }
+
+    @Test
     void registrationOverridesSubmittedWriterWithAuthenticatedAdmin() {
         NoticeCreateReq request = new NoticeCreateReq();
         request.setWriterAdminId(1);

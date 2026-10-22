@@ -252,7 +252,11 @@ public class NoticeController {
 	// 6. 공지사항 변경 이력 조회
 	// ========================================
 	@GetMapping("/{noticeId}/history")
-	public ResponseEntity<List<NoticeHistory>> getNoticeHistoryList(@PathVariable("noticeId") Integer noticeId) {
+	public ResponseEntity<List<NoticeHistory>> getNoticeHistoryList(@PathVariable("noticeId") Integer noticeId,
+			Authentication authentication) {
+
+		// 보안 필터뿐 아니라 실제 이력 조회 직전에도 인증된 관리자인지 확인합니다.
+		getAuthenticatedAdminId(authentication);
 
 		// NOTICE_HISTORY 테이블에서 이력 조회
 		List<NoticeHistory> historyList = noticeService.getNoticeHistoryList(noticeId);
