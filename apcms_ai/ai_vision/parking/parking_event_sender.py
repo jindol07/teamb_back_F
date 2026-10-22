@@ -1,3 +1,4 @@
+# D:/finalProjectB/back/apcms_ai/ai_vision/parking/parking_event_sender.py
 # APCMS AI 이벤트 전송 모듈
 # 1. 차량 입출차, 차량·구획 매칭, 주차면 점유 이벤트 생성
 # 2. 세 종류의 이벤트를 각각 대응하는 Spring Boot API로 전송
@@ -9,10 +10,12 @@ import math
 import os
 import uuid
 import requests
+from urllib.parse import urlsplit
 
 from datetime import datetime
 
 from ai_vision.paths import BASE_DIR, RESULT_DIR
+from ai_vision.parking.occupancy_response import validate_occupancy_response
 
 
 # 1. Spring Boot 연동 환경설정
@@ -38,30 +41,56 @@ BASE_URL = os.getenv(
 API_PATH = "/alpharking/admin/api/parking/ai"
 
 
-# 1-3. 기존 점유 이벤트 API 설정과의 호환성 유지
-# 이전 .env에 PARKING_AI_API_URL이 있으면 점유 API는 그 주소를 사용
-API_URL = os.getenv(
-    "PARKING_AI_API_URL",
-    f"{BASE_URL}{API_PATH}/occupancy-events"
-)
+def _validated_url(value):
+    # 1-3. 비밀 정보가 포함된 주소·잘못된 포트는 실제 전송 전에 거부합니다.
+    if not isinstance(value, str) or not value:
+        raise ValueError("AI 이벤트 API 주소를 확인하세요.")
+    parsed = urlsplit(value)
+    if (parsed.scheme not in {"http", "https"} or not parsed.hostname or
+            parsed.username is not None or parsed.password is not None or '?' in value or '#' in value or
+            any(char.isspace() or ord(char) < 32 or ord(char) == 127 for char in value)):
+        raise ValueError("인증정보·쿼리 없는 HTTP(S) API 주소가 필요합니다.")
+    try:
+        if parsed.port == 0:
+            raise ValueError()
+    except ValueError:
+        raise ValueError("AI 이벤트 API 포트를 확인하세요.") from None
+    return value.rstrip('/'), parsed.path.rstrip('/')
+
+
+def _build_event_urls(base_url, occupancy_url=None):
+    # 1-4. 서버 주소만 받던 기존 설정과 관리자 경로를 포함한 현재 설정을 모두 지원합니다.
+    base, path = _validated_url(base_url)
+    if not path:
+        root = base + API_PATH
+    elif path.endswith('/api/parking/ai'):
+        root = base
+    else:
+        root = base + '/api/parking/ai'
+    urls = {"VEHICLE_PASSAGE": root + '/vehicle-events',
+            "VEHICLE_SPACE_MATCH": root + '/space-match-events',
+            "PARKING_OCCUPANCY": root + '/occupancy-events'}
+    # 직접 지정한 점유 API 주소는 다른 두 이벤트의 주소에 영향을 주지 않습니다.
+    if occupancy_url:
+        _validated_url(occupancy_url)
+        urls['PARKING_OCCUPANCY'] = occupancy_url
+    return urls
+
+
+def _configured_api_key(environment):
+    # 점유 전용 키가 있으면 우선 사용하고, 비어 있으면 현재 Boot 공용 키를 사용합니다.
+    return environment.get('PARKING_AI_API_KEY') or environment.get('AI_OCCUPANCY_API_KEY', '')
 
 
 # 1-4. 이벤트 종류별로 요청할 API 주소 관리
 # 공통 전송 함수에서 event_type만으로 전송 주소를 결정할 수 있음
-API_URLS = {
-    "VEHICLE_PASSAGE": (
-        f"{BASE_URL}{API_PATH}/vehicle-events"
-    ),
-    "VEHICLE_SPACE_MATCH": (
-        f"{BASE_URL}{API_PATH}/space-match-events"
-    ),
-    "PARKING_OCCUPANCY": API_URL
-}
+API_URLS = _build_event_urls(BASE_URL, os.getenv('PARKING_AI_API_URL'))
+API_URL = API_URLS['PARKING_OCCUPANCY']
 
 
 # 1-5. API 인증키 및 실제 전송 활성화 여부
 # SEND_ENABLED가 false이면 실제 DB를 변경하지 않고 JSON만 출력
-API_KEY = os.getenv("PARKING_AI_API_KEY", "")
+API_KEY = _configured_api_key(os.environ)
 
 SEND_ENABLED = (
     os.getenv(
@@ -440,7 +469,7 @@ def retry_pending_events():
     # 10-2. 인증키가 없으면 기존 대기 목록을 유지
     if not API_KEY:
         print(
-            "[전송 대기] PARKING_AI_API_KEY가 없습니다."
+            "[전송 대기] PARKING_AI_API_KEY 또는 AI_OCCUPANCY_API_KEY가 없습니다."
         )
         return []
 
@@ -475,7 +504,9 @@ def retry_pending_events():
                 api_url,
                 headers=headers,
                 json=event,
-                timeout=(3, 15)
+                timeout=(3, 15),
+                # 서버 이동 응답을 따라 인증키와 이벤트를 다른 주소로 전달하지 않습니다.
+                allow_redirects=False
             )
 
         except requests.RequestException as error:
@@ -551,6 +582,26 @@ def retry_pending_events():
                 "http_status": response.status_code,
                 "body": response.text
             }
+
+        # 10-8-1. 점유 응답은 Boot 계약과 요청 ID·구획·상태를 함께 확인합니다.
+        # 불일치는 처리 완료로 추정하거나 자동 재전송하지 않고 확인용으로 보관합니다.
+        if event_type == 'PARKING_OCCUPANCY':
+            try:
+                outcome = validate_occupancy_response(event, response_data)
+            except ValueError:
+                save_held_event(event, 'INVALID_OCCUPANCY_RESPONSE', response_data)
+                events.pop(0)
+                save_pending_events(events)
+                results.append({'event_id': event_id, 'status': 'HELD',
+                                'reason': 'INVALID_OCCUPANCY_RESPONSE'})
+                return results
+            if outcome in {'SKIPPED_PROTECTED', 'SKIPPED_BEFORE_CORRECTION'}:
+                # Boot가 기록은 남겼지만 상태를 반영하지 않은 결과도 별도로 남깁니다.
+                save_held_event(event, outcome, response_data)
+                events.pop(0)
+                save_pending_events(events)
+                results.append({'event_id': event_id, 'status': outcome, 'response': response_data})
+                continue
 
         # 10-9. 선행 조건이 부족해 PENDING이 발생한 경우
         # 입차 기록, 구획 점유 등 조건을 먼저 확인해야 하므로 held 파일로 옮기고 자동 재전송은 중단
@@ -680,4 +731,4 @@ def queue_ai_event(event):
 
 # parking_realtime.py 등에서 호출하던 함수명을 변경하지 않도록 주차면 전용 함수가 공통 이벤트 등록 함수를 호출
 def queue_occupancy_event(event):
-    return queue_ai_event(event)    
+    return queue_ai_event(event)

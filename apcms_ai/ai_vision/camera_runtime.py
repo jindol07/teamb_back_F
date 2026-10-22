@@ -20,10 +20,29 @@ def release_resources(*resources):
     return failures
 
 
-def open_camera(index):
+CAMERA_BACKENDS = ('default', 'auto', 'dshow', 'msmf', 'v4l2')
+
+
+def validate_camera_backend(backend):
+    # 운영체제에서 사용할 수 없는 연결 방식은 장치를 열기 전에 안내합니다.
+    if not isinstance(backend, str) or backend not in CAMERA_BACKENDS:
+        raise ValueError('지원하지 않는 카메라 연결 방식입니다.')
+    if backend in ('dshow', 'msmf') and sys.platform != 'win32':
+        raise ValueError('dshow와 msmf는 Windows에서만 사용할 수 있습니다.')
+    if backend == 'v4l2' and not sys.platform.startswith('linux'):
+        raise ValueError('v4l2는 Linux에서만 사용할 수 있습니다.')
+
+
+def open_camera(index, backend='default'):
     import cv2
-    # 1. DirectShow는 Windows에서만 지정하고 Linux에서는 OpenCV 자동 선택을 사용합니다.
-    return cv2.VideoCapture(index, cv2.CAP_DSHOW) if sys.platform == "win32" else cv2.VideoCapture(index)
+    validate_camera_backend(backend)
+    # 1. 기존 호출의 기본값을 유지하고, 명시적으로 선택한 경우에만 연결 방식을 바꿉니다.
+    if backend == 'default':
+        return cv2.VideoCapture(index, cv2.CAP_DSHOW) if sys.platform == 'win32' else cv2.VideoCapture(index)
+    if backend == 'auto':
+        return cv2.VideoCapture(index)
+    code = {'dshow': cv2.CAP_DSHOW, 'msmf': cv2.CAP_MSMF, 'v4l2': cv2.CAP_V4L2}[backend]
+    return cv2.VideoCapture(index, code)
 
 
 def require_display():
