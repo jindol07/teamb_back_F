@@ -38,6 +38,34 @@ public class ParkingSpaceService {
     public List<ParkingSpaceRow> findAllAdmin() { return dao.findAllAdmin(); }
 
     @Transactional(readOnly = true)
+    public List<kr.co.alpharking.dto.parking.ParkingReservationRow> reservations(
+            Long spaceId, String rawDate, boolean upcoming) {
+        if (spaceId != null && dao.findById(spaceId) == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "주차구획이 존재하지 않습니다.");
+        }
+        if (upcoming) {
+            return dao.findReservations(spaceId, Timestamp.valueOf(
+                    LocalDateTime.now(java.time.ZoneId.of("Asia/Seoul"))), null);
+        }
+        try {
+            java.time.LocalDate date = java.time.LocalDate.parse(rawDate);
+            if (date.getYear() < 1900 || date.getYear() > 9998) throw new IllegalArgumentException();
+            return dao.findReservations(spaceId, Timestamp.valueOf(date.atStartOfDay()),
+                    Timestamp.valueOf(date.plusDays(1).atStartOfDay()));
+        } catch (IllegalArgumentException | java.time.format.DateTimeParseException exception) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "조회 날짜를 YYYY-MM-DD 형식으로 입력해 주세요.");
+        }
+    }
+
+    @Transactional(readOnly = true)
+    public List<kr.co.alpharking.dto.parking.ParkingReservationRow> reservationHistory(Long spaceId) {
+        if (spaceId == null || dao.findById(spaceId) == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "주차구획이 존재하지 않습니다.");
+        }
+        return dao.findReservationHistory(spaceId);
+    }
+
+    @Transactional(readOnly = true)
     public List<ParkingSpacePublicRow> findAllPublic() { return dao.findAllPublic(); }
 
     private static final Set<String> ALLOWED_STATUSES = Set.of("AVAILABLE", "OCCUPIED", "RESERVED", "DISABLED");
