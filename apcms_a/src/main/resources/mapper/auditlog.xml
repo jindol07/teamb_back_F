@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="kr.co.alpharking.dao.auditlog.AuditlogDao">
+
+	<!-- DB 컬럼과 AuditlogDto 필드 매핑 -->
+	<resultMap id="auditlogResultMap"
+		type="audit">
+		<id property="auditlogid" column="audit_log_id" />
+		<result property="actortypecode" column="actor_type_code" />
+		<result property="actorid" column="actor_id" />
+		<result property="actiontypecode" column="action_type_code" />
+		<result property="targettable" column="target_table" />
+		<result property="targetid" column="target_id" />
+		<result property="beforedata"
+			column="before_data"
+			jdbcType="CLOB" />
+		<result property="afterdata"
+			column="after_data"
+			jdbcType="CLOB" />
+		<result property="changereason" column="change_reason" />
+		<result property="occurredat" column="occurred_at" />
+	</resultMap>
+
+	<!-- 감사 로그 등록 -->
+	<insert id="add" parameterType="audit">
+
+		<selectKey keyProperty="auditlogid"
+			resultType="java.lang.Long"
+			order="BEFORE">
+			SELECT seq_audit_log.NEXTVAL
+			FROM dual
+		</selectKey> INSERT
+		INTO audit_log ( audit_log_id, actor_type_code, actor_id,
+		action_type_code, target_table, target_id, before_data, after_data,
+		change_reason ) VALUES ( #{auditlogid}, #{actortypecode}, #{actorid},
+		#{actiontypecode}, #{targettable}, #{targetid}, #{beforedata,
+		jdbcType=CLOB}, #{afterdata, jdbcType=CLOB}, #{changereason} ) </insert>
+
+	<!-- 감사 로그 전체 조회 -->
+	<select id="list" resultMap="auditlogResultMap">
+		SELECT
+		audit_log_id,
+		actor_type_code,
+		actor_id,
+		action_type_code,
+		target_table,
+		target_id,
+		before_data,
+		after_data,
+		change_reason,
+		occurred_at
+		FROM audit_log
+		ORDER BY occurred_at DESC, audit_log_id DESC
+	</select>
+
+	<!-- 반려 감사 로그 등록 -->
+	<insert id="addRejectAuditLog">
+		INSERT INTO audit_log (
+		audit_log_id,
+		actor_type_code,
+		actor_id,
+		action_type_code,
+		target_table,
+		target_id,
+		before_data,
+		after_data,
+		change_reason,
+		occurred_at
+		)
+		SELECT
+		seq_audit_log.NEXTVAL,
+		'ADMIN',
+		reviewer_admin_id,
+		'REJECT',
+		'VEHICLE_CHANGE_REQUEST',
+		vehicle_change_request_id,
+		TO_CLOB('{"requestStatusCode":"REQUESTED"}'),
+		TO_CLOB('{"requestStatusCode":"REJECTED"}'),
+		review_reason,
+		SYSDATE
+		FROM vehicle_change_request
+		WHERE vehicle_change_request_id = #{vehiclechangerequestid}
+		AND request_status_code = 'REJECTED'
+		AND reviewer_admin_id IS NOT NULL
+	</insert>
+</mapper>

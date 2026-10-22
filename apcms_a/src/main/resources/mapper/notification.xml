@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="kr.co.alpharking.dao.notification.NotificationDao">
+
+	<!-- DTO 매핑 -->
+	<resultMap id="NotificationResultMap" type="noti">
+		<id property="notification_id" column="notification_id" />
+		<result property="office_id" column="office_id" />
+		<result property="notification_type_code"
+			column="notification_type_code" />
+		<result property="title" column="title" />
+		<result property="content" column="content" />
+		<result property="read_yn" column="read_yn" />
+		<result property="created_at" column="created_at" />
+		<result property="read_at" column="read_at" />
+	</resultMap>
+
+	<!-- 사무실별 알림 목록 -->
+	<select id="selectNotificationList" resultMap="NotificationResultMap">
+		SELECT
+		notification_id,
+		office_id,
+		notification_type_code,
+		title,
+		content,
+		read_yn,
+		created_at,
+		read_at
+		FROM notification
+		WHERE office_id = #{office_id}
+		ORDER BY created_at DESC, notification_id DESC
+	</select>
+
+	<!-- 알림 상세 조회 -->
+	<select id="selectNotificationById" resultMap="NotificationResultMap">
+		SELECT
+		notification_id,
+		office_id,
+		notification_type_code,
+		title,
+		content,
+		read_yn,
+		created_at,
+		read_at
+		FROM notification
+		WHERE notification_id = #{notification_id}
+	</select>
+
+	<!-- 알림 등록 -->
+	<insert id="insertNotification"
+		parameterType="noti"
+		useGeneratedKeys="true"
+		keyProperty="notification_id">
+		INSERT INTO notification (
+		office_id,
+		notification_type_code,
+		title,
+		content,
+		read_yn,
+		created_at
+		) VALUES (
+		#{office_id},
+		#{notification_type_code},
+		#{title},
+		#{content},
+		'N',
+		CURRENT_TIMESTAMP
+		)
+	</insert>
+
+	<!-- 읽음 처리 -->
+	<update id="updateReadYn">
+		UPDATE notification
+		SET
+		read_yn = 'Y',
+		read_at = CURRENT_TIMESTAMP
+		WHERE notification_id = #{notification_id}
+		AND read_yn = 'N'
+	</update>
+
+	<!-- 알림 삭제 -->
+	<delete id="deleteNotification">
+		DELETE FROM notification
+		WHERE notification_id = #{notification_id}
+	</delete>
+
+</mapper>

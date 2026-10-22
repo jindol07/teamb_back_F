@@ -62,17 +62,17 @@
 	</resultMap>
 	<select id="findVehiclePenalties" parameterType="long"
 		resultType="kr.co.alpharking.dto.vehiclepenalty.VehiclePenaltyDto">
-		SELECT vehiclepenaltyid AS "vehiclepenaltyid",
-		vehicleid AS "vehicleid",
-		violationtypecode AS "violationtypecode",
-		penaltyamount AS "penaltyamount",
+		SELECT vehicle_penalty_id AS "vehiclepenaltyid",
+		vehicle_id AS "vehicleid",
+		violation_type_code AS "violationtypecode",
+		penalty_amount AS "penaltyamount",
 		reason AS "reason",
-		imposedbyadminid AS "imposedbyadminid",
-		imposedat AS "imposedat",
-		statuscode AS "statuscode"
-		FROM vehiclepenalty
-		WHERE vehicleid = #{vehicleId}
-		ORDER BY imposedat DESC
+		imposed_by_admin_id AS "imposedbyadminid",
+		imposed_at AS "imposedat",
+		status_code AS "statuscode"
+		FROM vehicle_penalty
+		WHERE vehicle_id = #{vehicleId}
+		ORDER BY imposed_at DESC
 	</select>
 	<select id="findVehicleParkingUsages" parameterType="long"
 		resultType="kr.co.alpharking.dto.parking.ParkingUsageRow">
@@ -140,3 +140,5 @@
 	</update>
 
 </mapper>
+
+

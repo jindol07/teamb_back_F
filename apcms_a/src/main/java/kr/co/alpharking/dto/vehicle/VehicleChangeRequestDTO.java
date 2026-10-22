@@ -32,4 +32,7 @@ public class VehicleChangeRequestDTO {
     private Date reviewedat;         // 검토 일시
     @JsonFormat(shape = JsonFormat.Shape.STRING, pattern = "yyyy-MM-dd HH:mm:ss", timezone = "Asia/Seoul")
     private Date appliedat;          // 적용 일시
+    
+    private String beforedata; // 감사 로그 변경 전 JSON
+    private String afterdata;  // 감사 로그 변경 후 JSON
 }
