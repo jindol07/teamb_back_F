@@ -12,7 +12,7 @@ from ai_vision.parking.parking_preview import ParkingPreview
 from ai_vision.parking.parking_processor import ParkingOccupancyProcessor
 from ai_vision.parking.parking_realtime import detect_spaces
 from ai_vision.recognition.local_io import read_json, write_json_atomic
-from ai_vision.parking.parking_delivery import ParkingDelivery, delivery_settings, check_previous_report
+from ai_vision.parking.parking_delivery import ParkingDelivery, ParkingDeliveryWorker, delivery_settings, check_previous_report
 from ai_vision.parking.inspect_parking_camera import checkpoint, deliver_changes
 from ai_vision.parking.parking_calibration import load_reference, configure_resolution
 
@@ -38,6 +38,7 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
                           source_label=f'Camera {camera_index} / {camera_backend}') if preview else None
     delivery = ParkingDelivery(settings) if settings else None
     capture = None
+    worker = None
     created_output = False
     report = {'status': 'RUNNING', 'dry_run': not enable_http, 'http_requests': 0,
               'record_type': 'PARKING_CAMERA_SESSION',
@@ -48,6 +49,7 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
     if enable_http:
         print('실제 점유 전송 모드 / 허용 구획: ' + ', '.join(sorted(settings['allowed_codes'])))
     try:
+        worker = ParkingDeliveryWorker(delivery) if delivery is not None else None
         capture = open_camera(camera_index, backend=camera_backend)
         if not capture.isOpened():
             raise OSError('웹캠을 연결할 수 없습니다.')
@@ -65,6 +67,9 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
                 now = time.monotonic()
                 if now - started >= seconds:
                     report['status'] = 'COMPLETED' if processor.occupancy() is not None else 'INCOMPLETE'
+                    break
+                if worker is not None and not worker.poll(lambda: checkpoint(output_dir, report, processor, delivery)):
+                    report['status'] = 'DELIVERY_STOPPED'
                     break
                 ok, frame = capture.read()
                 if not ok:
@@ -85,13 +90,14 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
                     if publish_results and confirmed is not None:
                         from ai_vision.parking.parking_realtime import save_results
                         save_results(frame, processor.spaces, confirmed)
-                    if delivery is not None and not deliver_changes(output_dir, report, processor, delivery, outcome['events']):
+                    if delivery is not None and not deliver_changes(output_dir, report, processor, delivery, outcome['events'], worker=worker):
+                        report['status'] = 'DELIVERY_STOPPED'
                         break
                 # 상태가 바뀌지 않아도 진행 상황을 남겨 강제 종료 시 확인할 수 있게 합니다.
                 if now - last_checkpoint >= 5:
                     checkpoint(output_dir, report, processor, delivery)
                     last_checkpoint = now
-                if view is not None and view.show(frame) == ord('q'):
+                if view is not None and view.show(frame, pending_http=worker.pending if worker is not None else 0) == ord('q'):
                     report['status'] = 'STOPPED'
                     break
     except KeyboardInterrupt:
@@ -100,14 +106,18 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
         report['status'], report['error_type'] = 'FAILED', type(error).__name__
     finally:
         # 4. 중간 실패에도 카메라와 준비 화면을 모두 정리합니다.
-        for resource, method in ((capture, 'release'), (view, 'close'), (delivery, 'close')):
+        for resource, method in ((capture, 'release'), (view, 'close'), (worker, 'close'), (delivery, 'close')):
             if resource is not None:
                 try:
+                    if resource is worker and worker.future is not None and not worker.future.done():
+                        print('카메라는 종료했습니다. 이미 시작한 전송 결과를 확인하고 있습니다.')
                     getattr(resource, method)()
                 except Exception as error:
                     report['status'] = 'FAILED'
                     report['error_type'] = report['error_type'] or type(error).__name__
         report['statistics'], report['occupancy'] = processor.statistics(), processor.occupancy()
+        if worker is not None and worker.blocked and report['status'] != 'FAILED':
+            report['status'] = 'DELIVERY_STOPPED'
         # 전송 중 Ctrl+C로 끝났어도 서버 반영 여부가 불명확하면 정상 종료로 표시하지 않습니다.
         if report['status'] == 'STOPPED' and any(
                 row['status'] in ('IN_FLIGHT', 'DELIVERY_UNKNOWN') for row in report['deliveries']):

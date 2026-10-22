@@ -2,6 +2,8 @@
 """전송 설정을 확인하고 웹캠 점유 이벤트를 한 번만 보냅니다."""
 
 import requests
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor, wait
 from ai_vision.parking.occupancy_response import validate_occupancy_response
 from ai_vision.parking.parking_event_sender import _build_event_urls, _configured_api_key, convert_space_code
 
@@ -59,6 +61,85 @@ class ParkingDelivery:
 
     def close(self):
         self.session.close()
+
+
+class ParkingDeliveryWorker:
+    """메인 스레드가 전송 순서를 제어하고 작업자 하나가 HTTP만 처리합니다."""
+
+    def __init__(self, client, max_pending=8):
+        if type(max_pending) is not int or not 1 <= max_pending <= 16:
+            raise ValueError('점유 전송 대기 한도는 1~16 정수여야 합니다.')
+        self.client = client
+        self.limit = max_pending
+        self.queue = deque()
+        self.future = None
+        self.receipt = None
+        self.aborted = False
+        self.closed = False
+        self.executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix='parking-http')
+
+    @property
+    def pending(self):
+        return len(self.queue) + int(self.future is not None)
+
+    @property
+    def blocked(self):
+        return self.aborted or self.client.blocked
+
+    def enqueue(self, event, receipt):
+        # 1. 실행 중인 요청도 포함하여 메모리 대기열 크기를 제한합니다.
+        if self.closed:
+            raise RuntimeError('종료한 점유 전송 작업자에는 등록할 수 없습니다.')
+        if self.blocked or self.pending >= self.limit:
+            self.aborted = True
+            return False
+        self.queue.append((event, receipt))
+        return True
+
+    def cancel_queued(self):
+        while self.queue:
+            _, receipt = self.queue.popleft()
+            receipt['status'] = 'CANCELLED_BEFORE_SEND'
+            self.aborted = True
+
+    def _complete(self):
+        try:
+            self.receipt.update(self.future.result())
+        except (Exception, KeyboardInterrupt):
+            self.receipt.update(status='DELIVERY_UNKNOWN', reason='WORKER_ERROR')
+            self.aborted = True
+        finally:
+            self.future = self.receipt = None
+
+    def poll(self, persist):
+        # 2. 완료 기록 저장과 다음 요청 시작은 카메라 스레드에서만 수행합니다.
+        if self.future is not None and self.future.done():
+            self._complete()
+            persist()
+        if self.blocked:
+            self.cancel_queued()
+            persist()
+            return False
+        if self.future is None and self.queue:
+            event, receipt = self.queue.popleft()
+            receipt['status'] = 'IN_FLIGHT'
+            persist()  # 기록을 저장하지 못하면 HTTP 작업을 제출하지 않습니다.
+            self.receipt = receipt
+            self.future = self.executor.submit(self.client.send, event)
+        return True
+
+    def close(self):
+        # 3. 종료 후 새 요청은 시작하지 않습니다. 이미 시작한 요청만 결과를 회수합니다.
+        if self.closed:
+            return
+        self.closed = True
+        self.cancel_queued()
+        try:
+            if self.future is not None:
+                wait([self.future])
+                self._complete()
+        finally:
+            self.executor.shutdown(wait=True)
 
 
 

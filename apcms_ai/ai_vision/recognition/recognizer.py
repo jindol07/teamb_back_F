@@ -13,6 +13,7 @@ import re
 import tempfile
 import unicodedata
 import cv2
+import numpy as np
 from functools import wraps
 
 from ai_vision.recognition.recognition_models import RecognitionModels
@@ -150,6 +151,38 @@ def cleanup_plate_text(text):
 
 # 7. run_paddleocr() - 번호판 OCR 실행
 
+def _join_plate_ocr(texts, polygons):
+    # 7-1. 번호판 아래의 작은 영문 장식만 구분합니다. 번호 일부를 추측해서 복원하지 않습니다.
+    original = normalize_plate_text("".join(texts))
+    if len(texts) != len(polygons) or not texts:
+        return original
+    normalized = [normalize_plate_text(text) for text in texts]
+    decorations = [i for i, text in enumerate(normalized) if re.fullmatch(r"[A-Z]{3,}", text)]
+    main = [i for i in range(len(texts)) if i not in decorations]
+    candidate = cleanup_plate_text("".join(normalized[i] for i in main))
+    if not decorations or not main or classify_plate_format(candidate) != "KOREAN_VALID":
+        return original
+    # 7-2. 좌표가 없거나 잘못되면 문자를 버리지 않고 원래 결과를 유지합니다.
+    bounds = []
+    for polygon in polygons:
+        try:
+            points = np.asarray(polygon, dtype=float)
+        except (TypeError, ValueError):
+            return original
+        if points.shape != (4, 2) or not np.isfinite(points).all():
+            return original
+        top, bottom = float(points[:, 1].min()), float(points[:, 1].max())
+        if bottom <= top:
+            return original
+        bounds.append((bottom - top, (top + bottom) / 2))
+    height = min(bounds[i][0] for i in main)
+    center = max(bounds[i][1] for i in main)
+    # 7-3. 본문보다 충분히 작고 아래에 있는 영문만 제외합니다. 큰 글자·같은 줄은 유지합니다.
+    if all(bounds[i][0] <= height * .4 and bounds[i][1] > center + height * .5
+           for i in decorations):
+        return candidate
+    return original
+
 @_serialize_inference("ocr")
 def run_paddleocr(image):
     """
@@ -185,14 +218,16 @@ def run_paddleocr(image):
         results = _models.ocr().predict(temp_path)
 
         texts = []
+        polygons = []
 
         # 7-5. 인식된 문자열만 추출
         # rec_texts: PaddleOCR가 인식한 문자 목록
         for item in results:
             texts.extend(item["rec_texts"])
+            polygons.extend(item.get("rec_polys", []))
 
         # 7-6. 여러 문자열을 하나의 번호판 문자열로 연결
-        text = "".join(texts)
+        text = _join_plate_ocr(texts, polygons)
 
     # 7-7. 공백 등을 정리한 문자열 반환
     return normalize_plate_text(text)
