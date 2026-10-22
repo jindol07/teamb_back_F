@@ -142,9 +142,8 @@ async def answer(
         for cat in category_list:
 
             if cat == "RESERVATION" and use_test_reservation:
-                # 개발용 Spring Boot 예약 DB 조회
-                # 인증된 본인 데이터가 아닌 테스트 데이터
-                data = await BackendClient().get_test_reservations()
+                # 개발용 분기에서도 사용자 JWT로 인증된 본인 예약만 조회합니다.
+                data = await BackendClient().get_test_reservations(token)
                 source = "dev-api:RESERVATION"
 
             elif cat == "PARKING_STATUS":
