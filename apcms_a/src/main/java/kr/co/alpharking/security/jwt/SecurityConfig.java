@@ -62,7 +62,9 @@ public class SecurityConfig {
                 .httpBasic((basic) -> basic.disable())
             	//.authenticationProvider(daoAuthenticationProvider())
                 .authorizeHttpRequests((auth) -> auth
-                		.requestMatchers("/api/notice/**").permitAll()
+                        // 관리자 공지 API는 목록·상세·다운로드·변경 이력을 포함해 ADMIN만 접근합니다.
+                        // 일반 사용자 공지 조회는 사용자 서버의 API를 사용합니다.
+                        .requestMatchers("/api/notice", "/api/notice/**").hasAuthority("ADMIN")
                         .requestMatchers("/api/auth/**").permitAll() // /api/auth/** 에서 오는 모든 요청은 허용
                         .requestMatchers("/demos/**").permitAll() 
                         .requestMatchers("/api/gallery/**").permitAll()
