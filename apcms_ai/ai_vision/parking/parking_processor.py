@@ -15,13 +15,14 @@ MAX_MASK_BYTES = 64 * 1024 * 1024
 
 class ParkingOccupancyProcessor:
     def __init__(self, reference, config, detector, stable_frames=5, minimum_interval=.5,
-                 max_gap_seconds=2, max_mask_bytes=MAX_MASK_BYTES):
+                 max_gap_seconds=2, max_mask_bytes=MAX_MASK_BYTES, emit_events=True):
         # 1. 카메라를 열기 전에 이미지·좌표·구획 매핑과 메모리 한도를 검사합니다.
         config = deepcopy(validate_spaces(config))
         if (not isinstance(reference, np.ndarray) or reference.dtype != np.uint8 or reference.ndim != 3 or
                 reference.shape[2] != 3 or reference.shape[:2] != (config['image_height'], config['image_width'])):
             raise ValueError("기준 이미지와 주차면 좌표의 해상도가 일치해야 합니다.")
-        if type(stable_frames) is not int or not 2 <= stable_frames <= 120 or not callable(detector):
+        if (type(stable_frames) is not int or not 2 <= stable_frames <= 120 or not callable(detector)
+                or type(emit_events) is not bool):
             raise ValueError("연속 확정 횟수와 점유 분석 함수를 확인하세요.")
         if (any(type(value) not in (int, float) or not math.isfinite(value) for value in (minimum_interval, max_gap_seconds)) or
                 not 0 < minimum_interval <= max_gap_seconds <= 300):
@@ -42,6 +43,7 @@ class ParkingOccupancyProcessor:
         self.reference_gray = cv2.GaussianBlur(cv2.cvtColor(reference, cv2.COLOR_BGR2GRAY), (5, 5), 0)
         self._shape, self._detector = reference.shape, detector
         self._stable, self._interval, self._gap = stable_frames, minimum_interval, max_gap_seconds
+        self._emit_events = emit_events
         self.states = {space['id']: {'previous': None, 'same_count': 0, 'confirmed': None, 'change_ratio': 0.0}
                        for space in self.spaces}
         self._last_call = self._last_sample = None
@@ -82,7 +84,8 @@ class ParkingOccupancyProcessor:
             state['confirmed'], state['change_ratio'] = status, result['change_ratio']
             changes.append({**result, 'previous_status': old})
             # 3. 생성만 합니다. 네트워크 전송이나 대기 파일 등록은 호출자가 선택합니다.
-            events.append(create_occupancy_event(result['space_id'], status, result['change_ratio']))
+            if self._emit_events:
+                events.append(create_occupancy_event(result['space_id'], status, result['change_ratio']))
         self._last_call = self._last_sample = seconds
         self._samples += 1
         self._changes += len(changes)
@@ -93,6 +96,17 @@ class ParkingOccupancyProcessor:
             return None
         return [{'space_id': key, 'status': value['confirmed'], 'change_ratio': value['change_ratio']}
                 for key, value in self.states.items()]
+
+    def matching_spaces(self, seconds):
+        # 4. 화면 표시용 마지막 확정값과 현재 차량 연결에 쓸 연속 근거를 구분합니다.
+        if (type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds < 0
+                or (self._last_call is not None and seconds < self._last_call)):
+            raise ValueError('점유 근거 조회 시각이 유효하지 않습니다.')
+        if self._last_sample is None or seconds - self._last_sample > self._gap:
+            return set()
+        return {key for key, state in self.states.items()
+                if state['confirmed'] == state['previous'] == 'OCCUPIED'
+                and state['same_count'] >= self._stable}
 
     def occupancy(self):
         results = self.confirmed_results()

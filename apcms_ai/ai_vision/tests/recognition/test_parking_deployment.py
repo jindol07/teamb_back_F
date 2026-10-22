@@ -17,6 +17,7 @@ import numpy as np
 
 from fastapi import HTTPException
 from ai_vision.paths import RESULT_DIR
+from ai_vision.recognition.local_io import read_json
 from ai_vision.parking import parking_event_sender as sender
 from ai_vision.parking.parking_api import get_parking_occupancy
 from ai_vision.parking.space_editor import SpaceEditorHandler
@@ -109,6 +110,40 @@ class ParkingSequenceTests(ParkingSceneFixture, unittest.TestCase):
             self.assertEqual(processor.process(self.reference, seconds)['events'], [])
         self.assertEqual(len(processor.process(self.reference, 10)['events']), 1)
         self.assertEqual(processor.statistics()['gap_resets'], 1)
+
+    def test_eventless_analysis_updates_occupancy_without_creating_delivery_events(self):
+        processor = self.processor(single=True, emit_events=False)
+        with patch('ai_vision.parking.parking_processor.create_occupancy_event',
+                   side_effect=AssertionError('분석 전용 이벤트 생성 금지')):
+            for index in range(5):
+                self.assertEqual(processor.process(self.occupied, index * .5)['events'], [])
+        self.assertEqual(processor.occupancy()['occupied_count'], 1)
+        self.assertEqual(processor.matching_spaces(2), {'A-01'})
+
+    def test_matching_spaces_require_fresh_stable_occupied_observations(self):
+        processor = self.processor(single=True, emit_events=False)
+        self.assertEqual(processor.matching_spaces(0), set())
+        for index in range(5):
+            processor.process(self.occupied, index * .5)
+        self.assertEqual(processor.matching_spaces(2), {'A-01'})
+        self.assertEqual(processor.matching_spaces(4.1), set())
+        processor.process(self.occupied, 6)
+        self.assertEqual(processor.matching_spaces(6), set())
+        for index in range(1, 5):
+            processor.process(self.occupied, 6 + index * .5)
+        self.assertEqual(processor.matching_spaces(8), {'A-01'})
+        processor.process(self.reference, 8.5)
+        self.assertEqual(processor.occupancy()['occupied_count'], 1)
+        self.assertEqual(processor.matching_spaces(8.5), set())
+
+    def test_matching_spaces_reject_invalid_or_old_query_time(self):
+        processor = self.processor(single=True)
+        processor.process(self.reference, 2)
+        for seconds in (False, -1, float('nan'), float('inf'), 1):
+            with self.subTest(seconds=seconds), self.assertRaises(ValueError):
+                processor.matching_spaces(seconds)
+        with self.assertRaises(ValueError):
+            self.processor(emit_events=1)
 
     def test_bad_detection_does_not_partially_advance_state(self):
         detector = Mock()
@@ -218,6 +253,267 @@ class ParkingVideoCheckTests(ParkingSceneFixture, unittest.TestCase):
 
 
 class ParkingCameraTests(ParkingSceneFixture, unittest.TestCase):
+    def setUp(self):
+        super().setUp()
+        from ai_vision.parking import run_parking_camera as camera
+        # 기존 가짜 카메라는 즉시 무한 프레임을 반환하므로 수집 스레드는 별도로 검사합니다.
+        def buffered(capture):
+            wrapper = Mock()
+            def read():
+                outcome = capture.read()
+                wrapper.captured_monotonic = camera.time.monotonic()
+                return outcome
+            wrapper.read.side_effect = read
+            wrapper.release.side_effect = capture.release
+            wrapper.summary.return_value = {'mode': 'LATEST_FRAME_ONLY', 'worker_alive': False}
+            return wrapper
+        self.capture_factory = self.enterContext(patch.object(camera, 'LatestFrameCapture', side_effect=buffered))
+
+    def test_tracking_uses_capture_timestamp_instead_of_processing_clock(self):
+        from ai_vision.parking import run_parking_camera as camera
+        root, reference, config = self.inputs()
+        capture, observer, buffer = Mock(), self.local_observer(), Mock()
+        buffer.read.return_value = (True, self.occupied)
+        buffer.captured_monotonic = 10.25
+        buffer.summary.return_value = {'mode': 'LATEST_FRAME_ONLY', 'worker_alive': False}
+        self.capture_factory.side_effect = None
+        self.capture_factory.return_value = buffer
+        with patch.object(camera, 'open_camera', return_value=capture), \
+                patch.object(camera.time, 'monotonic', side_effect=[10, 10.8, 11.5]), \
+                patch('ai_vision.parking.vehicle_space_tracker.VehicleSpaceObserver', return_value=observer):
+            report = camera.run_camera(reference, config, root / 'capture_clock', seconds=1,
+                                       preview=False, track_vehicles=True)
+        self.assertEqual(observer.process.call_args.args[1], .25)
+        self.assertEqual(observer.current_matches.call_args.args[1], .25)
+        buffer.release.assert_called_once()
+        capture.release.assert_not_called()
+        self.assertEqual(report['capture_statistics']['mode'], 'LATEST_FRAME_ONLY')
+
+    def test_capture_shutdown_error_clears_current_vehicle_location(self):
+        import itertools
+        from ai_vision.parking import run_parking_camera as camera
+        root, reference, config = self.inputs()
+        capture, observer, buffer = Mock(), self.local_observer(), Mock()
+        buffer.read.return_value = (True, self.occupied)
+        buffer.captured_monotonic = .2
+        buffer.release.side_effect = TimeoutError('카메라 읽기 종료 지연')
+        buffer.summary.return_value = {'worker_alive': True}
+        self.capture_factory.side_effect = None
+        self.capture_factory.return_value = buffer
+        with patch.object(camera, 'open_camera', return_value=capture), \
+                patch.object(camera.time, 'monotonic', side_effect=itertools.count(0, .2)), \
+                patch('ai_vision.parking.vehicle_space_tracker.VehicleSpaceObserver', return_value=observer):
+            report = camera.run_camera(reference, config, root / 'capture_close_failed', seconds=1,
+                                       preview=False, track_vehicles=True)
+        self.assertEqual(report['status'], 'FAILED')
+        self.assertEqual(report['error_type'], 'TimeoutError')
+        self.assertEqual(report['vehicle_space']['last_observed_matches'], [])
+        observer.close.assert_called_once()
+
+    def local_observer(self):
+        observer = Mock()
+        observer.process.return_value = {'events': [], 'observations': [{'track_id': 1}], 'completed_samples': []}
+        observer.summary.return_value = {'pending_ocr': False, 'ocr_submitted': 1, 'closed': True}
+        observer.current_matches.side_effect = lambda occupancy, seconds: (
+            [{'track_id': 1, 'space_id': 'A-01', 'plate_number': '91소6408'}]
+            if 'A-01' in occupancy.matching_spaces(seconds) else [])
+        return observer
+
+    def test_local_tracking_uses_same_frame_time_and_clears_current_matches_after_stop(self):
+        import itertools
+        from ai_vision.parking import run_parking_camera as camera
+        root, reference, config = self.inputs()
+        capture, observer = Mock(), self.local_observer()
+        capture.read.return_value = (True, self.occupied)
+        observer.close.side_effect = lambda: self.assertTrue(capture.release.called)
+        with patch.object(camera, 'open_camera', return_value=capture), \
+                patch.object(camera.time, 'monotonic', side_effect=itertools.count(0, .2)), \
+                patch('ai_vision.parking.vehicle_space_tracker.VehicleSpaceObserver', return_value=observer):
+            report = camera.run_camera(reference, config, root / 'tracked', seconds=5, preview=False,
+                                       track_vehicles=True)
+        self.assertEqual(report['status'], 'COMPLETED')
+        self.assertEqual(report['http_requests'], 0)
+        self.assertFalse(report['vehicle_space']['http_enabled'])
+        self.assertEqual(report['vehicle_space']['current_matches'], [])
+        self.assertEqual(report['vehicle_space']['last_observed_matches'][0]['plate_number'], '91소6408')
+        self.assertIs(observer.process.call_args.args[2], self.occupied)
+        self.assertEqual(observer.process.call_args.args[1], observer.current_matches.call_args.args[1])
+        observer.prepare.assert_called_once()
+        observer.close.assert_called_once()
+        saved = read_json(root / 'tracked/parking_camera_check.json')
+        self.assertEqual(saved['vehicle_space']['current_matches'], [])
+
+    def test_default_camera_does_not_load_vehicle_models(self):
+        import itertools
+        from ai_vision.parking import run_parking_camera as camera
+        root, reference, config = self.inputs()
+        capture = Mock()
+        capture.read.return_value = (True, self.reference)
+        with patch.object(camera, 'open_camera', return_value=capture), \
+                patch.object(camera.time, 'monotonic', side_effect=itertools.count(0, .5)), \
+                patch('ai_vision.parking.vehicle_space_tracker.VehicleSpaceObserver') as factory:
+            report = camera.run_camera(reference, config, root / 'default', seconds=5, preview=False)
+        factory.assert_not_called()
+        self.assertNotIn('vehicle_space', report)
+
+    def test_camera_connects_real_observer_and_occupancy_with_injected_recognition(self):
+        import itertools
+        from ai_vision.parking import run_parking_camera as camera
+        from ai_vision.parking.vehicle_space_tracker import VehicleSpaceObserver
+        root, reference, config = self.inputs()
+        observer = VehicleSpaceObserver(self.config,
+            tracker=Mock(return_value=[{'track_id': 1, 'box': [10, 10, 30, 65]}]),
+            plate_reader=Mock(return_value={'plate_number': '91소6408', 'plate_type': 'KOREAN_VALID',
+                                           'plate_detection_confidence': .9}))
+        self.addCleanup(observer.close)
+        capture = Mock()
+        def read():
+            # 가짜 장치의 프레임 간격을 제어합니다. 실제 관찰기·점유 처리기는 대체하지 않습니다.
+            if observer._pending is not None:
+                observer._pending.result(timeout=3)
+            return True, self.occupied
+        capture.read.side_effect = read
+        with patch.object(camera, 'open_camera', return_value=capture), \
+                patch.object(camera.time, 'monotonic', side_effect=itertools.count(0, .2)), \
+                patch('ai_vision.parking.vehicle_space_tracker.VehicleSpaceObserver', return_value=observer):
+            report = camera.run_camera(reference, config, root / 'real_observer', seconds=7, preview=False,
+                                       track_vehicles=True)
+        self.assertEqual(report['status'], 'COMPLETED')
+        vehicle = report['vehicle_space']
+        self.assertEqual(vehicle['last_observed_matches'][0]['space_id'], 'A-01')
+        self.assertEqual(vehicle['last_observed_matches'][0]['plate_number'], '91소6408')
+        self.assertEqual(vehicle['current_matches'], [])
+        self.assertTrue(vehicle['statistics']['closed'])
+        self.assertGreaterEqual(len(vehicle['completed_samples']), 2)
+        # 연속 점유 확인 후부터 새 정차·번호판 근거를 쌓습니다.
+        self.assertGreaterEqual(vehicle['completed_samples'][0]['sample']['video_seconds'], 2)
+        self.assertEqual(report['http_requests'], 0)
+
+    def test_camera_vehicle_journey_moves_reconnects_and_loses_current_location(self):
+        import itertools
+        from ai_vision.parking import run_parking_camera as camera
+        from ai_vision.parking.vehicle_space_tracker import VehicleSpaceObserver
+        root, reference, config = self.inputs()
+        second = self.reference.copy()
+        second[10:65, 50:70] = 255
+        state = {'index': 0, 'phase': '', 'rows': []}
+        observer = VehicleSpaceObserver(self.config, tracker=lambda frame: state['rows'],
+            plate_reader=lambda crop: {'plate_number': '91소6408', 'plate_type': 'KOREAN_VALID',
+                                       'plate_detection_confidence': .9})
+        self.addCleanup(observer.close)
+        history = []
+        original_matches = observer.current_matches
+        def matches(occupancy, seconds):
+            result = original_matches(occupancy, seconds)
+            history.append((state['phase'], seconds, copy.deepcopy(result), occupancy.occupancy()))
+            return result
+        observer.current_matches = matches
+        capture = Mock()
+        def read():
+            if observer._pending is not None:
+                observer._pending.result(timeout=3)
+            index = state['index']
+            state['index'] += 1
+            if index < 20:
+                state.update(phase='FIRST', rows=[{'track_id': 1, 'box': [10, 10, 30, 65]}])
+                return True, self.occupied
+            if index < 40 or 45 <= index < 65:
+                state.update(phase='SECOND' if index < 40 else 'RETURN',
+                             rows=[{'track_id': 1, 'box': [50, 10, 70, 65]}])
+                return True, second
+            if index < 45:
+                # 가림은 연결 철회이지만 점유는 계속 OCCUPIED일 수 있습니다.
+                state.update(phase='HIDDEN', rows=[])
+                return True, second
+            state.update(phase='EMPTY', rows=[])
+            return True, self.reference
+        capture.read.side_effect = read
+        preview = Mock()
+        preview.wait_until_ready.return_value = self.reference
+        screens = []
+        def show(frame, **kwargs):
+            screens.append((state['phase'], copy.deepcopy(preview.vehicle_progress)))
+            return 0
+        preview.show.side_effect = show
+        with patch.object(camera, 'open_camera', return_value=capture), \
+                patch.object(camera.time, 'monotonic', side_effect=itertools.count(0, .2)), \
+                patch.object(camera, 'ParkingPreview', return_value=preview), \
+                patch('ai_vision.parking.vehicle_space_tracker.VehicleSpaceObserver', return_value=observer):
+            report = camera.run_camera(reference, config, root / 'journey', seconds=34, preview=True,
+                                       track_vehicles=True)
+        self.assertEqual(report['status'], 'COMPLETED')
+        for phase, expected in [('FIRST', 'A-01'), ('SECOND', 'A-02'), ('RETURN', 'A-02')]:
+            rows = [row for row in history if row[0] == phase]
+            self.assertTrue(any(row[2] and row[2][0]['space_id'] == expected for row in rows), phase)
+            self.assertTrue(all(not row[2] or row[2][0]['space_id'] == expected for row in rows), phase)
+        self.assertTrue(all(not row[2] for row in history if row[0] in ('HIDDEN', 'EMPTY')))
+        hidden = [row for row in history if row[0] == 'HIDDEN']
+        self.assertTrue(all(row[3]['occupied_count'] == 1 for row in hidden))
+        vehicle = report['vehicle_space']
+        self.assertEqual([e['space_id'] for e in vehicle['events'] if e['kind'] == 'LOCAL_SPACE_MATCH'],
+                         ['A-01', 'A-02', 'A-02'])
+        self.assertEqual(vehicle['last_observed_matches'], [])
+        self.assertEqual(vehicle['observations'], [])
+        self.assertTrue(any(rows and rows[0]['status'] == 'LOCAL_MATCH' and rows[0]['plate_number'] == '91소6408'
+                            for phase, rows in screens if phase == 'SECOND'))
+        self.assertTrue(all(not rows for phase, rows in screens if phase in ('HIDDEN', 'EMPTY')))
+        self.assertEqual(report['occupancy']['occupied_count'], 0)
+        self.assertEqual(report['http_requests'], 0)
+
+    def test_vehicle_tracking_failure_does_not_leave_current_position(self):
+        import itertools
+        from ai_vision.parking import run_parking_camera as camera
+        root, reference, config = self.inputs()
+        capture, observer = Mock(), self.local_observer()
+        capture.read.return_value = (True, self.occupied)
+        observer.process.side_effect = RuntimeError('관찰 실패')
+        with patch.object(camera, 'open_camera', return_value=capture), \
+                patch.object(camera.time, 'monotonic', side_effect=itertools.count(0, .2)), \
+                patch('ai_vision.parking.vehicle_space_tracker.VehicleSpaceObserver', return_value=observer):
+            report = camera.run_camera(reference, config, root / 'failed_tracking', preview=False,
+                                       track_vehicles=True)
+        self.assertEqual(report['status'], 'FAILED')
+        self.assertEqual(report['vehicle_space']['current_matches'], [])
+        self.assertEqual(report['vehicle_space']['last_observed_matches'], [])
+        capture.release.assert_called_once()
+        observer.close.assert_called_once()
+
+    def test_model_preparation_failure_happens_before_camera_open(self):
+        from ai_vision.parking import run_parking_camera as camera
+        root, reference, config = self.inputs()
+        observer = self.local_observer()
+        observer.prepare.side_effect = RuntimeError('모델 준비 실패')
+        with patch.object(camera, 'open_camera') as open_camera, \
+                patch('ai_vision.parking.vehicle_space_tracker.VehicleSpaceObserver', return_value=observer):
+            report = camera.run_camera(reference, config, root / 'prepare_failed', preview=False,
+                                       track_vehicles=True)
+        self.assertEqual(report['status'], 'FAILED')
+        open_camera.assert_not_called()
+        observer.close.assert_called_once()
+
+    def test_late_ocr_failure_during_shutdown_clears_previous_candidate(self):
+        import itertools
+        from ai_vision.parking import run_parking_camera as camera
+        root, reference, config = self.inputs()
+        observer, capture = self.local_observer(), Mock()
+        observer.close.side_effect = RuntimeError('늦은 OCR 실패')
+        capture.read.return_value = (True, self.occupied)
+        with patch.object(camera, 'open_camera', return_value=capture), \
+                patch.object(camera.time, 'monotonic', side_effect=itertools.count(0, .2)), \
+                patch('ai_vision.parking.vehicle_space_tracker.VehicleSpaceObserver', return_value=observer):
+            report = camera.run_camera(reference, config, root / 'close_failed', seconds=5, preview=False,
+                                       track_vehicles=True)
+        self.assertEqual(report['status'], 'FAILED')
+        self.assertEqual(report['vehicle_space']['last_observed_matches'], [])
+
+    def test_tracking_cli_reaches_existing_camera_runner(self):
+        from ai_vision.parking import run_parking_camera as camera
+        summary = {'status': 'COMPLETED', 'read_frames': 0, 'events': [], 'http_requests': 0, 'error_type': None}
+        with patch.object(camera, 'run_camera', return_value=summary) as execute:
+            self.assertEqual(camera.main(['--reference', 'empty.png', '--config', 'spaces.json',
+                                          '--output-dir', 'out', '--track-vehicles', '--no-preview']), 0)
+        self.assertTrue(execute.call_args.kwargs['track_vehicles'])
+
     def test_formal_backend_option_reaches_camera_and_report(self):
         from ai_vision.parking import run_parking_camera as camera
         root, reference, config = self.inputs()
@@ -251,6 +547,27 @@ class ParkingCameraTests(ParkingSceneFixture, unittest.TestCase):
                         patch.object(parking_realtime, 'save_results') as save:
                     camera.run_camera(reference, config, root / 'session', preview=False, publish_results=publish)
                 self.assertEqual(save.call_count, 3 if publish else 0)
+
+    def test_unchanged_observation_refreshes_json_without_new_events_or_images(self):
+        import itertools
+        from ai_vision.parking import run_parking_camera as camera
+        for publish in (False, True):
+            with self.subTest(publish=publish):
+                root, reference, config = self.inputs()
+                capture = Mock()
+                capture.read.side_effect = [(True, self.reference)] * 12 + [(False, None)]
+                with patch.object(camera, 'open_camera', return_value=capture), \
+                     patch.object(camera.time, 'monotonic', side_effect=itertools.count(0, .5)), \
+                     patch.object(parking_realtime, 'save_results') as images, \
+                     patch.object(parking_realtime, 'save_snapshot') as snapshots:
+                    report = camera.run_camera(reference, config, root / 'unchanged', seconds=20,
+                                               preview=False, publish_results=publish)
+                self.assertEqual(images.call_count, 1 if publish else 0)
+                self.assertEqual(snapshots.call_count, 1 if publish else 0)
+                self.assertEqual(len(report['events']), 2)
+                self.assertEqual(report['http_requests'], 0)
+                self.assertEqual(report['status'], 'FAILED')  # 마지막 읽기 실패는 정상 종료로 표시하지 않습니다.
+                capture.release.assert_called_once()
 
     def inputs(self):
         base = RESULT_DIR / 'test_tmp'
@@ -327,6 +644,66 @@ class ParkingCameraTests(ParkingSceneFixture, unittest.TestCase):
             with self.assertRaises(ValueError):
                 view.show(np.zeros((100, 100, 3), dtype=np.uint8), preparing=True)
         show.assert_not_called()
+
+    def test_preparation_overlay_toggles_without_modifying_camera_or_reference(self):
+        from ai_vision.parking import parking_preview as preview
+        frame = np.zeros((100, 300, 3), dtype=np.uint8)
+        reference = np.full_like(frame, 200)
+        with patch.object(preview, 'require_display'), patch.object(preview.cv2, 'imshow') as show, \
+                patch.object(preview.cv2, 'waitKey', side_effect=[ord('r'), ord('q')]), \
+                patch.object(preview.cv2, 'getWindowProperty', return_value=1):
+            view = preview.ParkingPreview()
+            view.reference = reference
+            view.show(frame, preparing=True)
+            self.assertEqual(int(show.call_args.args[1][90, 290, 0]), 0)
+            self.assertTrue(view.compare_reference)
+            view.show(frame, preparing=True)
+            self.assertEqual(int(show.call_args.args[1][90, 290, 0]), 100)
+        self.assertFalse(frame.any())
+        self.assertTrue(np.all(reference == 200))
+
+    def test_vehicle_preview_renders_box_and_korean_plate_without_changing_input(self):
+        from ai_vision.parking import parking_preview as preview
+        frame = np.zeros((160, 600, 3), dtype=np.uint8)
+        with patch.object(preview, 'require_display'), patch.object(preview.cv2, 'imshow') as show, \
+                patch.object(preview.cv2, 'waitKey', return_value=0), \
+                patch.object(preview.cv2, 'getWindowProperty', return_value=1):
+            view = preview.ParkingPreview()
+            view.vehicle_progress = [{'track_id': 1, 'box': [30, 90, 150, 140], 'space_id': 'A-01',
+                                      'status': 'LOCAL_MATCH', 'plate_number': '91소6408'}]
+            view.show(frame)
+            drawn = show.call_args.args[1]
+            self.assertEqual(tuple(drawn[100, 30]), (0, 220, 0))
+            self.assertTrue(drawn[55:89].any())
+            # 한글 글꼴이 없는 배포 환경도 예외 없이 동작합니다.
+            view._font_checked, view._font = True, None
+            view.show(frame)
+        self.assertFalse(frame.any())
+
+    def test_capture_existing_spaces_uses_native_resolution_and_ready_validation(self):
+        from ai_vision.parking import capture_empty_reference as capture
+        root, _, config = self.inputs()
+        camera, preview = Mock(), Mock()
+        preview.wait_until_ready.return_value = self.reference
+        with patch.object(capture, 'open_camera', return_value=camera), \
+                patch.object(capture, 'ParkingPreview', return_value=preview) as factory:
+            self.assertTrue(capture.capture_empty_reference(output_path=root / 'aligned.png', config_path=config))
+        self.assertEqual(factory.call_args.args[0], self.config)
+        camera.set.assert_any_call(cv2.CAP_PROP_FRAME_WIDTH, 80)
+        validate = preview.wait_until_ready.call_args.kwargs['check_ready']
+        validate(self.reference)
+        with self.assertRaises(ValueError):
+            validate(np.zeros((100, 100, 3), dtype=np.uint8))
+        with patch.object(capture, 'open_camera') as open_camera:
+            with self.assertRaises(ValueError):
+                capture.capture_empty_reference(output_path=root / 'wrong.png', config_path=config, width=640, height=480)
+        open_camera.assert_not_called()
+
+    def test_capture_config_cli_reaches_existing_tool(self):
+        from ai_vision.parking import capture_empty_reference as capture
+        with patch.object(capture, 'capture_empty_reference') as run:
+            self.assertEqual(capture.main(['--output', 'new.png', '--config', 'spaces.json']), 0)
+        self.assertEqual(run.call_args.kwargs['config_path'], Path('spaces.json'))
 
     def test_editor_rejects_existing_coordinates_before_binding(self):
         from ai_vision.parking import space_editor as editor
@@ -1011,6 +1388,41 @@ class ParkingDeploymentTests(unittest.TestCase):
         value = {"total_spaces": 0, "occupied_count": 0, "empty_count": 0, "spaces": []}
         self.path.write_text(json.dumps(value), encoding="utf-8")
         self.assertEqual(get_parking_occupancy(), value)
+
+    def test_old_and_future_snapshots_are_not_current_occupancy(self):
+        from ai_vision.parking import parking_api
+        value = {"total_spaces": 0, "occupied_count": 0, "empty_count": 0, "spaces": []}
+        self.path.write_text(json.dumps(value), encoding='utf-8')
+        modified = self.path.stat().st_mtime
+        for age in (31, -6):
+            with self.subTest(age=age), patch.object(parking_api.time, 'time', return_value=modified + age):
+                with self.assertRaises(HTTPException) as caught:
+                    get_parking_occupancy()
+                self.assertEqual(caught.exception.status_code, 503)
+                self.assertEqual(caught.exception.headers['Cache-Control'], 'no-store')
+        with patch.object(parking_api.time, 'time', return_value=modified + 30):
+            self.assertEqual(get_parking_occupancy(), value)
+
+    def test_healthy_snapshot_is_not_cached(self):
+        from fastapi import Response
+        self.path.write_text(json.dumps({'total_spaces': 0, 'occupied_count': 0,
+                                         'empty_count': 0, 'spaces': []}), encoding='utf-8')
+        response = Response()
+        get_parking_occupancy(response)
+        self.assertEqual(response.headers['Cache-Control'], 'no-store')
+
+    def test_replacing_file_after_read_does_not_refresh_old_data(self):
+        from ai_vision.parking import parking_api
+        value = {"total_spaces": 0, "occupied_count": 0, "empty_count": 0, "spaces": []}
+        self.path.write_text(json.dumps(value), encoding='utf-8')
+        modified = self.path.stat().st_mtime
+        def replace(_):
+            self.path.write_text(json.dumps(value), encoding='utf-8')
+            return value
+        with patch.object(parking_api, 'read_json', side_effect=replace), \
+             patch.object(parking_api.time, 'time', return_value=modified + 31):
+            with self.assertRaises(HTTPException):
+                get_parking_occupancy()
 
     def test_missing_corrupt_and_nonfinite_results_are_service_unavailable(self):
         for content in (None, b"\xff", b'{"total": NaN}', b'{"total":1,"total":2}', b"[]", b"{"):
