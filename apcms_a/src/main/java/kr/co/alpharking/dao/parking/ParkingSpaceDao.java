@@ -10,6 +10,10 @@ import java.sql.Timestamp;
 
 @Mapper
 public interface ParkingSpaceDao {
+    List<kr.co.alpharking.dto.parking.ParkingReservationRow> findReservationHistory(@Param("spaceId") Long spaceId);
+    List<kr.co.alpharking.dto.parking.ParkingReservationRow> findReservations(
+            @Param("spaceId") Long spaceId, @Param("startAt") Timestamp startAt,
+            @Param("endAt") Timestamp endAt);
     List<ParkingSpaceRow> findAllAdmin();
     List<ParkingSpacePublicRow> findAllPublic();
     ParkingSpaceRow lockForUpdate(@Param("id") Long id);
