@@ -48,9 +48,33 @@
         (TO_CHAR(f.FLOOR_NO) || 'F-' || z.ZONE_CODE || s.SPACE_NUMBER) AS "spaceCode",
         TO_CHAR(s.UPDATED_AT, 'YYYY-MM-DD"T"HH24:MI:SS') AS "updatedAt"
     </sql>
-    <!-- 3 x 3 x 5 = 45건; 실DB 코드 AVAILABLE 그대로 반환 -->
+    <!-- 현황 조회만 유효한 확정 예약을 반영한다. DB 상태와 관리자 보정용 조회는 유지한다. -->
     <select id="findAllPublic" resultType="kr.co.alpharking.dto.parking.ParkingSpacePublicRow">
-        SELECT <include refid="publicColumns" />
+        SELECT s.PARKING_SPACE_ID AS "parkingSpaceId",
+               f.FLOOR_NO AS "floorNo",
+               f.FLOOR_NAME AS "floorName",
+               z.ZONE_CODE AS "zoneCode",
+               s.SPACE_NUMBER AS "spaceNumber",
+               s.SPACE_TYPE_CODE AS "spaceTypeCode",
+               CASE
+                   WHEN s.SPACE_STATUS_CODE IN ('AVAILABLE', 'EMPTY')
+                    AND EXISTS (
+                        SELECT 1
+                          FROM PARKING_RESERVATION r
+                         WHERE r.PARKING_SPACE_ID = s.PARKING_SPACE_ID
+                           AND r.STATUS_CODE = 'CONFIRMED'
+                           AND r.CANCELLED_AT IS NULL
+                           AND r.RESERVATION_START_AT &lt;= SYSDATE
+                           AND r.RESERVATION_END_AT &gt;= SYSDATE
+                    ) THEN 'RESERVED'
+                   ELSE s.SPACE_STATUS_CODE
+               END AS "spaceStatusCode",
+               s.X_POSITION AS "xPosition",
+               s.Y_POSITION AS "yPosition",
+               s.WIDTH AS "width",
+               s.HEIGHT AS "height",
+               (TO_CHAR(f.FLOOR_NO) || 'F-' || z.ZONE_CODE || s.SPACE_NUMBER) AS "spaceCode",
+               TO_CHAR(s.UPDATED_AT, 'YYYY-MM-DD"T"HH24:MI:SS') AS "updatedAt"
           FROM PARKING_SPACE s
           JOIN PARKING_ZONE z ON z.PARKING_ZONE_ID = s.PARKING_ZONE_ID
           JOIN PARKING_FLOOR f ON f.PARKING_FLOOR_ID = z.PARKING_FLOOR_ID
