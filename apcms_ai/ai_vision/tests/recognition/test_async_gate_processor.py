@@ -6,6 +6,8 @@ import contextlib
 import io
 import threading
 import unittest
+import json
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -16,6 +18,8 @@ from ai_vision.recognition.live_gate_processor import LiveGateProcessor
 from ai_vision.recognition.live_gate_session import LiveGateSession
 from ai_vision.recognition.live_gate_report import validate_report
 from ai_vision.recognition.run_live_gate import execute, main
+from ai_vision.recognition.vehicle_delivery_flow import VehicleDeliveryFlow
+from ai_vision.recognition.vehicle_http import VehicleHTTPClient
 
 
 CONFIG = {'tracker': 'bytetrack', 'line_y': .5, 'line_x': [.1, .9], 'roi': [0, 0, 1, 0, 1, 1, 0, 1]}
@@ -35,6 +39,87 @@ def tracker(frame):
 
 
 class AsyncGateProcessorTests(unittest.TestCase):
+    def run_loopback_delivery(self, mode='processed', different_plate=False, repeat_track=False):
+        # 1. 실제 HTTP 전송 계층만 로컬 수신기에 연결합니다. Boot·DB·AWS에는 접근하지 않습니다.
+        received, decisions = [], []
+        release_response = threading.Event()
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                received.append({'path': self.path, 'payload': body,
+                                 'authenticated': self.headers.get('X-AI-API-Key') == 'TEST_ONLY'})
+                if mode == 'timeout':
+                    # 응답 헤더 전 대기하여 클라이언트의 읽기 시간 초과를 재현합니다.
+                    release_response.wait(2)
+                response = {'eventId': body['event_id'], 'eventType': 'VEHICLE_PASSAGE',
+                            'plateNumber': body['plate_number'], 'spaceCode': None,
+                            'parkingUsageId': 1, 'outcome': 'PROCESSED'}
+                raw = json.dumps(response).encode('utf-8')
+                try:
+                    self.send_response(200)
+                    self.send_header('Content-Type', 'application/json')
+                    self.send_header('Content-Length', str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    pass  # 시간 초과한 클라이언트가 닫은 연결입니다.
+        server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            if different_plate:
+                # 각 통과 차량의 crop 내용으로 서로 다른 번호를 반환합니다.
+                self.reader.side_effect = lambda crop: {**SAMPLE, 'plate_number':
+                    '91소6408' if int(crop[0, 0, 0]) < 7 else '99하0001'}
+            self.session.flow = VehicleDeliveryFlow(VehicleHTTPClient(
+                f'http://127.0.0.1:{server.server_port}/alpharking/admin', 'TEST_ONLY', True,
+                timeout=(1, .1 if mode == 'timeout' else 1)))
+            self.frames(0, 14)
+            self.resume.set()
+            self.processor._pending[-1][0].result(timeout=2)
+            # 완료 결과를 원래 촬영 시각으로 전달합니다. 작업 완료 시각으로 바꾸지 않습니다.
+            for passage, stamp in self.processor.completed():
+                decisions.append(self.session.consume(passage, stamp))
+                if repeat_track:
+                    decisions.append(self.session.consume(passage, stamp))
+            return decisions, received
+        finally:
+            release_response.set()
+            server.shutdown()
+            server.server_close()
+            thread.join(2)
+
+    def test_changed_track_same_plate_posts_once_over_real_http(self):
+        decisions, received = self.run_loopback_delivery()
+        self.assertEqual([row['decision'] for row in decisions], ['NEW_CANDIDATE', 'SUPPRESSED_RECENT_PLATE'])
+        self.assertEqual(decisions[0]['receipt_state'], 'APPLIED')
+        self.assertEqual(len(received), 1)
+        self.assertTrue(received[0]['authenticated'])
+        self.assertEqual(received[0]['path'], '/alpharking/admin/api/parking/ai/vehicle-events')
+        self.assertEqual(self.session.summary()['request_attempts'], 1)
+
+    def test_timeout_then_changed_track_does_not_retry_over_real_http(self):
+        decisions, received = self.run_loopback_delivery(mode='timeout')
+        self.assertEqual(decisions[0]['receipt_state'], 'DELIVERY_UNKNOWN')
+        self.assertEqual(decisions[1]['decision'], 'SUPPRESSED_RECENT_PLATE')
+        self.assertFalse(decisions[1]['request_attempted'])
+        self.assertEqual(len(received), 1)
+        self.assertEqual(self.session.summary()['request_attempts'], 1)
+
+    def test_repeated_same_track_and_reacquired_plate_do_not_post_twice(self):
+        decisions, received = self.run_loopback_delivery(repeat_track=True)
+        self.assertEqual([row['decision'] for row in decisions],
+                         ['NEW_CANDIDATE', 'SUPPRESSED_SAME_TRACK', 'SUPPRESSED_RECENT_PLATE', 'SUPPRESSED_SAME_TRACK'])
+        self.assertEqual(len(received), 1)
+
+    def test_different_plate_is_not_suppressed_by_previous_vehicle(self):
+        decisions, received = self.run_loopback_delivery(different_plate=True)
+        self.assertEqual([row['decision'] for row in decisions], ['NEW_CANDIDATE', 'NEW_CANDIDATE'])
+        self.assertEqual([row['payload']['plate_number'] for row in received], ['91소6408', '99하0001'])
+        self.assertEqual(self.session.summary()['request_attempts'], 2)
+
     def setUp(self):
         self.entered, self.resume = threading.Event(), threading.Event()
         def read(crop):

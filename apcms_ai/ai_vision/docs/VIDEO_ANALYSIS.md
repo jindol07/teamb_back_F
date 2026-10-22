@@ -690,3 +690,192 @@ BoT-SORT는 설치된 라이브러리의 기본 설정을 사용합니다. 해�
 결과 폴더는 `ai_vision/results/recognition/occlusion_640`, `occlusion_960`,
 `occlusion_nms030`입니다. 실행마다 별도 폴더를 사용해 비교 근거를 보존합니다.
 진단 파일은 로컬 전용이며 OCR, .env, 서버 송신 모듈을 호출하지 않습니다.
+
+## 주차면 점유 감지부터 이벤트 생성까지 검사
+
+`parking/parking_processor.py`는 기준 사진·좌표에서 마스크를 만들고,
+`parking_realtime.py`의 픽셀 변화 분석을 사용해 연속 관찰로 점유 상태를 확정합니다.
+실시간 웹캠 실행과 `parking/check_parking_video.py`의 영상 파일 검사에서 같은 처리기를 사용합니다.
+차량을 직접 분류하는 YOLO 방식이 아니라 기준 사진 대비 변화율을 사용하는 방식입니다.
+
+### 확정 규칙과 입력 조건
+
+- 기본 분석 간격은 0.5초이고 같은 상태가 5회 연속 관찰돼야 최초 확정·변경 이벤트를 만듭니다.
+  확정 상태가 계속 유지되는 동안에는 이벤트를 반복 생성하지 않습니다.
+- 마지막 분석과 2초를 초과한 공백이 생기면 진행 중이던 연속 횟수를 초기화합니다.
+  과거 확정 상태는 마지막으로 확인한 상태로 유지하며 새 상태는 다시 5회 확인합니다.
+- 주차면별로 독립 판정하므로 한 면의 점유가 다른 면의 상태를 변경하지 않습니다.
+- 기준 사진과 좌표 설정, 입력 프레임의 해상도가 일치해야 합니다. 영상 크기를 자동으로 바꾸지 않습니다.
+  같은 해상도라도 카메라·구도·주차면 위치가 다르면 정확한 비교가 아니므로 새 기준 사진과 좌표가 필요합니다.
+- 등록된 구획 매핑을 시작 전에 검사하고, 마스크 메모리를 기본 총 64MiB로 제한합니다.
+  전체 이미지·모델·프로그램 메모리를 64MiB로 제한하는 의미는 아닙니다.
+- 결과 목록·상태·변화율이 잘못됐으면 확정 횟수나 상태를 일부만 갱신하지 않고 거부합니다.
+
+### 영상 파일 검사 도구
+
+실행 옵션은 다음 명령으로 확인합니다.
+
+```powershell
+.\.venv312\Scripts\python.exe -m ai_vision.parking.check_parking_video --help
+```
+
+필수 인자는 `--reference`(빈자리 사진), `--config`(같은 구도의 좌표 JSON),
+`--video`(로컬 영상), `--output-dir`(새 결과 폴더)입니다.
+기본 최대 9,000프레임·300초 범위에서 영상 FPS로 시각을 계산합니다. FPS가 없으면 추정하지 않고 거부합니다.
+
+이 도구는 항상 전송 전 검사입니다. `PARKING_AI_SEND_ENABLED=true`여도
+HTTP 요청·전송 대기열 등록·실시간 결과 API 파일 갱신은 하지 않습니다.
+확정 변경에서 생성한 이벤트와 최종 점유 상태만 새 폴더의 `parking_check.json`에 기록합니다.
+이벤트의 감지 시각은 검사 실행 시각이며 저장 영상의 실제 촬영 날짜를 복원한 값이 아닙니다.
+생성된 검사 이벤트를 실시간 이벤트처럼 자동 재전송하면 안 됩니다.
+
+`COMPLETED`는 모든 면에서 최초 확정이 이루어진 검사 종료를 뜻하며 정확도 합격을 의미하지 않습니다.
+확정 전에 영상이 끝나면 `INCOMPLETE`, 해상도 불일치 등 입력·분석 오류면 `FAILED`입니다.
+프레임·영상 시간 한도로 종료한 경우에는 `stop_reason`도 확인합니다.
+기존 결과 폴더는 덮어쓰지 않고 원본 사진·좌표·영상도 수정하지 않습니다.
+
+### 2026-10-21 연결 확인 결과
+
+합성 영상 15프레임(FPS 2)에서 두 면의 초기 빈자리, 한 면의 점유, 다시 빈자리로의 변화를
+실제 영상 디코딩·마스크 분석·연속 확정·이벤트 생성에 연결했습니다.
+
+1. `1F-A01 AVAILABLE`, `1F-A02 AVAILABLE`: 최초 빈자리 확정
+2. `1F-A01 OCCUPIED`: 한 면에 변화가 지속되어 점유 확정
+3. `1F-A01 AVAILABLE`: 변화가 사라져 해제 확정
+
+총 이벤트 4건, 최종 빈자리 2면, HTTP 요청 0회였습니다. 실제 주차 차량의 정확도 시험은 아닙니다.
+자료와 결과는 Git 제외 경로
+`results/parking_checks/synthetic_transition_20261021_9e1f9079/`에 있습니다.
+
+현재 기준 사진·좌표는 640×480이지만 `parking_test.mp4`는 2560×1440,
+`parking_aerial.mp4`는 1280×720입니다. 실제 두 파일을 입력했을 때 각각 첫 프레임에서
+불일치를 거부했고 이벤트·HTTP 요청 모두 0건이었습니다. 결과는 Git 제외 경로
+`results/parking_checks/existing_video_mismatch_20261021_2d5db7ea/`에 있습니다.
+이 영상들을 현재 좌표로 분석한 점유 결과를 실제 주차 상태로 사용하지 않습니다.
+
+실시간 웹캠 경로에서도 같은 처리기로 상태 변경 때만 기존 전송기를 호출하고,
+모든 면이 최초 확정된 뒤 결과 API 파일을 저장하도록 연결했습니다.
+장치 없이 이 연결과 자원 해제를 모의 검사했으며 실제 주차면 카메라·Boot·DB 점유 반영은 아직 확인 전입니다.
+관련 검사 12개를 추가했고 차량·주차 전체 회귀 검사 567개가 통과했습니다.
+# USB 웹캠 주차면 검사
+
+현장 PC의 Python 가상환경에서 실행합니다. AWS 컨테이너가 PC의 USB 카메라를 직접 읽는 구조가 아닙니다. 이 검사는 픽셀 변화와 연속 상태 확정의 연결을 확인하며, 실제 차량 인식 정확도를 증명하지 않습니다. 카메라를 손으로 움직이면 모든 면이 변한 것으로 판단할 수 있으므로 고정하세요.
+
+아래 명령은 `D:\finalProjectB\back\apcms_ai` 기준 PowerShell 명령입니다. 같은 터미널에서 경로 변수를 유지하세요.
+
+```powershell
+$parkingTag = Get-Date -Format 'yyyyMMdd_HHmmss'
+$parkingRoot = "ai_vision/results/parking_checks/webcam_$parkingTag"
+.\.venv312\Scripts\python.exe -m ai_vision.parking.capture_empty_reference --camera-index 0 --output "$parkingRoot/empty.png"
+```
+
+빈 장면을 비추고 노출이 안정될 때까지 기다린 뒤 스페이스바로 촬영합니다. Q는 저장 없이 취소합니다. 기존 사진이 있는 경로는 거부합니다.
+
+```powershell
+.\.venv312\Scripts\python.exe -m ai_vision.parking.space_editor --image "$parkingRoot/empty.png" --output "$parkingRoot/spaces.json"
+```
+
+브라우저에서 `http://127.0.0.1:8765`를 열어 면마다 네 모서리를 순서대로 클릭하고 저장합니다. 현재 전송 구획 매핑에 맞는 A-01~A-04 범위에서 최대 네 면을 지정하세요. 저장을 마친 뒤 편집기 터미널에서 Ctrl+C로 종료합니다. 사진과 실제 웹캠의 해상도뿐 아니라 위치·각도도 같아야 합니다.
+
+```powershell
+.\.venv312\Scripts\python.exe -m ai_vision.parking.run_parking_camera --camera-index 0 --reference "$parkingRoot/empty.png" --config "$parkingRoot/spaces.json" --output-dir "$parkingRoot/session" --seconds 60
+```
+
+준비 화면의 노란 다각형을 확인하고 스페이스바를 누르면 60초 측정을 시작합니다. Q 또는 창 닫기는 종료입니다. 같은 상태를 0.5초 간격으로 다섯 번 관찰해야 확정하므로, 빈 상태·물체가 놓인 상태·물체를 치운 상태를 각각 4초 이상 유지하세요. 책상과 물체로 검사한다면 차량 점유가 아닌 화면 변화 시험입니다.
+
+결과는 새 폴더의 `parking_camera_check.json`에 저장합니다. `events`는 생성된 변경 이벤트, `occupancy`는 전체 면이 확정된 경우의 최종 상태입니다. `INCOMPLETE`는 미확정 면이 남은 시간 종료, `STOPPED`는 사용자 종료, `CANCELLED`는 준비 중 취소, `FAILED`는 카메라 읽기 또는 해상도 등의 오류입니다. 기존 운영 점유 JSON을 갱신하지 않으며, 기본 시험 모드에서는 전송 활성화 환경변수가 있어도 HTTP 요청과 재전송 대기열 등록은 0회입니다. `--no-preview`는 준비 화면 없이 즉시 측정합니다.
+
+
+### 허용 구획에 한정한 실제 점유 전송
+
+실제 구획 상태 변경을 허용받은 뒤에만 사용합니다. 기본 명령은 계속 시험 모드이며, `--enable-http`와 `--allow-space-code`를 함께 지정해야 전송합니다. 인증키는 현장 PC의 환경변수 `AI_OCCUPANCY_API_KEY` 또는 `PARKING_AI_API_KEY`에서 읽습니다. 기존 전송기에서 불러온 `.env` 값도 사용할 수 있습니다. 주소는 `PARKING_AI_BASE_URL`로 지정하며 기본값은 현장 PC의 관리자 Boot입니다. AWS에서 실행 중인 Boot를 쓴다면 현장 PC에서 접근 가능한 관리자 주소로 설정해야 합니다.
+
+```powershell
+# 실제 상태 변경이 허용된 구획만 지정합니다. 기존 결과 폴더는 재사용할 수 없습니다.
+.\.venv312\Scripts\python.exe -m ai_vision.parking.run_parking_camera --camera-index 0 --reference "$parkingRoot/empty.png" --config "$parkingRoot/spaces.json" --output-dir "$parkingRoot/live_session" --seconds 60 --enable-http --allow-space-code 1F-A01
+```
+
+준비 화면에 LIVE HTTP가 표시됩니다. 좌표 파일에 포함된 구획만 허용 목록에 넣을 수 있으며, 다른 면의 감지는 기록하되 전송하지 않습니다. 허용한 면의 최초 확정도 전송 대상입니다. 시작 상태를 포함해 실제 DB 상태가 바뀔 수 있으므로 빈 장면 사진이나 책상 실험을 운영 구획에 연결하면 안 됩니다.
+
+이 실행 경로는 과거 공용 대기열을 읽거나 자동 재시도하지 않습니다. 각 이벤트를 한 번 전송하며 시간초과·잘못된 응답·거부·예약 구획 보호·관리자 보정 응답에서는 DELIVERY_STOPPED로 종료합니다. 보고서의 deliveries에는 IN_FLIGHT, UPDATED, UNCHANGED, DUPLICATE, SKIPPED_PROTECTED, SKIPPED_BEFORE_CORRECTION, REJECTED, DELIVERY_UNKNOWN 등이 기록됩니다. IN_FLIGHT 또는 DELIVERY_UNKNOWN이 남으면 서버에서 실제 반영 여부를 확인하기 전 다시 실행하지 마세요. HTTP 호출 직전 파일을 저장하므로 프로세스가 강제 종료되어도 시도 예정 이벤트를 추적할 수 있습니다. 재시작 시 자동 재생은 하지 않습니다.
+
+보고서 http_requests는 실행 중 실제 호출한 횟수입니다. 강제 종료로 IN_FLIGHT만 남은 보고서에서는 마지막 호출이 이 수치에 반영되지 않을 수 있습니다. 사진과 프레임은 추가 저장하지 않고 점유 이벤트와 허용 구획·응답의 계약 필드만 저장합니다. 이 기능의 추가가 실제 DB 점유 연동 검증 완료를 뜻하지는 않습니다.
+
+
+### 점유 보고서 확인과 중단 후 재시작
+
+```powershell
+.\.venv312\Scripts\python.exe -m ai_vision.parking.inspect_parking_camera "$parkingRoot/live_session/parking_camera_check.json"
+```
+
+점검 명령은 파일만 읽고 HTTP 요청이나 자동 재전송을 하지 않습니다. 종료 코드 0은 보고서에 별도 전송 확인 항목이 없다는 뜻이며 실제 DB나 현장 정확도를 증명하지 않습니다. 종료 코드 2는 서버 반영 여부·구획 보호·오류를 먼저 확인해야 한다는 뜻입니다. 종료 코드 1은 파일 누락·손상·잘못된 보고서입니다.
+
+IN_FLIGHT·DELIVERY_UNKNOWN은 사용자가 Q로 종료했어도 확인 대상으로 남습니다. 운영 실행의 RUNNING은 강제 종료 또는 현재 실행 중일 수 있으므로 정상 완료로 해석하지 않습니다. 보고서의 updated_at은 마지막 저장 시각이며 UTC 오프셋을 포함합니다. 상태 변화가 없어도 5초 간격으로 진행 상황을 저장합니다. 이 간격은 프레임 처리가 진행될 때 적용되므로 카메라 읽기나 HTTP 응답을 기다리는 동안에는 지연될 수 있습니다.
+
+새 실행에서 `--previous-report 이전/parking_camera_check.json`을 지정하면 해당 보고서를 카메라 연결 전에 점검합니다. 확인이 필요한 운영 기록이 있으면 실제 전송 시작을 거부합니다. 지정하지 않은 보고서까지 자동 검색하는 기능은 아니며, 확인 완료 처리나 자동 재생 기능도 없습니다. 담당자가 Boot·DB에서 반영 여부를 확인한 뒤 이전 보고서를 보존하고 새 세션 시작 여부를 결정하세요.
+
+전송 전 기록 저장에 실패하면 HTTP 호출하지 않습니다. 전송 후 결과 저장에 실패하면 디스크에는 IN_FLIGHT가 남을 수 있습니다. 이런 경우 중복 요청을 피하기 위해 서버의 기존 이벤트 ID 반영 여부를 먼저 확인합니다. 통신 오류 사유는 TRANSPORT_ERROR, 응답 형식 오류는 INVALID_RESPONSE, HTTP 상태 오류는 HTTP_STATUS로 기록하며 인증키와 임의 서버 본문은 남기지 않습니다.
+
+
+### 기준 사진과 실제 카메라 해상도 맞추기
+
+기준 사진을 특정 해상도로 촬영하려면 너비와 높이를 함께 지정합니다.
+
+```powershell
+.\.venv312\Scripts\python.exe -m ai_vision.parking.capture_empty_reference --camera-index 0 --width 640 --height 480 --output "$parkingRoot/empty.png"
+```
+
+옵션을 생략하면 카메라 기본 해상도로 촬영합니다. 드라이버가 요청한 해상도 대신 다른 크기를 반환하면 저장을 거부합니다. 화면에서 사진을 늘이거나 줄여 맞추는 방식은 사용하지 않습니다. 촬영한 사진으로 좌표를 다시 지정하고, run_parking_camera는 좌표 파일의 너비·높이를 카메라에 요청합니다. 실제 프레임이 다르면 준비 화면 또는 점유 처리 단계에서 종료합니다. 해상도가 같더라도 카메라 위치·각도·초점이나 촬영 구도가 달라지면 기존 기준 사진과 좌표를 재사용하면 안 됩니다.
+
+사진 검증은 웹캠 실행·영상 검사·좌표 편집기가 함께 사용합니다. JPEG·PNG만 허용하고, 압축 파일 10MiB 및 픽셀 수 16,777,216개 한도를 확인한 뒤 해독합니다. 좌표가 있다면 사진 해상도와 마스크 총 메모리 64MiB 한도도 먼저 검사합니다. 한글 경로에서도 같은 바이트 읽기 방식을 사용하며 EXIF 방향에 따른 자동 회전은 하지 않습니다. 휴대전화 사진은 저장된 픽셀 방향을 확인한 뒤 좌표를 지정하세요.
+
+좌표 편집기는 처음 검증한 사진을 고정하여 표시하고, 그 사진과 해상도가 다른 저장 요청을 거부합니다. 원본 사진을 바꾼 경우 편집기를 재시작하고 새 좌표 파일로 저장하세요. 이 검사는 설정 불일치를 방지하는 기능이며, 조명 변화·그림자·카메라 흔들림에 의한 점유 오판을 해결한 것은 아닙니다.
+
+
+### 점유 실행 경로와 모듈 통합
+
+공식 카메라 실행은 `python -m ai_vision.parking.run_parking_camera`입니다. 기존 `python -m ai_vision.parking.parking_realtime` 명령도 같은 실행부와 같은 옵션을 사용합니다. 두 명령 모두 기준 사진·좌표·새 결과 폴더를 지정해야 합니다. 기존처럼 인자 없이 카메라 1번을 열고 공용 대기 이벤트를 재전송하는 별도 루프는 제거했습니다. 카메라 번호는 `--camera-index`로 선택합니다.
+
+기존 점유 조회 API가 읽는 `results/parking/realtime_occupancy_result.json`과 결과 이미지를 갱신하려면 공식 명령에 `--publish-results`를 붙입니다. 전체 구획의 상태가 확정된 뒤 변경이 생길 때 기존 저장 함수를 호출합니다. 이 옵션은 기존 운영 결과 파일을 덮어쓰므로, 단순 시험에서는 생략하세요. Boot 전송 옵션과 독립적이므로 로컬 조회 화면만 확인할 때도 명시적으로 선택할 수 있습니다.
+
+설정 함수는 parking_preflight.py에서 parking_delivery.py로, 보고서 작성 함수는 parking_camera_report.py에서 inspect_parking_camera.py로 통합했습니다. 이전 두 파일은 프로젝트 전체의 호출부와 테스트 참조를 교체한 뒤 제거했습니다. 보고서 점검 명령과 기존 결과 파일 형식은 유지합니다. 사진 검증 모듈은 촬영·영상 검사·좌표 편집·카메라 실행에서 함께 사용하고, 응답 검증 모듈은 공용 전송기와 카메라 전송기에서 함께 사용하므로 유지합니다.
+
+공용 parking_event_sender는 차량·구획 매칭과 기존 이벤트 대기열을 사용하는 코드가 있어 삭제하지 않습니다. 공식 카메라 실행은 이 대기열을 전송하지 않고 parking_delivery의 한 번 전송·오류 시 중단 정책을 사용합니다. 두 전송기의 적용 대상이 다르므로 과거 대기 이벤트를 새 카메라 세션에서 자동으로 처리하지 않습니다.
+
+
+### 통합 후 전체 재점검
+
+회사 Windows Python 3.12.7 환경에서 등록 회귀 검사 618개, 화재감지 기존 검사 45개, 구형 공용 점유 전송기 검사 2개를 실행해 통과했습니다. 화재감지 소스는 수정하지 않았습니다. AI Vision 파이썬 파일 219개의 문법 검사와 가상환경 pip check도 통과했습니다. 이 수치는 현재 점검 기록이며 실제 카메라·최신 Docker 이미지·AWS·DB 실동작을 다시 확인한 결과는 아닙니다.
+
+점검 중 발견한 세 경로를 보완했습니다. HTTP 전송 중 Ctrl+C가 발생해 IN_FLIGHT 기록이 남으면 DELIVERY_STOPPED로 종료합니다. 이벤트가 있으나 대응하는 전송 기록이 없는 운영 보고서는 확인 대상으로 안내합니다. 기존 조회 API용 이미지 저장은 한글 경로를 지원하는 바이트 저장을 사용하며, 인코딩·저장 실패 시 새 JSON을 성공한 것처럼 게시하지 않습니다. 이전 JSON은 남아 있을 수 있으므로 게시 실패 보고서를 확인하고 이전 값을 최신 상태로 해석하지 마세요.
+
+
+### 실제 주차면 카메라의 모형 장면 검사 — 2026-10-21
+
+회사 PC의 1번 USB 웹캠에서 640×480으로 재촬영한 빈 주차면 종이를 기준 사진으로 사용했습니다. 사용자가 A-01에 물체를 놓고 치운 실제 촬영 시험입니다. 결과는 `results/parking_checks/physical_20261021_205725/session_retake/parking_camera_check.json`에 있습니다. 카메라와 종이를 고정한 실내 모형 시험이며 실제 주차장의 차량·조명·그림자 정확도를 검증한 결과는 아닙니다.
+
+- 21:02:02 KST: A-01~A-04 모두 AVAILABLE 최초 확정
+- 21:02:11 KST: A-01 OCCUPIED, 변화율 0.8342
+- 21:02:22 KST: A-01 AVAILABLE, 변화율 0.0061
+- 사용자 Q 종료 STOPPED, 1,014프레임 수신, 67회 분석, 이벤트 6개
+- 관찰 공백 초기화 0회, 미확정 구획 없음, 종료 상태 빈 면 4개
+- dry_run=true, HTTP 0회, publish_results=false, error_type=null
+
+1번 카메라는 기본 DirectShow 연결에 실패했고 Media Foundation(CAP_MSMF)으로 열었을 때 촬영과 검사가 가능했습니다. 이번 실행에서만 open_camera를 해당 방식으로 지정했으며 공용 카메라 소스의 기본값은 변경하지 않았습니다. 이후 정식 --camera-backend msmf 옵션을 추가했습니다. 같은 장비에서는 아래 연결 방식 선택 명령을 사용하세요. 옵션을 생략한 기존 공용 호출의 기본 연결 정책은 유지합니다.
+
+
+### 카메라 번호와 연결 방식 선택
+
+이번 회사 PC에서는 1번 주차면 카메라가 `msmf` 방식으로 정상 연결됐습니다. 기본 `default`는 기존과 같이 Windows에서 DirectShow, 그 외 환경에서 OpenCV 자동 선택입니다. `auto`는 OpenCV 자동 선택, `dshow`·`msmf`는 Windows 전용, `v4l2`는 Linux 전용입니다. 운영체제에 맞지 않는 방식은 카메라를 열기 전에 거부합니다. 자동으로 다른 장치나 연결 방식으로 바꾸는 기능은 없습니다. 연결 방식에 따라 장치 번호가 다르게 대응할 수 있으므로 준비 화면으로 실제 카메라 장면을 확인하세요.
+
+```powershell
+# 빈 기준 사진 촬영
+.\.venv312\Scripts\python.exe -m ai_vision.parking.capture_empty_reference --camera-index 1 --camera-backend msmf --width 640 --height 480 --output "$parkingRoot/empty_new.png"
+
+# 사진과 좌표를 같은 구도로 준비한 뒤 점유 시험 실행
+.\.venv312\Scripts\python.exe -m ai_vision.parking.run_parking_camera --camera-index 1 --camera-backend msmf --reference "$parkingRoot/empty_new.png" --config "$parkingRoot/spaces.json" --output-dir "$parkingRoot/session_new" --seconds 120
+```
+
+촬영·점유 실행 화면에 카메라 번호와 요청한 연결 방식을 표시하고, 점유 실행 보고서에도 camera_backend를 기록합니다. 기존 parking_realtime 명령도 통합 실행부를 사용하므로 같은 옵션을 받을 수 있습니다. 입출차와 화재감지의 실행 옵션은 이번에 변경하지 않았습니다. 공용 open_camera 함수는 선택 인자만 추가했으며 기존 한 인자 호출은 그대로 동작합니다.
+
+새 정식 함수로 1번 카메라를 msmf 방식으로 열고 640×480 프레임 한 장 수신 후 해제하는 실제 연결 검사에 성공했습니다. 이 검사에서는 사진을 저장하거나 실제 Boot에 전송하지 않았습니다.

@@ -1,10 +1,14 @@
 # D:/finalProjectB/back/apcms_ai/ai_vision/parking/space_editor.py
 from http.server import BaseHTTPRequestHandler, HTTPServer
+import argparse
 import json
+from pathlib import Path
 
 from ai_vision.paths import DATA_DIR, RESULT_DIR
 from ai_vision.recognition.local_io import write_json_atomic, decode_object
 from ai_vision.parking.parking_validation import validate_spaces
+from ai_vision.parking.parking_calibration import load_reference
+import cv2
 
 IMAGE_PATH = RESULT_DIR / "parking" / "first_frame.jpg"
 SAVE_PATH = DATA_DIR / "parking_spaces" / "parking_spots.json"
@@ -270,12 +274,18 @@ class SpaceEditorHandler(BaseHTTPRequestHandler):
             content_type = "text/html; charset=utf-8"
 
         elif self.path == "/image":
-            if not IMAGE_PATH.exists():
+            image_path = getattr(self.server, 'image_path', IMAGE_PATH)
+            if not image_path.exists():
                 self.send_error(404, "Image not found")
                 return
 
-            content = IMAGE_PATH.read_bytes()
-            content_type = "image/jpeg"
+            # 편집 중 원본 파일이 바뀌어도 최초 검증한 사진과 좌표를 함께 사용합니다.
+            if hasattr(self.server, 'image_content'):
+                content = self.server.image_content
+                content_type = 'image/png'
+            else:
+                content = image_path.read_bytes()
+                content_type = 'image/png' if image_path.suffix.lower() == '.png' else 'image/jpeg'
 
         else:
             self.send_error(404)
@@ -304,6 +314,9 @@ class SpaceEditorHandler(BaseHTTPRequestHandler):
             width = data["image_width"]
             height = data["image_height"]
             spaces = data["spaces"]
+            expected = getattr(getattr(self, 'server', None), 'image_dimensions', None)
+            if expected is not None and (width, height) != expected:
+                raise ValueError('좌표와 편집 중인 사진의 해상도가 다릅니다.')
 
             if not isinstance(spaces, list) or not spaces:
                 raise ValueError("No parking spaces")
@@ -319,7 +332,8 @@ class SpaceEditorHandler(BaseHTTPRequestHandler):
                         raise ValueError("Point outside image")
 
             # 저장할 때만 폴더를 만들고 완성된 JSON으로 교체합니다.
-            write_json_atomic(SAVE_PATH, data)
+            server = getattr(self, 'server', None)
+            write_json_atomic(getattr(server, 'save_path', SAVE_PATH), data)
 
             content = b'{"success":true}'
             self.send_response(200)
@@ -338,17 +352,35 @@ class SpaceEditorHandler(BaseHTTPRequestHandler):
         self.wfile.write(content)
 
 
-if __name__ == "__main__":
-
-    if not IMAGE_PATH.exists():
-        print("첫 프레임 이미지가 없습니다.")
-        print(IMAGE_PATH)
-        raise SystemExit(1)
-
-    server = HTTPServer(("127.0.0.1", 8765), SpaceEditorHandler)
+def main(argv=None):
+    # 1. 시험용 사진과 좌표를 별도로 지정하여 운영 설정을 보호합니다.
+    parser = argparse.ArgumentParser(description='주차면 좌표 편집기')
+    parser.add_argument('--image', type=Path, default=IMAGE_PATH)
+    parser.add_argument('--output', type=Path, default=SAVE_PATH)
+    parser.add_argument('--port', type=int, default=8765)
+    args = parser.parse_args(argv)
+    if not args.image.is_file() or not 1 <= args.port <= 65535:
+        parser.error('이미지 경로와 포트를 확인하세요.')
+    if args.output.resolve() == args.image.resolve():
+        parser.error('이미지와 좌표의 저장 경로는 달라야 합니다.')
+    if args.output.exists():
+        parser.error('기존 좌표를 보호하기 위해 새 저장 경로를 지정하세요.')
+    # 2. 이미지 형식과 크기를 포트 연결 전에 확인합니다.
+    try:
+        reference = load_reference(args.image)
+    except (ValueError, OSError) as error:
+        parser.error(str(error))
+    ok, encoded = cv2.imencode('.png', reference)
+    if not ok:
+        parser.error('편집용 사진을 준비할 수 없습니다.')
+    server = HTTPServer(("127.0.0.1", args.port), SpaceEditorHandler)
+    server.image_path, server.save_path = args.image, args.output
+    server.image_dimensions = (reference.shape[1], reference.shape[0])
+    server.image_content = encoded.tobytes()
 
     print("=== 주차면 좌표 편집기 시작 ===")
-    print("http://127.0.0.1:8765")
+    print(f"http://127.0.0.1:{args.port}")
+    print(f'좌표 저장 경로: {args.output}')
     print("종료: Ctrl+C")
 
     try:
@@ -357,3 +389,7 @@ if __name__ == "__main__":
         pass
     finally:
         server.server_close()
+
+
+if __name__ == '__main__':
+    main()
