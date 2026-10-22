@@ -62,6 +62,36 @@ public class ParkingSpaceController {
         return service.searchActive(vehicleNumber);
     }
 
+    @GetMapping("/reservations")
+    public List<kr.co.alpharking.dto.parking.ParkingReservationRow> reservations(
+            @RequestParam("date") String date, Authentication authentication) {
+        requireAdmin(authentication);
+        return service.reservations(null, date, false);
+    }
+
+    @GetMapping("/{parkingSpaceId}/reservations")
+    public List<kr.co.alpharking.dto.parking.ParkingReservationRow> spaceReservations(
+            @PathVariable("parkingSpaceId") Long parkingSpaceId,
+            @RequestParam(value = "date", defaultValue = "") String date,
+            @RequestParam(value = "upcoming", defaultValue = "false") boolean upcoming,
+            Authentication authentication) {
+        requireAdmin(authentication);
+        return service.reservations(parkingSpaceId, date, upcoming);
+    }
+
+    @GetMapping("/reservations/upcoming")
+    public List<kr.co.alpharking.dto.parking.ParkingReservationRow> upcomingReservations(Authentication authentication) {
+        requireAdmin(authentication);
+        return service.reservations(null, "", true);
+    }
+
+    @GetMapping("/{parkingSpaceId}/reservation-history")
+    public List<kr.co.alpharking.dto.parking.ParkingReservationRow> reservationHistory(
+            @PathVariable("parkingSpaceId") Long parkingSpaceId, Authentication authentication) {
+        requireAdmin(authentication);
+        return service.reservationHistory(parkingSpaceId);
+    }
+
     /** Spring 기본 오류 본문 설정과 무관하게 보정 실패 사유를 패널에 전달한다. */
     @ExceptionHandler(ResponseStatusException.class)
     public ResponseEntity<Map<String, String>> requestFailure(ResponseStatusException exception) {
