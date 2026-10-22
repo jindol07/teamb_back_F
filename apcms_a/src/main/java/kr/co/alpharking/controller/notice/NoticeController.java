@@ -71,6 +71,16 @@ public class NoticeController {
 		// 파일 저장 전에 인증을 확인하고, 프론트가 보낸 작성자 ID도 덮어씁니다.
 		galleryVO.setWriterAdminId(Math.toIntExact(getAuthenticatedAdminId(authentication)));
 
+		// 빈 파일 항목은 기존처럼 무시하고, 실제 첨부파일은 저장 전에 최대 1개로 제한합니다.
+		int attachmentCount = 0;
+		if (images != null) {
+			for (MultipartFile file : images) {
+				if (!file.isEmpty() && ++attachmentCount > 1) {
+					return ResponseEntity.badRequest().body("첨부파일은 1개만 등록할 수 있습니다.");
+				}
+			}
+		}
+
 		// 첨부파일 정보를 저장할 목록
 		List<NoticeFiles> imageList = new ArrayList<>();
 
