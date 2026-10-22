@@ -1,5 +1,6 @@
 package kr.co.alpharking.security;
 import java.sql.Date;
+import java.time.LocalDateTime;
 import java.util.Collection;
 import java.util.List;
 
@@ -31,6 +32,15 @@ import lombok.NoArgsConstructor;
 //시큐리티가 추상메서드를 가져가서 인증관련 호출 
 public class Office implements UserDetails {
 	@Id
+	@SequenceGenerator(
+	    name = "seq_office",          // @GeneratedValue에서 참조할 생성기 이름
+	    sequenceName = "SEQ_OFFICE",  // 실제 Oracle 시퀀스 이름인지 확인
+	    allocationSize = 1            // DB 시퀀스의 증가 크기와 맞춤
+	)
+	@GeneratedValue(
+	    strategy = GenerationType.SEQUENCE,
+	    generator = "seq_office"
+	)
 	private Long office_id;
 	private Long company_id;
 	private Long floor_no;
@@ -39,9 +49,9 @@ public class Office implements UserDetails {
 	private String phone;
 	private String verification_code;
 	private String status_code;
-	private Date created_at;
-	private Date updated_at;
-	private Date withdrawn_at;
+	private LocalDateTime created_at;
+	private LocalDateTime updated_at;
+	private LocalDateTime withdrawn_at;
 	
     @Column(unique = true, nullable = false, name = "login_id") 
     private String username; // 아이디 값을 이메일로 넣어서 사영
