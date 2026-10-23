@@ -43,6 +43,4 @@ public interface VehicleChangeRequestDao {
 	// 반려 감사 로그 등록
 	int addRejectAuditLog(VehicleChangeRequestDTO vehicleChangeRequest);
 	
-	// 검토 후 생성된 차량 ID를 요청 데이터에 연결
-	int updateTargetVehicleId(VehicleChangeRequestDTO vehicleChangeRequest);
 }

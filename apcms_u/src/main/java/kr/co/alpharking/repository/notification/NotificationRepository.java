@@ -12,6 +12,13 @@ import kr.co.alpharking.entity.notification.NotificationEntity;
 public interface NotificationRepository
         extends JpaRepository<NotificationEntity, Long> {
 
+    // 사무실 사용자별 전체 알림 조회
+    List<NotificationEntity> findByOfficeIdOrderByCreatedatDesc(Long officeId);
+
+    List<NotificationEntity> findByOfficeIdAndReadyNOrderByCreatedatDesc(Long officeId, String readyN);
+
+    long countByOfficeIdAndReadyN(Long officeId, String readyN);
+
     // 관리자별 전체 알림 조회
     List<NotificationEntity>
         findByAdminIdOrderByCreatedatDesc(Long adminId);
