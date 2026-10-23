@@ -29,10 +29,10 @@ public class FireSafetyAtomicWriter {
     private final String smokeRisk;
 
     public FireSafetyAtomicWriter(FireSafetyDao dao, ObjectMapper mapper,
-            @Value("${FIRE_ALERT_NOTIFICATION_TYPE:}") String notificationType,
-            @Value("${FIRE_ALERT_ADMIN_STATUS:}") String adminStatus,
-            @Value("${FIRE_ALERT_RISK_FIRE:HIGH}") String fireRisk,
-            @Value("${FIRE_ALERT_RISK_SMOKE:MEDIUM}") String smokeRisk) {
+    		@Value("${fire.alert.notification.type:}") String notificationType,
+    		@Value("${fire.alert.admin.status:}") String adminStatus,
+    		@Value("${fire.alert.risk.fire:HIGH}") String fireRisk,
+    		@Value("${fire.alert.risk.smoke:MEDIUM}") String smokeRisk) {
         this.dao = dao;
         this.mapper = mapper;
         this.notificationType = notificationType;

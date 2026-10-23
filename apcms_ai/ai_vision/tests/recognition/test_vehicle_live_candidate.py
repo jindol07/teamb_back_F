@@ -82,3 +82,18 @@ class VehicleLiveCandidateTests(unittest.TestCase):
         self.assertEqual(flow.process("run", first)["receipt_state"], "APPLIED")
         self.assertEqual(flow.process("run", second)["decision"], "SUPPRESSED_SAME_TRACK")
         session.post.assert_called_once()
+
+
+class SpaceMatchCandidateTests(unittest.TestCase):
+    def test_current_live_match_maps_db_code_and_preserves_source_time(self):
+        from ai_vision.recognition.vehicle_live_candidate import create_space_match_candidate
+        current = {'track_id': 2, 'space_id': 'A-01', 'plate_number': '91소6408'}
+        event = {**current, 'kind': 'LIVE_SPACE_MATCH', 'plate_detection_confidence': .83}
+        result = create_space_match_candidate(event, [current], 'PARKING_1', '2020-01-01T00:00:00Z')
+        self.assertEqual(result['payload']['space_code'], '1F-A01')
+        self.assertEqual(result['payload']['confidence'], .83)
+        self.assertEqual(result['payload']['event_type'], 'VEHICLE_SPACE_MATCH')
+        self.assertTrue(result['payload']['detected_at'].startswith('2020-01-01'))
+        self.assertEqual(create_space_match_candidate(event, [], 'PARKING_1', '2020-01-01T00:00:00Z')['status'], 'BLOCKED')
+        with self.assertRaises(ValueError):
+            create_space_match_candidate({**event, 'kind': 'LOCAL_SPACE_MATCH'}, [current], 'PARKING_1', '2020-01-01T00:00:00Z')

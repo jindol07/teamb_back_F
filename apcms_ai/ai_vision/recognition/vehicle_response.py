@@ -8,15 +8,27 @@ import uuid
 # 1-2. decode_object는 응답 JSON을 객체로 변환합니다.
 from ai_vision.recognition.local_io import decode_object
 # 1-3. 송신했던 원본 요청도 동일한 계약 형식으로 검사합니다.
-from ai_vision.recognition.vehicle_contract import validate_vehicle_payload
+from ai_vision.recognition.vehicle_contract import validate_vehicle_payload, validate_space_match_payload, validate_space_release_payload
 
 
 # 2. HTTP 응답이나 통신 실패를 업무 처리 결과로 분류합니다.
 # 2-1. 이 함수는 서버에 요청하지 않으며 재전송도 예약하지 않습니다.
 # 함수 설명: assess_response() — 상태 코드와 응답 본문을 확인하여 AI 이벤트에 대한 결과 상태를 분류합니다.
 def assess_response(payload, status_code=None, response_body=None, transport_error=None, now=None):
+    return _assess_response(payload, status_code, response_body, transport_error, now, validate_vehicle_payload)
+
+
+def assess_space_match_response(payload, status_code=None, response_body=None, transport_error=None, now=None):
+    return _assess_response(payload, status_code, response_body, transport_error, now, validate_space_match_payload)
+
+
+def assess_space_release_response(payload, status_code=None, response_body=None, transport_error=None, now=None):
+    return _assess_response(payload, status_code, response_body, transport_error, now, validate_space_release_payload)
+
+
+def _assess_response(payload, status_code, response_body, transport_error, now, validator):
 # 2-2. 먼저 비교 기준이 되는 원본 이벤트를 검증합니다.
-    event = validate_vehicle_payload(payload, now)
+    event = validator(payload, now)
     if status_code is not None and (type(status_code) is not int or not 100 <= status_code <= 599):
         raise ValueError("유효한 HTTP 상태 코드가 필요합니다.")
     if transport_error is not None and transport_error not in {"TIMEOUT", "CONNECTION_ERROR"}:
@@ -66,7 +78,7 @@ def assess_response(payload, status_code=None, response_body=None, transport_err
         body = decode_object(response_body)
         response_id = str(uuid.UUID(body["eventId"]))
         if (response_id != event["event_id"] or body["eventType"] != event["event_type"] or
-                body["plateNumber"] != event["plate_number"] or body.get("spaceCode") is not None):
+                body["plateNumber"] != event["plate_number"] or body.get("spaceCode") != event.get('space_code')):
             return decision("DELIVERY_UNKNOWN", "RESPONSE_IDENTITY_MISMATCH")
 # 5-2. 주차 이용 기록 ID는 있으면 양의 정수인지 확인합니다.
         usage = body.get("parkingUsageId")
@@ -77,6 +89,21 @@ def assess_response(payload, status_code=None, response_body=None, transport_err
         outcome = body["outcome"]
         if not isinstance(outcome, str) or outcome not in outcomes:
             return decision("DELIVERY_UNKNOWN", "UNKNOWN_OUTCOME")
+        if event['event_type'] == 'VEHICLE_PASSAGE':
+            result['parking_usage_id'] = usage
+        if event['event_type'] == 'VEHICLE_SPACE_MATCH' and outcome != 'PENDING' and usage is None:
+            raise ValueError('구획 연결 성공 응답에는 이용 ID가 필요합니다.')
+        if event['event_type'] in ('VEHICLE_SPACE_MATCH', 'VEHICLE_SPACE_RELEASE'):
+            version = body.get('linkVersion')
+            if version is not None and (type(version) is not int or not 0 <= version < 10**18):
+                raise ValueError('연결 버전 응답 오류')
+            if event['event_type'] == 'VEHICLE_SPACE_RELEASE':
+                if usage != event['parking_usage_id'] or outcome == 'UNCHANGED':
+                    raise ValueError('해제 이용 또는 결과 불일치')
+                if outcome == 'PROCESSED' and version != event['link_version'] + 1:
+                    raise ValueError('해제 이후 연결 버전 불일치')
+            result.update(parking_usage_id=usage, link_version=version)
+
 # 5-4. 손상된 응답은 완료로 인정하지 않고 DELIVERY_UNKNOWN으로 분류합니다.
     except (ValueError, KeyError, TypeError, AttributeError, RecursionError):
         return decision("DELIVERY_UNKNOWN", "INVALID_RESPONSE")

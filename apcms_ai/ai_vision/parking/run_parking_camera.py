@@ -5,6 +5,9 @@ import argparse
 import math
 import time
 import os
+from datetime import datetime, timezone, timedelta
+from ai_vision.recognition.vehicle_delivery_flow import SpaceMatchDeliveryFlow
+from ai_vision.recognition.vehicle_live_candidate import create_space_match_candidate
 from pathlib import Path
 import cv2
 from ai_vision.camera_runtime import open_camera, CAMERA_BACKENDS, validate_camera_backend
@@ -21,7 +24,7 @@ from ai_vision.recognition.latest_frame_capture import LatestFrameCapture
 def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=60, preview=True,
                enable_http=False, allowed_codes=(), environment=None, previous_report=None,
                publish_results=False, camera_backend='default', track_vehicles=False,
-               vehicle_tracker=None, plate_reader=None):
+               vehicle_tracker=None, plate_reader=None, enable_space_http=False, camera_id=None, enable_space_release_http=False, tracking_target='vehicle', ocr_execution='auto', tracking_imgsz=None, handoff_path=None):
     # 1. 저장 경로와 입력을 먼저 확인하여 기존 운영 결과를 보호합니다.
     if type(camera_index) is not int or not 0 <= camera_index <= 99:
         raise ValueError('카메라 번호는 0~99 정수여야 합니다.')
@@ -30,6 +33,21 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
     if (type(track_vehicles) is not bool or
             (not track_vehicles and (vehicle_tracker is not None or plate_reader is not None))):
         raise ValueError('차량 관찰 옵션을 확인하세요.')
+    if type(enable_space_http) is not bool or (enable_space_http and (not track_vehicles or not enable_http or not camera_id)):
+        raise ValueError('구획 연결 전송에는 차량 관찰·점유 전송·카메라 ID가 필요합니다.')
+    if type(enable_space_release_http) is not bool or (enable_space_release_http and not enable_space_http):
+        raise ValueError('구획 해제는 구획 연결 전송과 함께 활성화하세요.')
+    if handoff_path is not None and (not track_vehicles or plate_reader is not None or enable_space_release_http):
+        raise ValueError('한 대 시연 신원 전달에는 추적이 필요하며 독립 OCR·중간 자동 해제는 함께 사용하지 않습니다.')
+    from ai_vision.parking.vehicle_space_tracker import validate_tracking_target, tracking_image_size
+    validate_tracking_target(tracking_target)
+    tracking_imgsz = tracking_image_size(tracking_target, tracking_imgsz)
+    if ocr_execution not in ('auto', 'thread', 'process') or not isinstance(ocr_execution, str):
+        raise ValueError('OCR 실행 방식을 확인하세요.')
+    if ocr_execution == 'process' and plate_reader is not None:
+        raise ValueError('주입한 OCR 함수는 thread 실행을 사용하세요.')
+    if tracking_target != 'vehicle' and not track_vehicles:
+        raise ValueError('번호판 위치 추적에는 --track-vehicles가 필요합니다.')
     output_dir = Path(output_dir)
     if output_dir.exists():
         raise ValueError('결과 폴더는 새 경로를 지정하세요.')
@@ -39,6 +57,24 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
     reference = load_reference(reference_path, config)
     processor = ParkingOccupancyProcessor(reference, config, detect_spaces)
     settings = delivery_settings(config, enable_http, allowed_codes, os.environ if environment is None else environment)
+    match_flow = None
+    if track_vehicles:
+        from ai_vision.recognition.vehicle_http import SpaceMatchHTTPClient, SpaceReleaseHTTPClient
+        from ai_vision.recognition.vehicle_contract import validate_camera_id
+        camera_id = camera_id or f'PARKING_CAMERA_{camera_index}'
+        validate_camera_id(camera_id)
+        env = os.environ if environment is None else environment
+        match_flow = SpaceMatchDeliveryFlow(SpaceMatchHTTPClient(
+            context_url=env.get('PARKING_AI_BASE_URL', 'http://127.0.0.1:81/alpharking/admin') if enable_space_http else None,
+            api_key=settings['key'] if enable_space_http else None, enabled=enable_space_http),
+            release_client=SpaceReleaseHTTPClient(
+                context_url=env.get('PARKING_AI_BASE_URL', 'http://127.0.0.1:81/alpharking/admin') if enable_space_release_http else None,
+                api_key=settings['key'] if enable_space_release_http else None, enabled=enable_space_release_http))
+    pending_matches = {}
+    handoff = None
+    if handoff_path is not None:
+        from ai_vision.recognition.single_vehicle_handoff import SingleVehicleHandoffReader
+        handoff = SingleVehicleHandoffReader(handoff_path)
     view = ParkingPreview(config, enable_http=enable_http,
                           source_label=f'Camera {camera_index} / {camera_backend}') if preview else None
     if view is not None:
@@ -51,12 +87,12 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
     created_output = False
     report = {'status': 'RUNNING', 'dry_run': not enable_http, 'http_requests': 0,
               'record_type': 'PARKING_CAMERA_SESSION',
-              'publish_results': publish_results,
+              'publish_results': publish_results, 'tracking_target': tracking_target, 'tracking_imgsz': tracking_imgsz,
               'camera_backend': camera_backend,
               'deliveries': [], 'allowed_space_codes': sorted(allowed_codes),
               'camera_index': camera_index, 'read_frames': 0, 'events': [], 'error_type': None}
     if track_vehicles:
-        report['vehicle_space'] = {'http_enabled': False, 'reservation_checked': False,
+        report['vehicle_space'] = {'deliveries': match_flow.records, 'http_enabled': enable_space_http, 'release_http_enabled': enable_space_release_http, 'reservation_checked': False,
                                    'current_matches': [], 'events': [], 'completed_samples': [],
                                    'last_video_seconds': None}
     if enable_http:
@@ -65,7 +101,10 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
         if track_vehicles:
             # 1-1. 모델 준비는 측정 시계·카메라 시작 전에 끝냅니다. 기존 점유 전송과는 분리합니다.
             from ai_vision.parking.vehicle_space_tracker import VehicleSpaceObserver
-            vehicle_observer = VehicleSpaceObserver(config, tracker=vehicle_tracker, plate_reader=plate_reader)
+            observer_options = {'handoff_reader': handoff.read} if handoff is not None else {}
+            vehicle_observer = VehicleSpaceObserver(config, tracker=vehicle_tracker, plate_reader=plate_reader,
+                                                    tracking_target=tracking_target, ocr_execution=ocr_execution, tracking_imgsz=tracking_imgsz,
+                                                    **observer_options)
             vehicle_observer.prepare()
         worker = ParkingDeliveryWorker(delivery) if delivery is not None else None
         capture = open_camera(camera_index, backend=camera_backend)
@@ -79,6 +118,7 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
         if view is not None and view.wait_until_ready(capture) is None:
             report['status'] = 'CANCELLED'
         else:
+            wall_started = datetime.now(timezone.utc)
             started = time.monotonic()
             if track_vehicles:
                 # 차량 추론 중에도 카메라를 읽고 최신 한 장과 실제 수집 시각만 유지합니다.
@@ -116,11 +156,49 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
                     vehicle['completed_samples'].extend(tracking['completed_samples'])
                     vehicle['last_video_seconds'] = observed_seconds
                     vehicle['current_matches'] = vehicle_observer.current_matches(processor, observed_seconds)
+                    # 2-2. 현재 연결이 철회되면 보내지 않은 과거 후보도 즉시 버립니다.
+                    active = {(m['track_id'], m['space_id'], m['plate_number']) for m in vehicle['current_matches']}
+                    pending_matches = {key: value for key, value in pending_matches.items() if key in active}
+                    for event in tracking['events']:
+                        if event.get('kind') == 'LOCAL_SPACE_MATCH':
+                            key = (event['track_id'], event['space_id'], event['plate_number'])
+                            pending_matches[key] = dict(event)
+                    persist_match = lambda: checkpoint(output_dir, report, processor, delivery)
+                    match_flow.poll(persist_match)
+                    if handoff is not None and handoff.last_exit is not None:
+                        exited = handoff.last_exit
+                        match_flow.acknowledge_gate_exit(exited['plate_number'], exited['parking_usage_id'])
+                    if match_flow.blocked:
+                        report['status'] = 'DELIVERY_STOPPED'
+                        break
+                    if (enable_space_release_http and not worker.pending and not worker.blocked and not outcome['events']
+                            and time.monotonic() - started - observed_seconds <= 2):
+                        from ai_vision.parking.parking_event_sender import convert_space_code
+                        empty_codes = {convert_space_code(code) for code in processor.empty_spaces(observed_seconds)}
+                        match_flow.release_empty(empty_codes & settings['allowed_codes'], camera_id,
+                            (wall_started + timedelta(seconds=observed_seconds)).isoformat(), persist_match)
+                    for key, event in list(pending_matches.items()):
+                        # 실제 수집 후 2초를 넘은 후보나 점유 전송이 진행 중인 후보는 보내지 않습니다.
+                        if time.monotonic() - started - observed_seconds > 2:
+                            continue
+                        if enable_space_http:
+                            from ai_vision.parking.parking_event_sender import convert_space_code
+                            if (convert_space_code(event['space_id']) not in settings['allowed_codes'] or
+                                    worker.pending or worker.blocked or outcome['events']):
+                                continue
+                        candidate = create_space_match_candidate(
+                            {**event, 'kind': 'LIVE_SPACE_MATCH'}, vehicle['current_matches'], camera_id,
+                            (wall_started + timedelta(seconds=observed_seconds)).isoformat())
+                        decision = match_flow.submit(candidate, (key, event['frame_index']), persist_match)
+                        if decision != 'BUSY':
+                            del pending_matches[key]
                     vehicle['statistics'] = vehicle_observer.summary()
                     vehicle['observations'] = tracking.get('progress', [])
+                    if handoff is not None:
+                        vehicle['entry_handoff_status'] = handoff.status
                     if view is not None:
                         view.vehicle_progress = vehicle['observations']
-                        view.source_label = (f'LOCAL tracking={len(tracking["observations"])} / '
+                        view.source_label = (f'{tracking_target.upper()} tracking={len(tracking["observations"])} / '
                                              f'matched={len(vehicle["current_matches"])} / '
                                              f'OCR pending={int(vehicle["statistics"]["pending_ocr"])}')
                 # 3. 시험 모드는 기록만 하고 운영 모드는 허용 구획의 이벤트만 한 번 전송합니다.
@@ -171,6 +249,14 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
                 except Exception as error:
                     report['status'] = 'FAILED'
                     report['error_type'] = report['error_type'] or type(error).__name__
+        if match_flow is not None:
+            try:
+                match_flow.close(lambda: checkpoint(output_dir, report, processor, delivery) if created_output else None)
+            except Exception as error:
+                report['status'], report['error_type'] = 'FAILED', type(error).__name__
+            if match_flow.blocked or any(row['status'] in ('IN_FLIGHT', 'DELIVERY_UNKNOWN') for row in match_flow.records):
+                if report['status'] != 'FAILED':
+                    report['status'] = 'DELIVERY_STOPPED'
         report['statistics'], report['occupancy'] = processor.statistics(), processor.occupancy()
         if frame_capture is not None:
             report['capture_statistics'] = frame_capture.summary()
@@ -205,13 +291,23 @@ def main(argv=None):
     parser.add_argument('--previous-report', type=Path, help='직전 실행 보고서를 시작 전에 점검')
     parser.add_argument('--publish-results', action='store_true', help='기존 점유 조회 API의 결과 파일도 갱신')
     parser.add_argument('--camera-backend', choices=CAMERA_BACKENDS, default='default', help='카메라 연결 방식')
-    parser.add_argument('--track-vehicles', action='store_true', help='차량·번호판·구획을 로컬 관찰. 구획 연결 HTTP 전송 없음')
+    parser.add_argument('--enable-space-http', action='store_true', help='점유 전송과 함께 허용 구획의 차량 연결도 전송')
+    parser.add_argument('--enable-space-release-http', action='store_true', help='확정 EMPTY와 서버 연결 버전으로 기존 연결 해제')
+    parser.add_argument('--ocr-execution', choices=('auto', 'thread', 'process'), default='auto', help='plate의 기본 로컬 OCR은 별도 프로세스로 실행')
+    parser.add_argument('--tracking-imgsz', type=int, choices=(640,960,1280), help='기본 plate=1280, vehicle=640')
+    parser.add_argument('--tracking-target', choices=('vehicle', 'plate'), default='vehicle', help='차체 또는 번호판 위치 추적')
+    parser.add_argument('--single-vehicle-handoff', type=Path, help='A카메라의 현재 실행 신원 파일. 한 대 시연에서만 사용')
+    parser.add_argument('--camera-id', help='Boot에서 구분할 주차 카메라 ID')
+    parser.add_argument('--track-vehicles', action='store_true', help='차량·번호판·구획 관찰. 연결 전송은 별도 활성화 필요')
     args = parser.parse_args(argv)
     try:
         report = run_camera(args.reference, args.config, args.output_dir, args.camera_index, args.seconds,
                             not args.no_preview, args.enable_http, args.allow_space_code,
                             previous_report=args.previous_report, publish_results=args.publish_results,
-                            camera_backend=args.camera_backend, track_vehicles=args.track_vehicles)
+                            camera_backend=args.camera_backend, track_vehicles=args.track_vehicles,
+                            enable_space_http=args.enable_space_http, camera_id=args.camera_id,
+                            enable_space_release_http=args.enable_space_release_http, tracking_target=args.tracking_target, ocr_execution=args.ocr_execution, tracking_imgsz=args.tracking_imgsz,
+                            handoff_path=args.single_vehicle_handoff)
     except (ValueError, OSError, RuntimeError) as error:
         print(f'실행 실패: {error}')
         return 1

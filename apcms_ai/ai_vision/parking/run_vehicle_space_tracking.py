@@ -10,14 +10,19 @@ from pathlib import Path
 
 import cv2
 
-from ai_vision.parking.vehicle_space_tracker import VehicleSpaceTracker, review_match_context, create_vehicle_tracker
+from ai_vision.parking.vehicle_space_tracker import VehicleSpaceTracker, review_match_context, create_vehicle_tracker, validate_tracking_target, read_tracked_plate, plate_tracking_confidence, tracking_image_size
 from ai_vision.recognition.local_io import read_json, write_json_atomic
+from ai_vision.parking.inspect_parking_camera import summarize_connection_reviews
 
 
 def run(source, config_path, output_dir, max_seconds=60, tracker=None, plate_reader=None,
         boot_context=None, recording_started_at=None, vision_api_url=None, capture_report=None,
-        reference_path=None, occupancy_detector=None):
+        reference_path=None, occupancy_detector=None, tracking_target='vehicle', tracking_imgsz=None):
     # 1. 설정·출력 경로를 먼저 검사하며 기존 시험 결과를 덮어쓰지 않습니다.
+    validate_tracking_target(tracking_target)
+    tracking_imgsz = tracking_image_size(tracking_target, tracking_imgsz)
+    if tracking_target == 'plate' and vision_api_url is not None:
+        raise ValueError('번호판 위치 추적은 로컬 번호판 OCR을 사용하세요.')
     source, output_dir = Path(source), Path(output_dir)
     if not source.is_file() or output_dir.exists():
         raise ValueError('실제 입력 영상과 새 출력 폴더를 지정하세요.')
@@ -51,7 +56,8 @@ def run(source, config_path, output_dir, max_seconds=60, tracker=None, plate_rea
         # 기존 원격 인식기의 주소 검사·제한 시간·응답 검증을 그대로 사용합니다.
         from ai_vision.recognition.remote_plate_reader import RemotePlateReader
         plate_reader = RemotePlateReader(vision_api_url).read
-    processor = VehicleSpaceTracker(config)
+    processor = VehicleSpaceTracker(config, motion_window_seconds=.1 if tracking_target == 'plate' else 0,
+                                    recover_plate_conflicts=tracking_target == 'plate')
     occupancy = None
     if reference_path is not None:
         # 1-1. 같은 구도의 빈 기준 사진과 기존 점유 처리기를 재사용합니다. 영상 시각만 사용합니다.
@@ -66,12 +72,13 @@ def run(source, config_path, output_dir, max_seconds=60, tracker=None, plate_rea
         raise ValueError('점유 분석에는 같은 구도의 빈 기준 사진이 필요합니다.')
     capture = cv2.VideoCapture(str(source))
     report = {'status': 'RUNNING', 'record_type': 'LOCAL_VEHICLE_SPACE_TRACKING',
-              'source': str(source.resolve()), 'http_enabled': False,
+              'source': str(source.resolve()), 'tracking_target': tracking_target, 'tracking_imgsz': tracking_imgsz, 'http_enabled': False,
               'reservation_checked': False, 'entry_checked': False, 'physical_occupancy_checked': False,
               'frames': 0, 'event_count': 0, 'error_type': None, 'current_matches': [],
               'skipped_duplicate_time_frames': 0, 'vehicle_observation_frames': 0, 'ocr_requests': 0}
     report.update(local_occupancy_enabled=occupancy is not None, local_occupancy_checked=False,
                   held_matches=[])
+    report['connection_withdrawal_counts'] = {}
     report['recognition_mode'] = 'REMOTE_API' if vision_api_url is not None else ('INJECTED' if plate_reader is not None else 'LOCAL')
     report['remote_recognition_enabled'] = vision_api_url is not None
     report['time_basis'] = 'CAPTURE_MONOTONIC' if frame_times is not None else 'ENCODED_FPS'
@@ -90,10 +97,11 @@ def run(source, config_path, output_dir, max_seconds=60, tracker=None, plate_rea
         write_json_atomic(output_dir / 'summary.json', report)
         if tracker is None:
             # 2. 입출차와 같은 차량 모델을 사용하되 별도 추적 세션을 만듭니다.
-            _, tracker = create_vehicle_tracker()
+            _, tracker = (create_vehicle_tracker() if tracking_target == 'vehicle' and tracking_imgsz == 640
+                          else create_vehicle_tracker(tracking_target, tracking_imgsz))
         if plate_reader is None:
             from ai_vision.recognition.live_gate_processor import LiveGateProcessor
-            plate_reader = LiveGateProcessor._read_plate
+            plate_reader = read_tracked_plate if tracking_target == 'plate' else LiveGateProcessor._read_plate
         last_ocr = {}
         with (output_dir / 'events.jsonl').open('x', encoding='utf-8') as events_file, \
              (output_dir / 'observations.jsonl').open('x', encoding='utf-8') as observations_file:
@@ -138,19 +146,24 @@ def run(source, config_path, output_dir, max_seconds=60, tracker=None, plate_rea
                     track = item['track_id']
                     if seconds - last_ocr.get(track, -1) >= .5 and processor._space(box) is not None:
                         x1, y1, x2, y2 = box
+                        confidence = plate_tracking_confidence(item) if tracking_target == 'plate' else None
                         report['ocr_requests'] += 1
                         result = plate_reader(frame[y1:y2, x1:x2])
                         if not isinstance(result, dict):
                             raise ValueError('번호판 인식 결과 객체가 필요합니다.')
+                        if tracking_target == 'plate':
+                            result = result | {'plate_detection_confidence': confidence}
                         item['plate_sample'] = {**result, 'frame_index': frame_index, 'video_seconds': seconds}
                         last_ocr[track] = seconds
                     valid.append(item)
-                events = processor.process(frame_index, seconds, valid)
-                local_occupancy = None
+                # 같은 프레임 점유를 먼저 계산하고 연결 상태·OCR 근거 누적에도 적용한다.
+                local_occupancy, eligible = None, None
                 if occupancy is not None:
                     sample = occupancy.process(frame, seconds)
-                    eligible = sorted(occupancy.matching_spaces(seconds))
-                    local_occupancy = {'sampled': sample['sampled'], 'matching_space_ids': eligible}
+                    eligible = occupancy.matching_spaces(seconds)
+                    local_occupancy = {'sampled': sample['sampled'], 'matching_space_ids': sorted(eligible)}
+                events = processor.process(frame_index, seconds, valid, eligible_spaces=eligible)
+                if occupancy is not None:
                     for event in events:
                         if event['kind'] == 'LOCAL_SPACE_MATCH':
                             event['local_occupancy_confirmed'] = event['space_id'] in eligible
@@ -160,6 +173,9 @@ def run(source, config_path, output_dir, max_seconds=60, tracker=None, plate_rea
                 if local_occupancy is not None:
                     observation['local_occupancy'] = local_occupancy
                 observations_file.write(json.dumps(observation, ensure_ascii=False, allow_nan=False) + '\n')
+                for reason, count in summarize_connection_reviews(events).items():
+                    counts = report['connection_withdrawal_counts']
+                    counts[reason] = counts.get(reason, 0) + count
                 for event in events:
                     events_file.write(json.dumps(event, ensure_ascii=False, allow_nan=False) + '\n')
                 report['frames'] += 1
@@ -214,13 +230,15 @@ def main(argv=None):
     parser.add_argument('--recording-started-at', help='실제 촬영 시작 ISO 시각. 타임존 필수')
     parser.add_argument('--vision-api-url', help='차량 영역을 업로드할 Vision API 주소. 생략하면 로컬 인식')
     parser.add_argument('--capture-report', type=Path, help='영상과 함께 생성된 실제 촬영 시각 JSON')
+    parser.add_argument('--tracking-imgsz',type=int,choices=(640,960,1280))
+    parser.add_argument('--tracking-target', choices=('vehicle', 'plate'), default='vehicle')
     parser.add_argument('--reference', type=Path, help='같은 구도의 빈 기준 사진. 차량 후보와 연속 점유를 함께 검사')
     args = parser.parse_args(argv)
     try:
         report = run(args.source, args.config, args.output_dir, args.max_seconds,
                      boot_context=args.boot_context, recording_started_at=args.recording_started_at,
                      vision_api_url=args.vision_api_url, capture_report=args.capture_report,
-                     reference_path=args.reference)
+                     reference_path=args.reference, tracking_target=args.tracking_target, tracking_imgsz=args.tracking_imgsz)
     except (ValueError, OSError, RuntimeError) as error:
         print(f'차량·구획 검사 실패: {type(error).__name__}')
         return 1

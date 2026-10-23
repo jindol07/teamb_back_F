@@ -10,6 +10,7 @@ import java.sql.Timestamp;
 import org.apache.ibatis.annotations.Mapper;
 import org.apache.ibatis.annotations.Param;
 import kr.co.alpharking.dto.parking.ParkingUsageRow;
+import kr.co.alpharking.dto.parking.ParkingReservationRow;
 
 @Mapper
 public interface ParkingUsageDao {
@@ -18,6 +19,7 @@ public interface ParkingUsageDao {
     // [1023_1010] 번호판에 대한 미출차 이용 기록 ID 조회.
     Long findOpenUsageByPlate(@Param("number") String number);
     // [1023_1010] 등록·방문 유형과 감지 시각으로 입차 INSERT. 변경 건수를 반환한다.
+    Long findUniqueOpenUsageByPlate(@Param("number") String number);
     int insertEntry(@Param("vehicleId") Long vehicleId, @Param("number") String number, @Param("parkingType") String parkingType, @Param("eventTime") Timestamp eventTime);
     // [1023_1010] 같은 DB 세션의 시퀀스 CURRVAL로 방금 생성한 이용 기록 PK를 읽는다.
     Long insertedUsageId();
@@ -51,4 +53,13 @@ public interface ParkingUsageDao {
     int countActiveByPlate(@Param("number") String number);
     // [1023_1010] 지정 구획과의 연결만 해제하고 입차·출차 기록은 유지한다.
     int detachSpace(@Param("usageId") Long usageId, @Param("spaceId") Long spaceId);
+    Timestamp latestAdminChangedAt(@Param("spaceId") Long spaceId);
+    List<ParkingReservationRow> lockReservationCandidates(@Param("number") String number,
+            @Param("spaceId") Long spaceId, @Param("eventTime") Timestamp eventTime);
+    int assignReservedSpace(@Param("usageId") Long usageId, @Param("spaceId") Long spaceId,
+            @Param("reservationId") Long reservationId, @Param("number") String number,
+            @Param("eventTime") Timestamp eventTime);
+    Long lockLinkVersion(@Param("usageId") Long usageId);
+    int releaseAiSpace(@Param("usageId") Long usageId, @Param("spaceId") Long spaceId,
+                       @Param("number") String number, @Param("linkVersion") Long linkVersion);
 }

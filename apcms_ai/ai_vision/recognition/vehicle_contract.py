@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 # 2. Spring Boot와 합의된 전송 경로·인증 헤더·필수 항목
 # 2-1. 이 모듈은 전송 자체를 수행하지 않고 데이터 형식만 검증합니다.
 VEHICLE_ENDPOINT = "/api/parking/ai/vehicle-events"
+SPACE_MATCH_ENDPOINT = "/api/parking/ai/space-match-events"
 AUTH_HEADER = "X-AI-API-Key"
 REQUIRED = {"event_id", "event_type", "detected_at", "camera_id", "direction", "plate_number", "confidence"}
 
@@ -85,3 +86,44 @@ def validate_vehicle_payload(payload, now=None):
     # 2. 원본 딕셔너리를 바꾸지 않고 검증된 7개 전송 필드만 반환합니다.
     return {"event_id": event_id, "event_type": "VEHICLE_PASSAGE", "detected_at": at.isoformat(),
             "camera_id": camera, "direction": payload["direction"], "plate_number": plate, "confidence": float(confidence)}
+
+
+def validate_space_match_payload(payload, now=None):
+    # 구획 연결을 입출차로 보내지 않고 기존 Boot 전용 계약으로 검사합니다.
+    required = (REQUIRED - {'direction'}) | {'space_code', 'method'}
+    if (not isinstance(payload, dict) or not required <= payload.keys()
+            or payload.keys() - required - {'direction'}
+            or payload.get('direction') is not None or payload.get('event_type') != 'VEHICLE_SPACE_MATCH'):
+        raise ValueError('구획 연결 요청 필드를 확인하세요.')
+    if (not isinstance(payload['space_code'], str)
+            or not re.fullmatch(r'[1-9][0-9]*F-[A-Z][0-9]{2,}', payload['space_code'])
+            or payload['method'] not in ('TRACKING', 'PLATE_OCR')):
+        raise ValueError('구획 코드와 연결 방법을 확인하세요.')
+    # UUID·원본 시각·카메라·번호판·점수 검증은 공통 규칙을 재사용합니다.
+    common = {key: payload[key] for key in REQUIRED - {'direction', 'event_type'}}
+    common.update(event_type='VEHICLE_PASSAGE', direction='ENTRY')
+    event = validate_vehicle_payload(common, now)
+    event.pop('direction')
+    event.update(event_type='VEHICLE_SPACE_MATCH', space_code=payload['space_code'], method=payload['method'])
+    return event
+
+
+SPACE_RELEASE_ENDPOINT = '/api/parking/ai/space-release-events'
+
+
+def validate_space_release_payload(payload, now=None):
+    required = {'event_id', 'event_type', 'detected_at', 'camera_id', 'plate_number',
+                'space_code', 'parking_usage_id', 'link_version', 'reason'}
+    if (not isinstance(payload, dict) or set(payload) != required
+            or payload.get('event_type') != 'VEHICLE_SPACE_RELEASE'
+            or payload.get('reason') != 'CONFIRMED_EMPTY'
+            or type(payload.get('parking_usage_id')) is not int or not 0 < payload['parking_usage_id'] <= 9223372036854775807
+            or type(payload.get('link_version')) is not int or not 0 <= payload['link_version'] < 10**18 - 1):
+        raise ValueError('해제 이용·버전·연속 빈자리 근거를 확인하세요.')
+    event = validate_space_match_payload({key: payload[key] for key in
+        ('event_id', 'detected_at', 'camera_id', 'plate_number', 'space_code')} |
+        {'event_type': 'VEHICLE_SPACE_MATCH', 'confidence': 0, 'method': 'TRACKING'}, now)
+    event.pop('confidence')
+    event.pop('method')
+    return event | {'event_type': 'VEHICLE_SPACE_RELEASE', 'parking_usage_id': payload['parking_usage_id'],
+                    'link_version': payload['link_version'], 'reason': 'CONFIRMED_EMPTY'}

@@ -2,6 +2,9 @@ package kr.co.alpharking.repository.reservation;
 
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
+import jakarta.persistence.LockModeType;
+import org.springframework.data.jpa.repository.Lock;
 
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -17,6 +20,21 @@ public interface ReservationRepository
     // 전체 예약 최신순 조회
     List<Reservation> findAllByOrderByParkingReservationIdDesc();
 
+    // 관리자 AI와 동일한 PARKING_SPACE 행을 먼저 잠근다.
+    @Query(value = "SELECT PARKING_SPACE_ID FROM PARKING_SPACE WHERE PARKING_SPACE_ID = :spaceId FOR UPDATE", nativeQuery = true)
+    Long lockParkingSpace(@Param("spaceId") Long spaceId);
+
+    // 예약 엔티티를 먼저 읽지 않고 잠글 구획 ID만 조회한다.
+    @Query("SELECT r.parkingSpaceId FROM Reservation r WHERE r.parkingReservationId = :id")
+    Optional<Long> findSpaceIdForReservation(@Param("id") Long id);
+
+    @Lock(LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT r FROM Reservation r WHERE r.parkingReservationId = :id")
+    Optional<Reservation> findLockedById(@Param("id") Long id);
+
+    @Query(value = "SELECT COUNT(*) FROM PARKING_USAGE WHERE PARKING_RESERVATION_ID = :id AND EXIT_AT IS NULL", nativeQuery = true)
+    long countActiveUsageForReservation(@Param("id") Long id);
+
     // 사용자별 확정 및 미만료 예약 조회
     List<Reservation> findAllByOfficeIdAndStatusCodeAndReservationEndAtGreaterThanEqualOrderByParkingReservationIdDesc(
             Long officeId, String statusCode, LocalDateTime now);
@@ -27,6 +45,7 @@ public interface ReservationRepository
         FROM Reservation r
         WHERE r.parkingSpaceId = :parkingSpaceId
           AND r.statusCode = 'CONFIRMED'
+          AND r.cancelledAt IS NULL
           AND r.reservationStartAt <= :endAt
           AND r.reservationEndAt >= :startAt
         """)

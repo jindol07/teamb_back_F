@@ -253,6 +253,56 @@ class ParkingVideoCheckTests(ParkingSceneFixture, unittest.TestCase):
 
 
 class ParkingCameraTests(ParkingSceneFixture, unittest.TestCase):
+    def test_entry_handoff_connects_real_observer_without_ocr_and_clears_on_exit(self):
+        import itertools
+        from datetime import datetime, timezone
+        from ai_vision.parking import run_parking_camera as camera
+        from ai_vision.recognition.single_vehicle_handoff import SingleVehicleHandoff
+        from ai_vision.tests.recognition.test_vehicle_response import sample_event
+        root, reference, config = self.inputs()
+        now = datetime.now(timezone.utc)
+        source = SingleVehicleHandoff(root/'handoff.json', 'gate_test', 'A', now)
+        event = sample_event() | {'detected_at': now.isoformat()}
+        source.record(event, {'event_id': event['event_id'], 'event_type': 'VEHICLE_PASSAGE',
+            'receipt_verified': True, 'request_attempted': True, 'state': 'APPLIED', 'parking_usage_id': 70}, now)
+        reads = {'count': 0}
+        capture = Mock()
+        def read():
+            reads['count'] += 1
+            if reads['count'] == 25:
+                source.record(event | {'direction': 'EXIT'}, {'event_id': event['event_id'],
+                    'event_type': 'VEHICLE_PASSAGE', 'receipt_verified': True, 'request_attempted': True,
+                    'state': 'APPLIED', 'parking_usage_id': 70}, datetime.now(timezone.utc))
+            return True, self.occupied
+        capture.read.side_effect = read
+        tracker = Mock(return_value=[{'track_id': 1, 'box': [10,10,30,60], 'vehicle_detection_confidence': .9}])
+        with patch.object(camera, 'open_camera', return_value=capture), \
+                patch.object(camera, 'LatestFrameCapture', return_value=None), \
+                patch.object(camera.time, 'monotonic', side_effect=itertools.count(0,.1)), \
+                patch('ai_vision.parking.vehicle_space_tracker.read_tracked_plate') as ocr:
+            report = camera.run_camera(reference, config, root/'handoff_run', seconds=20, preview=False,
+                track_vehicles=True, vehicle_tracker=tracker, handoff_path=root/'handoff.json')
+        self.assertEqual(report['status'], 'COMPLETED')
+        vehicle = report['vehicle_space']
+        self.assertTrue(any(e.get('identity_basis') == 'SINGLE_VEHICLE_ENTRY_HANDOFF' for e in vehicle['events']))
+        self.assertEqual(vehicle['last_observed_matches'], [])
+        self.assertEqual(vehicle['statistics']['ocr_submitted'], 0)
+        self.assertEqual(vehicle['completed_samples'], [])
+        self.assertEqual(report['http_requests'], 0)
+        ocr.assert_not_called()
+
+    def test_handoff_cli_forwards_path_and_incompatible_options_fail_before_camera(self):
+        from ai_vision.parking import run_parking_camera as camera
+        summary = {'status':'COMPLETED','read_frames':0,'events':[],'http_requests':0,'error_type':None}
+        with patch.object(camera,'run_camera',return_value=summary) as execute:
+            camera.main(['--reference','empty.png','--config','spaces.json','--output-dir','out',
+                         '--track-vehicles','--single-vehicle-handoff','gate/handoff.json','--no-preview'])
+            self.assertEqual(execute.call_args.kwargs['handoff_path'],Path('gate/handoff.json'))
+        with patch.object(camera,'open_camera') as opened:
+            with self.assertRaises(ValueError):
+                camera.run_camera('empty.png','spaces.json','out',handoff_path='gate.json')
+            opened.assert_not_called()
+
     def setUp(self):
         super().setUp()
         from ai_vision.parking import run_parking_camera as camera
@@ -452,6 +502,8 @@ class ParkingCameraTests(ParkingSceneFixture, unittest.TestCase):
         vehicle = report['vehicle_space']
         self.assertEqual([e['space_id'] for e in vehicle['events'] if e['kind'] == 'LOCAL_SPACE_MATCH'],
                          ['A-01', 'A-02', 'A-02'])
+        self.assertEqual([r['payload']['space_code'] for r in vehicle['deliveries']], ['1F-A01', '1F-A02', '1F-A02'])
+        self.assertTrue(all(r['status'] == 'DISABLED' for r in vehicle['deliveries']))
         self.assertEqual(vehicle['last_observed_matches'], [])
         self.assertEqual(vehicle['observations'], [])
         self.assertTrue(any(rows and rows[0]['status'] == 'LOCAL_MATCH' and rows[0]['plate_number'] == '91소6408'
@@ -568,6 +620,223 @@ class ParkingCameraTests(ParkingSceneFixture, unittest.TestCase):
                 self.assertEqual(report['http_requests'], 0)
                 self.assertEqual(report['status'], 'FAILED')  # 마지막 읽기 실패는 정상 종료로 표시하지 않습니다.
                 capture.release.assert_called_once()
+
+    def test_assignment_http_uses_current_observation_after_occupancy_wait(self):
+        import itertools
+        from ai_vision.parking import run_parking_camera as camera
+        for withdrawn in (False, True):
+            with self.subTest(withdrawn=withdrawn):
+                root, reference, config = self.inputs()
+                counter = {'frame': 0}
+                match = {'track_id': 1, 'space_id': 'A-01', 'plate_number': '91소6408'}
+                processor = Mock()
+                processor.process.return_value = {'events': [], 'changes': [], 'sampled': False}
+                processor.statistics.return_value = {}
+                processor.occupancy.return_value = {'occupied_count': 1}
+                processor.matching_spaces.return_value = {'A-01'}
+                observer = Mock()
+                observer.summary.return_value = {'pending_ocr': False}
+                def observe(index, seconds, frame, **kwargs):
+                    counter['frame'] += 1
+                    event = {**match, 'kind': 'LOCAL_SPACE_MATCH', 'frame_index': index,
+                             'video_seconds': seconds, 'plate_detection_confidence': .9}
+                    return {'events': [event] if index == 0 else [], 'completed_samples': [], 'observations': []}
+                observer.process.side_effect = observe
+                observer.current_matches.side_effect = lambda *_: ([] if withdrawn and counter['frame'] > 3 else [match])
+                class OccupancyWorker:
+                    future = None
+                    blocked = False
+                    @property
+                    def pending(self):
+                        return int(counter['frame'] < 5)
+                    def poll(self, persist):
+                        return True
+                    def close(self):
+                        pass
+                client = Mock(enabled=True)
+                client.send.side_effect = lambda event: {
+                    'event_id': event['event_id'], 'event_type': 'VEHICLE_SPACE_MATCH',
+                    'state': 'APPLIED', 'receipt_verified': True, 'request_attempted': True}
+                capture = Mock()
+                capture.read.return_value = (True, self.occupied)
+                with patch.object(camera, 'ParkingOccupancyProcessor', return_value=processor), \
+                        patch.object(camera, 'ParkingDeliveryWorker', return_value=OccupancyWorker()), \
+                        patch.object(camera, 'LatestFrameCapture', return_value=None), \
+                        patch.object(camera, 'open_camera', return_value=capture), \
+                        patch.object(camera.time, 'monotonic', side_effect=itertools.count(0, .2)), \
+                        patch('ai_vision.parking.vehicle_space_tracker.VehicleSpaceObserver', return_value=observer), \
+                        patch('ai_vision.recognition.vehicle_http.SpaceMatchHTTPClient', return_value=client):
+                    report = camera.run_camera(reference, config, root / 'assignment', seconds=9, preview=False,
+                        track_vehicles=True, enable_http=True, allowed_codes=['1F-A01'],
+                        enable_space_http=True, camera_id='PARKING_1', environment={'PARKING_AI_API_KEY': 'KEY'})
+                self.assertEqual(report['status'], 'COMPLETED')
+                if withdrawn:
+                    client.send.assert_not_called()
+                    self.assertEqual(report['vehicle_space']['deliveries'], [])
+                else:
+                    client.send.assert_called_once()
+                    self.assertEqual(report['vehicle_space']['deliveries'][0]['status'], 'APPLIED')
+
+    def test_camera_assign_release_reassign_uses_confirmed_empty_and_server_version(self):
+        self._camera_assignment_journey()
+
+    def test_camera_stops_before_other_requests_after_assignment_auth_failure(self):
+        self._camera_assignment_journey(reject=True)
+
+    def test_delayed_release_keeps_only_still_observed_reconnection(self):
+        self._camera_assignment_journey(delayed_release=True)
+
+    def test_delayed_release_discards_reconnection_after_observation_loss(self):
+        self._camera_assignment_journey(delayed_release=True, withdraw=True)
+
+    def test_delayed_release_uses_fresh_generation_after_return(self):
+        self._camera_assignment_journey(delayed_release=True, withdraw=True, return_again=True)
+
+    def test_missing_link_version_stops_camera_runner_before_release(self):
+        self._camera_assignment_journey(missing_version=True)
+
+    def _camera_assignment_journey(self, reject=False, delayed_release=False, withdraw=False, return_again=False, missing_version=False):
+        import itertools
+        from ai_vision.parking import run_parking_camera as camera
+        from ai_vision.recognition.vehicle_delivery_flow import SpaceMatchDeliveryFlow
+        root, reference, config = self.inputs()
+        counter = {'frame': -1}
+        a = {'track_id': 1, 'space_id': 'A-01', 'plate_number': '91소6408'}
+        b = a | {'space_id': 'A-02'}
+        processor = Mock()
+        processor.process.return_value = {'events': [], 'changes': [], 'sampled': False}
+        processor.statistics.return_value = {}
+        processor.occupancy.return_value = {'occupied_count': 1}
+        processor.matching_spaces.return_value = {'A-01', 'A-02'}
+        processor.empty_spaces.side_effect = lambda *_: {'A-01'} if counter['frame'] >= 5 else set()
+        observer = Mock()
+        observer.summary.return_value = {'pending_ocr': False}
+        def observe(index, seconds, frame, **kwargs):
+            counter['frame'] += 1
+            event = (a if counter['frame'] == 0 else b) | {'kind': 'LOCAL_SPACE_MATCH',
+                'frame_index': index, 'video_seconds': seconds, 'plate_detection_confidence': .9}
+            return {'events': [event] if counter['frame'] in ((0, 12, 22) if return_again else (0, 12)) else [],
+                    'completed_samples': [], 'observations': []}
+        observer.process.side_effect = observe
+        def current(*_):
+            index = counter['frame']
+            if withdraw and index >= 16 and not (return_again and index >= 22):
+                return []
+            return [a] if index < 5 else [b] if index >= 12 else []
+        observer.current_matches.side_effect = current
+        client, release = Mock(enabled=True), Mock(enabled=True)
+        sent = []
+        def receipt(event):
+            sent.append(event['event_type'])
+            return {'event_id': event['event_id'], 'event_type': event['event_type'], 'state': 'AUTH_REQUIRED' if reject else 'APPLIED',
+                'receipt_verified': not reject, 'request_attempted': True, 'parking_usage_id': 70,
+                'link_version': None if missing_version else 5 if event['event_type'] == 'VEHICLE_SPACE_RELEASE' else 4 if event['space_code'] == '1F-A01' else 6}
+        client.send.side_effect = release.send.side_effect = receipt
+        holder = {}
+        def flow_factory(*args, **kwargs):
+            holder['flow'] = SpaceMatchDeliveryFlow(*args, **kwargs)
+            if delayed_release:
+                from concurrent.futures import Future
+                holder['flow']._executor.shutdown()
+                def submit(function, event):
+                    holder['job'] = (Future(), function, event)
+                    return holder['job'][0]
+                holder['flow']._executor = Mock()
+                holder['flow']._executor.submit.side_effect = submit
+            return holder['flow']
+        capture = Mock()
+        def read():
+            future = holder['flow']._future
+            if future is not None:
+                if delayed_release:
+                    pending, function, event = holder['job']
+                    if not pending.done() and (event['event_type'] != 'VEHICLE_SPACE_RELEASE' or counter['frame'] >= 18):
+                        pending.set_result(function(event))
+                else:
+                    future.result(timeout=3)
+            return True, self.occupied
+        capture.read.side_effect = read
+        worker = Mock(pending=0, blocked=False, future=None)
+        worker.poll.return_value = True
+        with patch.object(camera, 'ParkingOccupancyProcessor', return_value=processor), \
+                patch.object(camera, 'ParkingDeliveryWorker', return_value=worker), \
+                patch.object(camera, 'LatestFrameCapture', return_value=None), \
+                patch.object(camera, 'SpaceMatchDeliveryFlow', side_effect=flow_factory), \
+                patch.object(camera, 'open_camera', return_value=capture), \
+                patch.object(camera.time, 'monotonic', side_effect=itertools.count(0, .1)), \
+                patch('ai_vision.parking.vehicle_space_tracker.VehicleSpaceObserver', return_value=observer), \
+                patch('ai_vision.recognition.vehicle_http.SpaceMatchHTTPClient', return_value=client), \
+                patch('ai_vision.recognition.vehicle_http.SpaceReleaseHTTPClient', return_value=release):
+            report = camera.run_camera(reference, config, root / 'release_journey', seconds=20, preview=False,
+                track_vehicles=True, enable_http=True, allowed_codes=['1F-A01', '1F-A02'],
+                enable_space_http=True, enable_space_release_http=True, camera_id='PARKING_1',
+                environment={'PARKING_AI_API_KEY': 'KEY'})
+        if reject or missing_version:
+            self.assertEqual(report['status'], 'DELIVERY_STOPPED')
+            self.assertEqual(sent, ['VEHICLE_SPACE_MATCH'])
+            release.send.assert_not_called()
+            capture.release.assert_called_once()
+            if missing_version:
+                self.assertEqual(report['vehicle_space']['deliveries'][0]['status'], 'APPLIED')
+                self.assertEqual(report['vehicle_space']['deliveries'][0]['blocking_reason'], 'SPACE_RELEASE_VERSION_UNAVAILABLE')
+                self.assertEqual(report['vehicle_space']['current_matches'], [])
+            return
+        self.assertEqual(report['status'], 'COMPLETED')
+        if withdraw and not return_again:
+            self.assertEqual(sent, ['VEHICLE_SPACE_MATCH', 'VEHICLE_SPACE_RELEASE'])
+            client.send.assert_called_once()
+            self.assertEqual(report['vehicle_space']['last_observed_matches'], [])
+            return
+        self.assertEqual(sent, ['VEHICLE_SPACE_MATCH', 'VEHICLE_SPACE_RELEASE', 'VEHICLE_SPACE_MATCH'])
+        records = report['vehicle_space']['deliveries']
+        self.assertEqual([row['status'] for row in records], ['APPLIED'] * 3)
+        self.assertEqual(records[1]['payload']['parking_usage_id'], 70)
+        self.assertEqual(records[1]['payload']['link_version'], 4)
+        self.assertEqual(records[2]['payload']['space_code'], '1F-A02')
+        if delayed_release:
+            self.assertEqual(client.send.call_count, 2)
+            release.send.assert_called_once()
+            self.assertGreaterEqual(counter['frame'], 22 if return_again else 19)
+        if return_again:
+            self.assertGreaterEqual(records[2]['payload']['detected_at'], records[1]['payload']['detected_at'])
+
+    def test_plate_target_cli_reaches_camera_and_invalid_mode_never_opens_camera(self):
+        from ai_vision.parking import run_parking_camera as camera
+        summary = {'status': 'COMPLETED', 'read_frames': 0, 'events': [], 'http_requests': 0, 'error_type': None}
+        with patch.object(camera, 'run_camera', return_value=summary) as execute:
+            self.assertEqual(camera.main(['--reference','empty.png','--config','spaces.json',
+                '--output-dir','out','--track-vehicles','--tracking-target','plate','--no-preview']), 0)
+            self.assertEqual(execute.call_args.kwargs['tracking_target'], 'plate')
+            self.assertFalse(execute.call_args.kwargs['enable_space_http'])
+        with patch.object(camera, 'open_camera') as capture:
+            with self.assertRaises(ValueError):
+                camera.run_camera('empty.png','spaces.json','out',tracking_target='plate')
+            capture.assert_not_called()
+
+    def test_process_ocr_initialization_failure_never_opens_camera(self):
+        from concurrent.futures.process import BrokenProcessPool
+        from ai_vision.parking import run_parking_camera as camera
+        root,reference,config = self.inputs()
+        observer = Mock()
+        observer.prepare.side_effect = BrokenProcessPool('initialization failed')
+        observer.summary.return_value = {'ocr_execution':'process'}
+        with patch('ai_vision.parking.vehicle_space_tracker.VehicleSpaceObserver',return_value=observer), \
+                patch.object(camera,'open_camera') as capture:
+            report = camera.run_camera(reference,config,root/'worker_failed',preview=False,
+                                       track_vehicles=True,tracking_target='plate')
+        self.assertEqual(report['status'],'FAILED')
+        self.assertEqual(report['error_type'],'BrokenProcessPool')
+        observer.close.assert_called_once()
+        capture.assert_not_called()
+
+    def test_process_execution_cli_reaches_runner_without_enabling_http(self):
+        from ai_vision.parking import run_parking_camera as camera
+        summary = {'status':'COMPLETED','read_frames':0,'events':[],'http_requests':0,'error_type':None}
+        with patch.object(camera,'run_camera',return_value=summary) as run:
+            camera.main(['--reference','empty.png','--config','spaces.json','--output-dir','out',
+                         '--track-vehicles','--tracking-target','plate','--ocr-execution','process'])
+        self.assertEqual(run.call_args.kwargs['ocr_execution'],'process')
+        self.assertFalse(run.call_args.kwargs['enable_space_http'])
 
     def inputs(self):
         base = RESULT_DIR / 'test_tmp'
@@ -1450,3 +1719,14 @@ class ParkingDeploymentTests(unittest.TestCase):
             handler.do_POST()
         handler.send_response.assert_called_once_with(503)
         self.assertEqual(json.loads(handler.wfile.getvalue()), {"success": False})
+
+
+class ContinuousEmptyEvidenceTests(ParkingSceneFixture, unittest.TestCase):
+    def test_empty_evidence_disappears_on_new_occupancy_and_observation_gap(self):
+        processor = self.processor()
+        for index in range(5):
+            processor.process(self.reference, index * .5)
+        self.assertEqual(processor.empty_spaces(2), {'A-01', 'A-02'})
+        processor.process(self.occupied, 2.5)
+        self.assertEqual(processor.empty_spaces(2.5), {'A-02'})
+        self.assertEqual(processor.empty_spaces(5), set())

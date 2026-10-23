@@ -1,4 +1,4 @@
-# ai_vision/recognition/live_gate_session.py
+# D:/finalProjectB/back/apcms_ai/ai_vision/recognition/live_gate_session.py
 """카메라의 단일 실행 세션을 관리하는 클래스.
 
 프레임 시각의 소속 확인, 통과 전 OCR 표본 검사, 이벤트 전송 판단,
@@ -24,7 +24,7 @@ from ai_vision.recognition.vehicle_live_candidate import create_live_candidate
 class LiveGateSession:
     # 2-1. camera_id와 화면 DOWN의 실제 방향을 필수로 검증합니다.
     # 2-2. clock/flow를 외부에서 주입하면 시뮬레이션과 테스트에도 사용할 수 있습니다.
-    def __init__(self, camera_id, down_direction, clock=None, flow=None):
+    def __init__(self, camera_id, down_direction, clock=None, flow=None, handoff_path=None):
         validate_camera_id(camera_id)
         if not isinstance(down_direction, str) or down_direction not in {"ENTRY", "EXIT"}:
             raise ValueError("DOWN의 실제 입출차 방향이 필요합니다.")
@@ -36,6 +36,12 @@ class LiveGateSession:
         # 2-4. 종료 여부, 판단 통계, 실제 HTTP 요청 시도 수를 초기화합니다.
         self._closed, self._decisions, self._requests = False, Counter(), 0
         self._lock = threading.RLock()
+        self.handoff = None
+        if handoff_path is not None:
+            if self.flow.client.enabled is not True:
+                raise ValueError('입차 신원 전달에는 검증된 Boot 응답이 필요합니다.')
+            from ai_vision.recognition.single_vehicle_handoff import SingleVehicleHandoff
+            self.handoff = SingleVehicleHandoff(handoff_path, self.session_id, camera_id, self.clock.started_at)
 
     # 3. 카메라에서 수집한 프레임의 시각을 기록합니다.
     def capture(self, frame_index, monotonic_seconds=None):
@@ -44,7 +50,10 @@ class LiveGateSession:
             if self._closed:
                 raise ValueError("종료된 세션에는 프레임을 추가할 수 없습니다.")
             # 3-2. LiveGateClock이 프레임 인덱스, 상대 시각, UTC 시각을 관리합니다.
-            return self.clock.capture(frame_index, monotonic_seconds)
+            stamp = self.clock.capture(frame_index, monotonic_seconds)
+            if self.handoff is not None:
+                self.handoff.heartbeat(stamp.captured_at)
+            return stamp
 
     # 4. 기준선을 통과한 차량 한 건을 전송 판단 흐름에 전달합니다.
     def consume(self, passage, stamp):
@@ -75,7 +84,12 @@ class LiveGateSession:
 
             # 6. 실시간 통과 기록을 후보로 만들고 중복 억제/송신 판단을 요청합니다.
             candidate = create_live_candidate(passage, self.camera_id, self.down_direction, stamp.captured_at.isoformat())
+            if (self.handoff is not None and candidate.get('payload') is not None
+                    and not self.handoff.allow(candidate['payload'], stamp.captured_at)):
+                candidate = dict(candidate, status='BLOCKED', reasons=['SINGLE_VEHICLE_HANDOFF_HELD'], payload=None)
             result = self.flow.process(self.session_id, candidate)
+            if self.handoff is not None and result.get('receipt') is not None:
+                self.handoff.record(candidate['payload'], result['receipt'], stamp.captured_at)
             # 6-1. 판단 유형과 실제 요청 시도를 별도로 기록합니다.
             self._decisions[result["decision"]] += 1
             self._requests += result["request_attempted"] is True
@@ -85,6 +99,9 @@ class LiveGateSession:
     def close(self):
         # 7-1. 종료 뒤 도착한 프레임 및 이벤트가 신규 요청을 만들지 못하게 합니다.
         with self._lock:
+            if self.handoff is not None and not self._closed:
+                from datetime import datetime, timezone
+                self.handoff.close(datetime.now(timezone.utc))
             self._closed = True
 
     # 8. 저장/보고서에 사용할 실행 요약을 반환합니다.
