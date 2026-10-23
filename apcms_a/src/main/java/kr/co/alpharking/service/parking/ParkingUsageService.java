@@ -90,6 +90,97 @@ public class ParkingUsageService {
     public record AssignmentResult(ParkingUsageRow usage, String conflictReason) {}
 
     // [1023_1010] 구획 잠금 → 점유 확인 → 이용 기록 잠금 → 기존 연결·중복 점유 확인 → 연결 갱신 순서다.
+    public record ReservedAssignmentResult(ParkingUsageRow usage, String conflictReason, boolean unchanged) {}
+
+    /** AI 연결만 예약을 검증한다. 관리자 수동 연결의 기존 정책은 유지한다. */
+    @Transactional
+    public ReservedAssignmentResult assignReservedForAi(Long usageId, Long spaceId, String rawNumber, Timestamp eventTime) {
+        String number = normalize(rawNumber);
+        if (usageId == null || spaceId == null || eventTime == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "이용·구획·감지 시각이 필요합니다.");
+        }
+        // 관리자 보정과 같은 순서로 구획, 이용, 예약을 잠근다.
+        if (!"OCCUPIED".equals(dao.lockSpaceStatus(spaceId))) return held("점유로 확인된 구획이 아닙니다.");
+        ParkingUsageRow current = dao.lockOpenUsage(usageId);
+        if (current == null || !number.equals(current.getVehicleNumber()) || dao.countActiveByPlate(number) != 1) {
+            return held("활성 입차 기록을 유일하게 확인할 수 없습니다.");
+        }
+        if (current.getEntryAt() == null || eventTime.toLocalDateTime().isBefore(java.time.LocalDateTime.parse(current.getEntryAt()))) {
+            return held("입차 이전의 매칭 이벤트입니다.");
+        }
+        Timestamp correctedAt = dao.latestAdminChangedAt(spaceId);
+        if (correctedAt != null && !eventTime.after(correctedAt)) return held("관리자 보정 이전의 매칭 이벤트입니다.");
+        if (current.getParkingSpaceId() != null && !spaceId.equals(current.getParkingSpaceId())) {
+            return held("이미 다른 구획에 연결된 차량입니다.");
+        }
+        if (dao.countOtherActiveOnSpace(spaceId, usageId) > 0) return held("이미 다른 차량이 연결된 구획입니다.");
+        var reservations = dao.lockReservationCandidates(number, spaceId, eventTime);
+        if (reservations == null || reservations.size() != 1) return held("일치하는 유효 예약을 유일하게 확인할 수 없습니다.");
+        var reservation = reservations.getFirst();
+        if (!spaceId.equals(reservation.getParkingSpaceId()) || !number.equals(reservation.getVehicleNumber())
+                || !"CONFIRMED".equals(reservation.getStatusCode()) || reservation.getParkingReservationId() == null) {
+            return held("예약 차량 또는 구획이 일치하지 않습니다.");
+        }
+        Long reservationId = reservation.getParkingReservationId();
+        if (current.getParkingReservationId() != null && !reservationId.equals(current.getParkingReservationId())) {
+            return held("이미 다른 예약에 연결된 이용 기록입니다.");
+        }
+        boolean unchanged = spaceId.equals(current.getParkingSpaceId()) && reservationId.equals(current.getParkingReservationId());
+        int updated = dao.assignReservedSpace(usageId, spaceId, reservationId, number, eventTime);
+        if (updated == 0) {
+            return held("예약 또는 이용 상태가 변경되어 연결하지 않았습니다.");
+        }
+        if (updated != 1) throw new IllegalStateException("구획·예약 연결 반영 건수가 올바르지 않습니다.");
+        ParkingUsageRow saved = dao.findById(usageId);
+        if (saved == null || !spaceId.equals(saved.getParkingSpaceId()) || !reservationId.equals(saved.getParkingReservationId())) {
+            throw new IllegalStateException("구획·예약 연결 결과 재조회 실패");
+        }
+        return new ReservedAssignmentResult(saved, null, unchanged);
+    }
+
+    public record ReleaseResult(ParkingUsageRow usage, String conflictReason, Long linkVersion) {}
+
+    /** 서버의 AVAILABLE 상태와 연결 버전을 함께 확인한다. */
+    @Transactional
+    public ReleaseResult releaseForAi(Long usageId, Long spaceId, String rawNumber,
+                                      Long expectedVersion, Timestamp eventTime) {
+        String number = normalize(rawNumber);
+        if (usageId == null || usageId < 1 || spaceId == null || expectedVersion == null
+                || expectedVersion < 0 || expectedVersion == Long.MAX_VALUE || eventTime == null) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "해제 이용·구획·버전·시각을 확인하세요.");
+        }
+        // 점유만 해제됐다고 이용 연결을 지우지 않는다. 이용·차량·세대가 모두 일치해야 한다.
+        if (!"AVAILABLE".equals(dao.lockSpaceStatus(spaceId))) return new ReleaseResult(null, "빈 구획으로 확인되지 않았습니다.", null);
+        ParkingUsageRow current = dao.lockOpenUsage(usageId);
+        if (current == null || !number.equals(current.getVehicleNumber()) || dao.countActiveByPlate(number) != 1
+                || !spaceId.equals(current.getParkingSpaceId())) {
+            return new ReleaseResult(null, "현재 이용·차량·기존 구획이 일치하지 않습니다.", null);
+        }
+        if (current.getEntryAt() == null || eventTime.toLocalDateTime().isBefore(java.time.LocalDateTime.parse(current.getEntryAt()))) {
+            return new ReleaseResult(null, "입차 이전의 해제 이벤트입니다.", null);
+        }
+        Timestamp corrected = dao.latestAdminChangedAt(spaceId);
+        if (corrected != null && !eventTime.after(corrected)) return new ReleaseResult(null, "관리자 보정 이전의 해제입니다.", null);
+        Long version = dao.lockLinkVersion(usageId);
+        if (!expectedVersion.equals(version)) return new ReleaseResult(null, "연결 버전이 변경되었습니다.", null);
+        int updated = dao.releaseAiSpace(usageId, spaceId, number, expectedVersion);
+        if (updated == 0) return new ReleaseResult(null, "연결 상태가 변경되었습니다.", null);
+        if (updated != 1) throw new IllegalStateException("구획 해제 반영 건수 오류");
+        ParkingUsageRow saved = dao.findById(usageId);
+        Long nextVersion = dao.lockLinkVersion(usageId);
+        if (saved == null || !usageId.equals(saved.getParkingUsageId()) || !number.equals(saved.getVehicleNumber())
+                || saved.getExitAt() != null || saved.getParkingSpaceId() != null || saved.getParkingReservationId() != null
+                || nextVersion == null || nextVersion != expectedVersion + 1) {
+            throw new IllegalStateException("구획 해제·버전 갱신 결과 재조회 실패");
+        }
+        saved.setLinkVersion(nextVersion);
+        return new ReleaseResult(saved, null, nextVersion);
+    }
+
+    private static ReservedAssignmentResult held(String reason) {
+        return new ReservedAssignmentResult(null, reason, false);
+    }
+
     private AssignmentResult assignInternal(Long usageId, Long spaceId) {
         if (usageId == null || spaceId == null) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "이용 기록과 주차구획 ID가 필요합니다.");

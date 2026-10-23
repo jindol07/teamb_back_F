@@ -182,6 +182,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--demo", action="store_true")
     parser.add_argument("--enable-http", action="store_true", help="실제 카메라의 확정 후보를 Boot로 전송")
+    parser.add_argument('--single-vehicle-handoff', action='store_true', help='한 대 시연용 신원 파일을 새 세션 폴더에 기록')
     parser.add_argument("--boot-context-url", help="관리자 Boot context URL. 키는 AI_OCCUPANCY_API_KEY 환경변수 사용")
     parser.add_argument("--camera-index", type=int, default=0)
     parser.add_argument("--vision-api-url", help="지정하면 차량 추적은 현장 PC, 번호판 인식은 해당 Vision API에서 수행")
@@ -194,6 +195,8 @@ def main(argv=None):
     parser.add_argument("--seconds", type=float, default=20)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.single_vehicle_handoff and (args.demo or not args.enable_http):
+        parser.error('한 대 시연 신원 전달은 실제 입출차 HTTP 모드에서만 사용합니다.')
     if args.demo and (args.enable_http or args.boot_context_url is not None or args.vision_api_url is not None or args.buffered_capture or args.async_ocr or args.preview):
         parser.error("합성 데모에서는 실제 전송 옵션을 사용할 수 없습니다.")
     if args.async_ocr and args.vision_api_url is None:
@@ -252,7 +255,8 @@ def main(argv=None):
             if args.buffered_capture:
                 capture = LatestFrameCapture(capture)
             # 카메라 생성에 걸린 시간도 촬영 시간과 프레임 시각에서 제외합니다.
-            session = LiveGateSession(args.camera_id, args.down_direction, flow=VehicleDeliveryFlow(client))
+            session = LiveGateSession(args.camera_id, args.down_direction, flow=VehicleDeliveryFlow(client),
+                                      handoff_path=output/'single_vehicle_handoff.json' if args.single_vehicle_handoff else None)
             options = {"preview": preview} if preview is not None else {}
             if not ready:
                 options["start_cancelled"] = True

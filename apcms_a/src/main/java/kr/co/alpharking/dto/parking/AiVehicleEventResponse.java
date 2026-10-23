@@ -7,4 +7,10 @@ package kr.co.alpharking.dto.parking;
 
 public record AiVehicleEventResponse(String eventId, String eventType, String outcome,
                                      String plateNumber, String spaceCode,
-                                     Long parkingUsageId, String detail) {}
+                                     Long parkingUsageId, String detail, Long linkVersion) {
+    // 기존 통과 이벤트와 호출자의 생성 형식을 유지한다.
+    public AiVehicleEventResponse(String eventId, String eventType, String outcome,
+            String plateNumber, String spaceCode, Long parkingUsageId, String detail) {
+        this(eventId, eventType, outcome, plateNumber, spaceCode, parkingUsageId, detail, null);
+    }
+}

@@ -50,7 +50,7 @@ public class FireSafetyController {
 
     /** 관리자 JWT에 ADMIN 권한이 있어야만 목록을 조회할 수 있습니다. */
     @GetMapping("/api/admin/safety-incidents")
-    public List<Map<String, Object>> recent(@RequestParam(defaultValue = "30") int limit) {
+    public List<Map<String, Object>> recent(@RequestParam(name = "limit", defaultValue = "30") int limit) {
         Authentication user = SecurityContextHolder.getContext().getAuthentication();
         if (user == null || !user.isAuthenticated()
                 || user.getAuthorities().stream().noneMatch(a -> "ADMIN".equals(a.getAuthority())))
