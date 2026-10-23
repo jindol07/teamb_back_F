@@ -7,5 +7,6 @@ import lombok.Setter;
 @Setter
 public class VehicleRegistrationRequestDto {
     private String vehicleNumber;
+    private String ownerName; // 차주명 추가
     private String vehicleModel;
 }
