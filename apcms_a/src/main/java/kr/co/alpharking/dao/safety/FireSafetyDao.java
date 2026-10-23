@@ -63,6 +63,36 @@ public class FireSafetyDao {
         return rows.isEmpty() ? null : rows.get(0);
     }
 
+    /**
+     * 1. 같은 미해결 DB 사건에 동일한 Python incident_id의 SUSPECTED가 이미 있었는지 확인.
+     * 1-1. 별도 테이블/컬럼 없이 기존 RAW_PAYLOAD 감사 기록을 이용합니다.
+     * 1-2. 현재 전이 행은 먼저 INSERT되므로 currentEventId를 제외합니다.
+     * 1-3. 사건 최초 탐지 ID 이후의 행만 검사하고 source_group_hash까지 일치시킵니다.
+     * 1-4. Oracle 11g/21c 호환: DBMS_LOB.INSTR + ROWNUM 사용.
+     */
+    public boolean hasPriorSuspectedInActiveIncident(long incidentId, long currentEventId,
+                                                      String groupHash, String pythonIncidentId) {
+        String groupMarker = "\"source_group_hash\":\"" + groupHash + "\"";
+        String incidentMarker = "\"incident_id\":\"" + pythonIncidentId + "\"";
+        String statusMarker = "\"status\":\"SUSPECTED\"";
+        Integer count = jdbc.queryForObject("""
+            SELECT COUNT(*) FROM (
+                SELECT 1 FROM AI_DETECTION_EVENT e
+                 WHERE e.AI_DETECTION_EVENT_ID >= (
+                       SELECT FIRST_AI_DETECTION_EVENT_ID
+                         FROM SAFETY_INCIDENT
+                        WHERE SAFETY_INCIDENT_ID = ?)
+                   AND e.AI_DETECTION_EVENT_ID <> ?
+                   AND DBMS_LOB.INSTR(e.RAW_PAYLOAD, ?) > 0
+                   AND DBMS_LOB.INSTR(e.RAW_PAYLOAD, ?) > 0
+                   AND DBMS_LOB.INSTR(e.RAW_PAYLOAD, ?) > 0
+                   AND ROWNUM = 1
+            )
+            """, Integer.class, incidentId, currentEventId,
+                groupMarker, incidentMarker, statusMarker);
+        return count != null && count > 0;
+    }
+
     /** RESOLVED 이전에 생성된 지연 데이터로 새 사건을 잘못 생성하지 않습니다. */
     public Timestamp lastResolvedAt(String groupHash) {
         var rows = jdbc.query("""
