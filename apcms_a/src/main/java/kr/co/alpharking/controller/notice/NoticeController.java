@@ -22,6 +22,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.ModelAttribute;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
@@ -218,7 +219,7 @@ public class NoticeController {
 	// ========================================
 	// 4. 공지사항 수정 + 수정 이력 저장
 	// ========================================
-	@PutMapping("/{noticeId}")
+	@PutMapping(value = "/{noticeId}", consumes = MediaType.APPLICATION_JSON_VALUE)
 	public ResponseEntity<?> updateNotice(@PathVariable("noticeId") Integer noticeId,
 			@RequestBody NoticeCreateReq nidto, Authentication authentication) {
 
@@ -236,6 +237,83 @@ public class NoticeController {
 		}
 
 		return ResponseEntity.ok("공지사항 수정 및 이력 저장 성공!");
+	}
+
+	// 기존 JSON 수정은 유지하고, 파일이 포함된 수정만 multipart로 처리합니다.
+	@PutMapping(value = "/{noticeId}", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+	public ResponseEntity<?> updateNoticeWithFile(@PathVariable("noticeId") Integer noticeId,
+			@ModelAttribute NoticeCreateReq request,
+			@RequestParam(value = "files", required = false) MultipartFile[] files,
+			Authentication authentication) {
+		Long adminId = getAuthenticatedAdminId(authentication);
+		request.setNoticeId(noticeId);
+		MultipartFile selected = null;
+		if (files != null) {
+			for (MultipartFile file : files) {
+				if (file.isEmpty()) continue;
+				if (selected != null) {
+					return ResponseEntity.badRequest().body("첨부파일은 1개만 등록할 수 있습니다.");
+				}
+				selected = file;
+			}
+		}
+		List<Path> savedPaths = new ArrayList<>();
+		try {
+			if (request.isRemoveAttachment() && selected != null) {
+				return ResponseEntity.badRequest().body("첨부파일 삭제와 교체를 동시에 요청할 수 없습니다.");
+			}
+			NoticeFiles newFile = selected == null ? null : saveReplacementFile(selected, savedPaths);
+			// Service 호출이 정상 반환해야 DB 트랜잭션의 커밋도 완료됩니다.
+			boolean updated = request.isRemoveAttachment()
+					? noticeService.updateNoticeRemovingFile(request, adminId)
+					: noticeService.updateNoticeWithFile(request, newFile, adminId);
+			if (!updated) {
+				cleanupReplacementFiles(savedPaths);
+				return ResponseEntity.notFound().build();
+			}
+			return ResponseEntity.ok("공지사항 수정 및 이력 저장 성공!");
+		} catch (Exception e) {
+			cleanupReplacementFiles(savedPaths);
+			if (e instanceof IllegalArgumentException || e instanceof ArithmeticException) {
+				return ResponseEntity.badRequest().body("첨부파일 정보가 올바르지 않습니다.");
+			}
+			return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body("공지사항 수정(파일포함) 실패...");
+		}
+	}
+
+	private NoticeFiles saveReplacementFile(MultipartFile file, List<Path> savedPaths) throws IOException {
+		// 등록과 동일한 파일명·크기 제한을 적용합니다.
+		String original = file.getOriginalFilename();
+		if (original == null || original.isBlank()) throw new IllegalArgumentException("파일명이 올바르지 않습니다.");
+		original = original.replace("\\", "/");
+		original = original.substring(original.lastIndexOf('/') + 1);
+		if (original.isBlank() || original.length() > 100) throw new IllegalArgumentException("파일명은 100자 이하여야 합니다.");
+		String stored = UUID.randomUUID() + "_" + original;
+		if (stored.length() > 100) throw new IllegalArgumentException("저장 파일명이 100자를 초과합니다.");
+		int size = Math.toIntExact(file.getSize());
+		Path uploadDir = Paths.get(filePath, "notice").toAbsolutePath().normalize();
+		Path path = uploadDir.resolve(stored).normalize();
+		if (!path.startsWith(uploadDir)) throw new IllegalArgumentException("파일 경로가 올바르지 않습니다.");
+		Files.createDirectories(uploadDir);
+		// 쓰기 도중 실패해 남은 파일도 정리 대상에 포함합니다.
+		savedPaths.add(path);
+		file.transferTo(path);
+		NoticeFiles result = new NoticeFiles();
+		result.setOriginalName(original);
+		result.setStoredName(stored);
+		result.setFilePath(path.toString());
+		result.setFileSize(size);
+		return result;
+	}
+
+	private void cleanupReplacementFiles(List<Path> paths) {
+		for (Path path : paths) {
+			try {
+				Files.deleteIfExists(path);
+			} catch (IOException e) {
+				e.printStackTrace();
+			}
+		}
 	}
 
 	// ========================================
