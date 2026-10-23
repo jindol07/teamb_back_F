@@ -2,8 +2,10 @@ package kr.co.alpharking.security.jwt;
 
 import java.security.Key;
 import java.time.Instant;
+import java.util.Base64;
 import java.util.Date;
 
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.GrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
@@ -25,7 +27,35 @@ import lombok.extern.slf4j.Slf4j;
 @Slf4j
 public class JwtTokenProvider {
 	// Key key: JWT 생성 및 검증에 사용되는 비밀 키, HS512 알고리즘으로 생성
-	Key key = Keys.secretKeyFor(SignatureAlgorithm.HS512);
+//	Key key = Keys.secretKeyFor(SignatureAlgorithm.HS512);
+	
+	private final Key key;
+
+	public JwtTokenProvider(@Value("${app.jwt.secret-base64}") String secretBase64) {
+
+	    if (!StringUtils.hasText(secretBase64)) {
+	        throw new IllegalStateException(
+	                "JWT_SECRET_BASE64 환경변수가 설정되지 않았습니다.");
+	    }
+
+	    // 디코딩
+	    byte[] keyBytes;
+	    try {
+	        keyBytes = Base64.getDecoder().decode(secretBase64.trim());
+	    } catch (IllegalArgumentException e) {
+	        throw new IllegalStateException(
+	                "JWT_SECRET_BASE64 값이 올바른 Base64가 아닙니다.", e);
+	    }
+
+	    // HS512에는 최소 64바이트 키가 필요합니다.
+	    if (keyBytes.length < 64) {
+	        throw new IllegalStateException(
+	                "HS512 JWT 비밀키는 디코딩 후 최소 64바이트여야 합니다.");
+	    }
+
+	    this.key = Keys.hmacShaKeyFor(keyBytes);
+	}
+	
 	
 	// JWT Token을 생성 - 인증된 사용자에게 발급을 함 -> 클라이언트(React) 
 	public String  createToken(Authentication authentication) {
@@ -33,7 +63,7 @@ public class JwtTokenProvider {
 		UserDetails userDetails = (UserDetails) authentication.getPrincipal();
 		Date now = new Date();
 		
-		//JWT가 발급 되고 나서 약 1시간(3600000 밀리초) 동안 만료 시간을 설정 
+		//JWT가 발급 되고 나서 약 1시간(3600000 밀리초) 동안 만료 시간을 설정
 		Date expiryDate = new Date(now.getTime() + 3600000);
 		
 		//Role 가져오기------------------------------------
