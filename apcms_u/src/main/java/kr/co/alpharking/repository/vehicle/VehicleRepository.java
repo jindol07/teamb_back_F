@@ -7,14 +7,19 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import kr.co.alpharking.entity.vehicle.Vehicle;
 
 public interface VehicleRepository extends JpaRepository<Vehicle, Long> {
-
-    // 차량번호 조회
     Optional<Vehicle> findByVehicleNumber(String vehicleNumber);
 
-    // 차량번호 일부 검색
+    List<Vehicle> findByOfficeIdAndDeletedAtIsNullAndRegistrationStatusCodeIn(
+            Long officeId, List<String> registrationStatusCodes);
+
+    boolean existsByVehicleNumberAndRegistrationStatusCodeInAndDeletedAtIsNull(
+            String vehicleNumber, List<String> registrationStatusCodes);
+
+    long countByOfficeIdAndDeletedAtIsNullAndRegistrationStatusCodeIn(
+            Long officeId, List<String> registrationStatusCodes);
+
     List<Vehicle> findByVehicleNumberContaining(String vehicleNumber);
 
-    // 승인된 등록 차량 중 삭제되지 않은 차량 조회
     Optional<Vehicle> findByVehicleNumberAndRegistrationStatusCodeAndDeletedAtIsNull(
             String vehicleNumber,
             String registrationStatusCode
