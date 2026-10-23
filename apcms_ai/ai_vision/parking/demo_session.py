@@ -124,7 +124,12 @@ def evaluate_success(report):
  checks['entry_exit_same_usage']=report.get('entry_exit_same_usage') is True
  checks['match_same_usage']=report.get('actual_match_same_usage') is True
  checks['b_normal']=report.get('b_status') in ('STOPPED','COMPLETED')
- checks['handoff_without_b_ocr']=report.get('b_ocr_submitted')==0
+ if report.get('identity_verification_required'):
+  checks['b_plate_identity_verified']=(report.get('b_identity_mode')=='ENTRY_AND_B_PLATE_OCR'
+      and type(report.get('b_ocr_submitted')) is int and report['b_ocr_submitted']>0
+      and report.get('actual_match_same_usage') is True)
+ else:
+  checks['handoff_without_b_ocr']=report.get('b_ocr_submitted')==0
  identity=report.get('b_identity') or {}
  checks['verified_identity_cleared']=identity.get('status')=='EMPTY' and identity.get('retained_identity') is None
  fields={}
@@ -157,7 +162,77 @@ def _parking_summary(path):
         raise ValueError('Invalid identity snapshot')
     return dict(b_status=parking.get('status'), occupancy_http_requests=parking.get('http_requests'),
                 b_identity_status=vehicle.get('entry_handoff_status'), b_identity=identity,
-                b_ocr_submitted=vehicle['statistics'].get('ocr_submitted'), space_deliveries=deliveries)
+                b_ocr_submitted=vehicle['statistics'].get('ocr_submitted'),
+                b_identity_mode=vehicle['statistics'].get('identity_mode'), space_deliveries=deliveries)
+
+
+def verified_demo_match(row, usage, plate, require_identity_verification=False):
+    """같은 차량·이용·시험 구획의 검증된 연결 응답만 인정합니다."""
+    if not isinstance(row, dict):
+        return False
+    payload, receipt = row.get('payload'), row.get('receipt')
+    if not isinstance(payload, dict) or not isinstance(receipt, dict):
+        return False
+    if require_identity_verification:
+        proof = row.get('identity_verification')
+        consensus = proof.get('plate_consensus') if isinstance(proof, dict) else None
+        if (not isinstance(proof, dict) or proof.get('basis') != 'ENTRY_AND_B_PLATE_OCR'
+                or proof.get('plate_number') != plate or not isinstance(proof.get('entry_event_id'), str)
+                or not isinstance(consensus, dict) or consensus.get('status') != 'CONFIRMED'
+                or consensus.get('plate_number') != plate
+                or type(row.get('expected_parking_usage_id')) is not int
+                or row['expected_parking_usage_id'] != usage):
+            return False
+    return (type(usage) is int and usage > 0
+            and payload.get('event_type') == 'VEHICLE_SPACE_MATCH'
+            and payload.get('plate_number') == plate and payload.get('space_code') == '999F-Z01'
+            and isinstance(payload.get('event_id'), str) and bool(payload['event_id'])
+            and receipt.get('event_id') == payload['event_id']
+            and receipt.get('event_type') == payload['event_type']
+            and receipt.get('receipt_verified') is True and receipt.get('request_attempted') is True
+            and row.get('status') in ('APPLIED', 'UNCHANGED')
+            and receipt.get('state') == row['status']
+            and type(receipt.get('parking_usage_id')) is int and receipt['parking_usage_id'] == usage)
+
+
+def demo_phase(journal_rows, parking, plate, require_identity_verification=False):
+    """화면 안내도 최종 판정과 같은 차량·이용의 응답을 근거로 합니다."""
+    sent, entries, exits = {}, set(), set()
+    for row in journal_rows:
+        if not isinstance(row, dict) or not isinstance(row.get('payload'), dict):
+            continue
+        event, receipt = row['payload'], row.get('receipt')
+        event_id = event.get('event_id')
+        if (event.get('event_type') != 'VEHICLE_PASSAGE' or event.get('plate_number') != plate
+                or not isinstance(event_id, str) or not event_id):
+            continue
+        if row.get('stage') == 'BEFORE_SEND':
+            sent[event_id] = event
+            continue
+        if (row.get('stage') != 'RECEIPT' or sent.get(event_id) != event
+                or not isinstance(receipt, dict) or receipt.get('event_id') != event_id
+                or receipt.get('event_type') != 'VEHICLE_PASSAGE'
+                or receipt.get('state') != 'APPLIED' or receipt.get('receipt_verified') is not True
+                or receipt.get('request_attempted') is not True
+                or type(receipt.get('parking_usage_id')) is not int or receipt['parking_usage_id'] < 1):
+            continue
+        if event.get('direction') == 'ENTRY':
+            entries.add(receipt['parking_usage_id'])
+        elif event.get('direction') == 'EXIT':
+            exits.add(receipt['parking_usage_id'])
+    if len(entries) > 1 or (exits and exits != entries):
+        return 'STOP: USAGE ID MISMATCH / NO RETRY'
+    if not entries:
+        return '1 ENTRY: NUMBER PLATE DOWN'
+    vehicle = parking.get('vehicle_space') if isinstance(parking, dict) else None
+    deliveries = vehicle.get('deliveries') if isinstance(vehicle, dict) else None
+    matched = isinstance(deliveries, list) and any(
+        verified_demo_match(row, next(iter(entries)), plate, require_identity_verification) for row in deliveries)
+    if not matched:
+        return '2 PARK IN B A-01 / HAND OFF'
+    if exits:
+        return '4 DONE / WAIT 5s THEN Q BOTH'
+    return '3 REMOVE PHOTO / EXIT UP IN A'
 
 
 def finalize_trial(run_dir, report, *, children_stopped, fixture_prepared, db, expected_plate='91소6408'):
@@ -217,11 +292,8 @@ def finalize_trial(run_dir, report, *, children_stopped, fixture_prepared, db, e
         if 'REMAINING_SYNTHETIC_ROWS=0' not in report['cleanup']:
             raise RuntimeError('Cleanup confirmation is missing')
         report['entry_exit_same_usage'] = len(owned) == 1 and exits == entries
-        report['actual_match_same_usage'] = any(
-            row.get('status') in ('APPLIED', 'UNCHANGED')
-            and row.get('payload', {}).get('event_type') == 'VEHICLE_SPACE_MATCH'
-            and row.get('receipt', {}).get('receipt_verified') is True
-            and row['receipt'].get('parking_usage_id') in owned
+        report['actual_match_same_usage'] = len(owned) == 1 and any(
+            verified_demo_match(row, next(iter(owned)), expected_plate, report.get('identity_verification_required',False))
             for row in report.get('space_deliveries', []))
         report['completion_checks'] = evaluate_success(report)
         report['success'] = all(report['completion_checks'].values())

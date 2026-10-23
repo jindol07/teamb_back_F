@@ -73,7 +73,9 @@ def main():
     try:
         report=camera.run_camera(Path(str(profile['reference'])),profile['spaces_config'],out,camera_index=profile['parking_camera'],seconds=profile['seconds'],preview=True,
                 camera_backend='msmf',track_vehicles=True,tracking_target='plate',camera_id=f"E2E_PARKING_{profile['parking_camera']}",
-                handoff_path=root/'gate/single_vehicle_handoff.json',enable_http=True,enable_space_http=True,
+                handoff_path=root/'gate/single_vehicle_handoff.json',
+                verify_handoff_plate=os.environ.get('PARKING_DEMO_VERIFY_HANDOFF_PLATE')=='1',
+                enable_http=True,enable_space_http=True,
                 allowed_codes=['999F-Z01'],environment=env)
         if report['status'] in ('FAILED','INCOMPLETE'):
             raise RuntimeError('B camera did not complete safely: '+str(report.get('error_type')))

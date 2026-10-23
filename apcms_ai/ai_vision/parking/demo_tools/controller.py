@@ -2,7 +2,7 @@ import sys,os,subprocess,time,json
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[4]
 sys.path.insert(0,str(ROOT/'apcms_ai'))
-from ai_vision.parking.demo_session import finalize_trial,load_demo_profile
+from ai_vision.parking.demo_session import finalize_trial,load_demo_profile,demo_phase
 PROFILE=load_demo_profile(os.environ['PARKING_DEMO_PROFILE_DIR'])
 RUN=Path(os.environ['PARKING_DEMO_RUN_DIR'])
 DB=PROFILE['root']/'.demo_helper'
@@ -26,7 +26,8 @@ def read_journal(path):
 sys.path.insert(0,str(ROOT/'apcms_ai'))
 from ai_vision.parking.demo_session import finalize_trial
 
-children=[];logs=[];report={'scope':'REAL_TWO_CAMERAS_HTTP_SHARED_ORACLE','schema_changed':False}
+children=[];logs=[];report={'scope':'REAL_TWO_CAMERAS_HTTP_SHARED_ORACLE','schema_changed':False,
+    'identity_verification_required':os.environ.get('PARKING_DEMO_VERIFY_HANDOFF_PLATE')=='1'}
 def db(mode):
     r=subprocess.run(['java','-cp',CP,'CameraE2EFixture',mode],cwd=ROOT,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=40,env=dict(os.environ,CAMERA_E2E_MANIFEST=str(MANIFEST),CAMERA_E2E_DB_URL=PROFILE['expected_db_url'],CAMERA_E2E_PLATE=PROFILE['plate_number']))
     if r.returncode:raise RuntimeError('DB '+mode+' failed: '+r.stderr[-2000:])
@@ -51,24 +52,14 @@ if __name__=='__main__':
                             and all((RUN/name).exists() for name in ('gate_started.flag','parking_started.flag','parking_ready.flag'))):
                 print(db('prepare'),flush=True);prepared=True;started=time.monotonic()
                 (RUN/'fixture_ready.flag').write_text('DB_FIXTURE_READY',encoding='utf-8')
-            if prepared:phase='1 ENTRY: NUMBER PLATE DOWN'
-            journal=RUN/'gate_http_journal.jsonl'
-            receipts=[]
-            if journal.exists():
-                try:journal_rows=read_journal(journal)
-                except OSError:journal_rows=[]
-                for row in journal_rows:
-                    if row.get('receipt',{}).get('state')=='APPLIED' and row['receipt'].get('receipt_verified') is True:receipts.append(row)
-            if any(r['payload'].get('direction')=='ENTRY' for r in receipts):phase='2 PARK IN B A-01 / HAND OFF'
-            parking=RUN/'parking/parking_camera_check.json'
-            if parking.exists():
-                try:
-                    snapshot=read_snapshot(parking)
-                    deliveries=(snapshot or {}).get('vehicle_space',{}).get('deliveries',[])
-                    if any(r.get('status') in ('APPLIED','UNCHANGED') and r.get('receipt',{}).get('receipt_verified') is True for r in deliveries):phase='3 REMOVE PHOTO / EXIT UP IN A'
-                except json.JSONDecodeError:pass
-            if any(r['payload'].get('direction')=='EXIT' for r in receipts):phase='4 DONE / WAIT 5s THEN Q BOTH'
-            if (RUN/'stop_requested.flag').exists():phase='STOP: PRECHECK FAILED / NO RETRY'
+            if prepared:
+                try: rows=read_journal(RUN/'gate_http_journal.jsonl')
+                except OSError: rows=[]
+                phase=demo_phase(rows,read_snapshot(RUN/'parking/parking_camera_check.json'),PROFILE['plate_number'],
+                                 require_identity_verification=report['identity_verification_required'])
+                if phase.startswith('STOP:'):
+                    (RUN/'stop_requested.flag').write_text('USAGE_ID_MISMATCH',encoding='utf-8')
+            if (RUN/'stop_requested.flag').exists() and not phase.startswith('STOP:'):phase='STOP: PRECHECK FAILED / NO RETRY'
             (RUN/'phase.txt').write_text(phase,encoding='utf-8')
             if started is not None and time.monotonic()-started>380:raise RuntimeError('Camera watchdog exceeded; inspect processes before cleanup')
             time.sleep(.25)

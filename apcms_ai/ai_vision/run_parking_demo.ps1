@@ -2,6 +2,7 @@
 param(
     [string]$ProfileDir = (Join-Path $PSScriptRoot 'results\parking_demo\local'),
     [string]$PythonExe = "",
+    [switch]$VerifyHandoffPlate,
     [switch]$Prepare,
     [switch]$CheckOnly
 )
@@ -28,12 +29,14 @@ $ownsMutex = $false
 $oldPythonPath = $env:PYTHONPATH
 $oldProfile = $env:PARKING_DEMO_PROFILE_DIR
 $oldRun = $env:PARKING_DEMO_RUN_DIR
+$oldVerifyIdentity = $env:PARKING_DEMO_VERIFY_HANDOFF_PLATE
 try {
     try { $ownsMutex = $mutex.WaitOne(0) }
     catch [System.Threading.AbandonedMutexException] { $ownsMutex = $true }
     if (-not $ownsMutex) { throw 'Another demo is running. Close it before retrying.' }
     $env:PYTHONPATH = $aiRoot
     $env:PARKING_DEMO_PROFILE_DIR = $baseDir
+    $env:PARKING_DEMO_VERIFY_HANDOFF_PLATE = if ($VerifyHandoffPlate) { '1' } else { '0' }
     $preflight = & $pythonExe -m ai_vision.parking.demo_session --status $baseDir --check-profile
     if ($LASTEXITCODE -ne 0) {
         Write-Host $preflight
@@ -101,6 +104,7 @@ finally {
     $env:PYTHONPATH = $oldPythonPath
     $env:PARKING_DEMO_PROFILE_DIR = $oldProfile
     $env:PARKING_DEMO_RUN_DIR = $oldRun
+    $env:PARKING_DEMO_VERIFY_HANDOFF_PLATE = $oldVerifyIdentity
     if ($ownsMutex) { $mutex.ReleaseMutex() }
     $mutex.Dispose()
 }
