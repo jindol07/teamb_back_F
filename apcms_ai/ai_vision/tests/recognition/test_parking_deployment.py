@@ -254,6 +254,12 @@ class ParkingVideoCheckTests(ParkingSceneFixture, unittest.TestCase):
 
 class ParkingCameraTests(ParkingSceneFixture, unittest.TestCase):
     def test_entry_handoff_connects_real_observer_without_ocr_and_clears_on_exit(self):
+        self._entry_handoff_run(stop_source=False)
+
+    def test_stopped_entry_source_retains_identity_without_current_matches_or_http(self):
+        self._entry_handoff_run(stop_source=True)
+
+    def _entry_handoff_run(self, stop_source):
         import itertools
         from datetime import datetime, timezone
         from ai_vision.parking import run_parking_camera as camera
@@ -269,7 +275,9 @@ class ParkingCameraTests(ParkingSceneFixture, unittest.TestCase):
         capture = Mock()
         def read():
             reads['count'] += 1
-            if reads['count'] == 25:
+            if reads['count'] == 25 and stop_source:
+                source.close(datetime.now(timezone.utc))
+            elif reads['count'] == 25:
                 source.record(event | {'direction': 'EXIT'}, {'event_id': event['event_id'],
                     'event_type': 'VEHICLE_PASSAGE', 'receipt_verified': True, 'request_attempted': True,
                     'state': 'APPLIED', 'parking_usage_id': 70}, datetime.now(timezone.utc))
@@ -286,6 +294,12 @@ class ParkingCameraTests(ParkingSceneFixture, unittest.TestCase):
         vehicle = report['vehicle_space']
         self.assertTrue(any(e.get('identity_basis') == 'SINGLE_VEHICLE_ENTRY_HANDOFF' for e in vehicle['events']))
         self.assertEqual(vehicle['last_observed_matches'], [])
+        self.assertFalse(vehicle['entry_handoff']['usable_for_matching'])
+        if stop_source:
+            self.assertEqual(vehicle['entry_handoff']['retained_identity']['parking_usage_id'], 70)
+            self.assertEqual(vehicle['entry_handoff_status'], 'SOURCE_STOPPED')
+        else:
+            self.assertIsNone(vehicle['entry_handoff']['retained_identity'])
         self.assertEqual(vehicle['statistics']['ocr_submitted'], 0)
         self.assertEqual(vehicle['completed_samples'], [])
         self.assertEqual(report['http_requests'], 0)
@@ -1730,3 +1744,229 @@ class ContinuousEmptyEvidenceTests(ParkingSceneFixture, unittest.TestCase):
         processor.process(self.occupied, 2.5)
         self.assertEqual(processor.empty_spaces(2.5), {'A-02'})
         self.assertEqual(processor.empty_spaces(5), set())
+
+
+
+class DemoSessionRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.folder = tempfile.TemporaryDirectory()
+        self.addCleanup(self.folder.cleanup)
+        self.root = Path(self.folder.name)
+        self.manifest = self.root/'camera_e2e_fixture.properties'
+        self.report = {'process_exit_codes':[0,0]}
+        self.db = Mock(side_effect=lambda mode: 'USAGE_ROWS=5\nEXITED_ROWS=5\nOPEN_ROWS=0' if mode=='inspect' else 'REMAINING_SYNTHETIC_ROWS=0')
+
+    def fixture(self, committed=True):
+        self.manifest.write_text('floor=1\nzone=2\nspace=3\nreservation=4\nbaseline_usage_count=4\nmarker=AI_HTTP_TEST_1234abcd\n'+('committed=true\n' if committed else ''),encoding='ascii')
+
+    def journal(self):
+        rows=[]
+        for direction in ('ENTRY','EXIT'):
+            payload={'event_id':direction,'event_type':'VEHICLE_PASSAGE','plate_number':'91소6408','direction':direction}
+            rows.extend([{'stage':'BEFORE_SEND','payload':payload}, {'stage':'RECEIPT','payload':payload,'receipt':{
+                'event_id':direction,'event_type':'VEHICLE_PASSAGE','receipt_verified':True,'request_attempted':True,'state':'APPLIED','parking_usage_id':9}}])
+        (self.root/'gate_http_journal.jsonl').write_text('\n'.join(json.dumps(x) for x in rows),encoding='utf-8')
+
+    def parking(self):
+        folder=self.root/'parking';folder.mkdir()
+        (folder/'parking_camera_check.json').write_text(json.dumps({'status':'STOPPED','vehicle_space':{
+            'statistics':{'ocr_submitted':0},'entry_handoff':{'status':'EMPTY','retained_identity':None},
+            'deliveries':[{'status':'APPLIED','payload':{'event_type':'VEHICLE_SPACE_MATCH'},'receipt':{'receipt_verified':True,'parking_usage_id':9}}]}}),encoding='utf-8')
+
+    def finish(self, stopped=True, prepared=True):
+        from ai_vision.parking.demo_session import finalize_trial
+        result=finalize_trial(self.root,self.report,children_stopped=stopped,fixture_prepared=prepared,db=self.db)
+        self.assertEqual(read_json(self.root/'http_e2e_result.json'),result)
+        return result
+
+    def test_complete_lifecycle_requires_database_and_identity_cleanup(self):
+        self.fixture();self.journal();self.parking()
+        result=self.finish()
+        self.assertTrue(result['success']);self.assertEqual(result['incomplete_reasons'],[])
+        self.assertIn('usage_id=9',self.manifest.read_text())
+        self.assertEqual(self.db.call_args_list, [unittest.mock.call('inspect'),unittest.mock.call('cleanup')])
+
+    def test_cancel_before_fixture_does_not_call_database(self):
+        self.assertEqual(self.finish(prepared=False)['cleanup'],'NO_DB_FIXTURE_CREATED');self.db.assert_not_called()
+
+    def test_live_camera_blocks_database_cleanup(self):
+        self.fixture();self.assertIn('still active',self.finish(stopped=False)['cleanup']);self.db.assert_not_called()
+
+    def test_manifest_after_prepare_exception_is_not_skipped(self):
+        self.fixture(committed=False)
+        result=self.finish(prepared=False)
+        self.assertIn('REMAINING_SYNTHETIC_ROWS=0',result['cleanup']);self.db.assert_called_with('cleanup')
+
+    def test_failed_cleanup_still_persists_pending_result(self):
+        self.fixture();self.db.side_effect=ConnectionError('offline')
+        result=self.finish();self.assertFalse(result['success']);self.assertEqual(result['recovery_error_type'],'ConnectionError')
+        self.assertIn('UNCONFIRMED',result['cleanup'])
+
+    def test_missing_prepared_manifest_is_pending(self):
+        self.assertIn('no manifest',self.finish()['cleanup']);self.db.assert_not_called()
+
+    def test_corrupted_manifest_is_not_deleted(self):
+        self.manifest.write_text('broken');self.assertEqual(self.finish()['recovery_error_type'],'ValueError');self.db.assert_not_called()
+
+    def test_unanswered_request_never_guesses_usage_to_delete(self):
+        self.fixture();self.journal()
+        p=self.root/'gate_http_journal.jsonl';p.write_text(p.read_text().splitlines()[0],encoding='utf-8')
+        self.assertFalse(self.finish()['success']);self.db.assert_not_called()
+
+    def test_corrupted_journal_blocks_cleanup(self):
+        self.fixture();(self.root/'gate_http_journal.jsonl').write_text('{')
+        self.assertFalse(self.finish()['success']);self.db.assert_not_called()
+
+    def test_missing_parking_report_does_not_skip_owned_cleanup(self):
+        self.fixture();self.journal();result=self.finish()
+        self.assertFalse(result['success']);self.db.assert_called_with('cleanup')
+        self.assertEqual(result['parking_snapshot_error_type'],'FileNotFoundError')
+
+    def test_database_inspection_failure_does_not_skip_cleanup(self):
+        self.fixture();self.journal();self.parking()
+        self.db.side_effect=lambda mode: (_ for _ in ()).throw(ConnectionError()) if mode=='inspect' else 'REMAINING_SYNTHETIC_ROWS=0'
+        result=self.finish();self.assertFalse(result['success']);self.db.assert_called_with('cleanup')
+        self.assertFalse(result['completion_checks']['database_exit_confirmed'])
+
+    def test_existing_cleaned_manifest_does_not_repeat_database_action(self):
+        self.fixture();self.manifest.write_text(self.manifest.read_text()+'cleaned=true\n')
+        self.assertIn('ALREADY_CLEANED',self.finish()['cleanup']);self.db.assert_not_called()
+
+    def test_unknown_or_duplicate_manifest_is_pending_even_without_commit_flag(self):
+        from ai_vision.parking.demo_session import fixture_pending
+        self.assertFalse(fixture_pending(self.manifest))
+        self.fixture(committed=False);self.assertTrue(fixture_pending(self.manifest))
+        self.manifest.write_text('cleaned=true\ncleaned=true');self.assertTrue(fixture_pending(self.manifest))
+
+    def test_failed_process_cannot_be_reported_as_complete(self):
+        self.fixture();self.journal();self.parking();self.report['process_exit_codes']=[0,1]
+        result=self.finish();self.assertFalse(result['success']);self.assertIn('both_processes_normal',result['incomplete_reasons'])
+
+    def test_wrong_receipt_cannot_authorize_usage_deletion(self):
+        self.fixture();self.journal();p=self.root/'gate_http_journal.jsonl'
+        p.write_text(p.read_text().replace('"receipt_verified": true','"receipt_verified": false'),encoding='utf-8')
+        self.assertFalse(self.finish()['success']);self.db.assert_not_called()
+
+    def test_refinalizing_cleaned_success_preserves_verified_result(self):
+        self.fixture();self.journal();self.parking()
+        first=self.finish();self.assertTrue(first['success'])
+        self.manifest.write_text(self.manifest.read_text()+'cleaned=true\n')
+        self.db.reset_mock();second=self.finish()
+        self.assertTrue(second['success']);self.assertTrue(second['recovery_no_database_action'])
+        self.db.assert_not_called()
+
+    def test_read_only_cli_reports_pending_manifest_without_database(self):
+        from ai_vision.parking.demo_session import main
+        self.fixture(committed=False);out=io.StringIO()
+        with contextlib.redirect_stdout(out):code=main(['--status',str(self.root)])
+        self.assertEqual(code,2);self.assertEqual(json.loads(out.getvalue())['pending_count'],1)
+        self.db.assert_not_called()
+
+    def test_valid_json_with_bad_snapshot_types_does_not_skip_cleanup(self):
+        self.fixture();self.journal();self.parking()
+        p=self.root/'parking/parking_camera_check.json'
+        for vehicle in ([], None, {'statistics':[]}, {'statistics':{},'deliveries':[None]},
+                        {'statistics':{},'deliveries':[{'payload':[], 'receipt':{}}]},
+                        {'statistics':{},'deliveries':[], 'entry_handoff':[]}):
+            with self.subTest(vehicle=vehicle):
+                p.write_text(json.dumps({'vehicle_space':vehicle}),encoding='utf-8')
+                self.db.reset_mock();result=self.finish()
+                self.assertFalse(result['success']);self.db.assert_called_with('cleanup')
+                self.assertEqual(result['parking_snapshot_error_type'],'ValueError')
+
+    def test_cleanup_failure_then_retry_keeps_verified_usage_and_recovers(self):
+        self.fixture();self.journal();self.parking()
+        self.db.side_effect=lambda mode: (_ for _ in ()).throw(ConnectionError()) if mode=='cleanup' else 'USAGE_ROWS=5\nEXITED_ROWS=5\nOPEN_ROWS=0'
+        self.assertFalse(self.finish()['success'])
+        self.assertIn('usage_id=9',self.manifest.read_text())
+        self.db.side_effect=lambda mode: 'REMAINING_SYNTHETIC_ROWS=0' if mode=='cleanup' else 'USAGE_ROWS=5\nEXITED_ROWS=5\nOPEN_ROWS=0'
+        self.assertTrue(self.finish()['success'])
+        self.assertEqual(self.manifest.read_text().count('usage_id=9'),1)
+
+    def test_unknown_delivery_can_recover_only_after_verified_receipt_is_present(self):
+        self.fixture();self.parking();self.journal()
+        p=self.root/'gate_http_journal.jsonl';complete=p.read_text(encoding='utf-8')
+        p.write_text(complete.splitlines()[0],encoding='utf-8')
+        self.assertFalse(self.finish()['success']);self.db.assert_not_called()
+        p.write_text(complete,encoding='utf-8')
+        self.assertTrue(self.finish()['success'])
+
+    def test_different_exit_usage_blocks_cleanup(self):
+        self.fixture();self.journal();p=self.root/'gate_http_journal.jsonl'
+        rows=[json.loads(line) for line in p.read_text().splitlines()]
+        rows[-1]['receipt']['parking_usage_id']=10
+        p.write_text('\n'.join(json.dumps(row) for row in rows),encoding='utf-8')
+        self.assertFalse(self.finish()['success']);self.db.assert_not_called()
+
+    def test_foreign_recorded_usage_is_not_overwritten(self):
+        self.fixture();self.journal();self.manifest.write_text(self.manifest.read_text()+'usage_id=999\n')
+        self.assertFalse(self.finish()['success']);self.db.assert_not_called()
+        self.assertIn('usage_id=999',self.manifest.read_text())
+
+    def test_corrupt_manifest_status_returns_pending(self):
+        from ai_vision.parking.demo_session import main
+        self.manifest.write_text('broken');out=io.StringIO()
+        with contextlib.redirect_stdout(out):code=main(['--status',str(self.root)])
+        self.assertEqual(code,2);self.assertEqual(json.loads(out.getvalue())['pending_count'],1)
+
+
+class DemoProfileTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name)
+        self.profile={'version':1,'gate_camera':0,'parking_camera':1,'seconds':300,
+            'plate_number':'91소6408','expected_db_url':'jdbc:oracle:thin:@example:1521:xe',
+            'boot_context_url':'http://127.0.0.1:81/alpharking/admin',
+            'gate_config':'gate.json','spaces_config':'spaces.json','reference':'reference.png'}
+        self.gate={'tracker':'botsort','line_y':.5,'line_x':[.15,.85],'roi':[.05,.05,.95,.05,.95,.95,.05,.95]}
+        self.spaces={'image_width':1280,'image_height':1024,'spaces':[
+            {'id':'A-01','points':[[100,100],[300,100],[300,300],[100,300]]}]}
+        (self.root/'gate.json').write_text(json.dumps(self.gate))
+        (self.root/'spaces.json').write_text(json.dumps(self.spaces))
+        (self.root/'reference.png').write_bytes(b'local-image-placeholder')
+
+    def load(self):
+        from ai_vision.parking.demo_session import load_demo_profile
+        (self.root/'demo.local.json').write_text(json.dumps(self.profile),encoding='utf-8')
+        return load_demo_profile(self.root)
+
+    def test_profile_is_independent_of_working_directory(self):
+        result=self.load()
+        self.assertEqual(result['reference'],(self.root/'reference.png').resolve())
+        self.assertEqual(result['root'],self.root.resolve())
+        self.assertEqual(result['gate_camera'],0)
+
+    def test_same_or_invalid_camera_is_rejected(self):
+        for value in (0,True,-1,33,'1'):
+            self.profile['parking_camera']=value
+            with self.subTest(value=value),self.assertRaises(ValueError):self.load()
+
+    def test_invalid_duration_is_rejected(self):
+        for value in (True,0,-1,301,float('nan'),float('inf'),'300'):
+            self.profile['seconds']=value
+            with self.subTest(value=value),self.assertRaises(ValueError):self.load()
+
+    def test_missing_asset_and_outside_path_are_rejected(self):
+        for value in ('missing.png','../reference.png',str((self.root/'reference.png').resolve())):
+            self.profile['reference']=value
+            with self.subTest(value=value),self.assertRaises(ValueError):self.load()
+
+    def test_unknown_fields_and_blank_business_targets_are_rejected(self):
+        original=dict(self.profile)
+        for patch_value in ({'unknown':True},{'plate_number':''},{'expected_db_url':''},{'version':True}):
+            self.profile=original|patch_value
+            with self.subTest(patch_value=patch_value),self.assertRaises(ValueError):self.load()
+
+    def test_url_credentials_and_query_are_rejected(self):
+        for value in ('file:///tmp','http://user:secret@example/admin','http://example/admin?key=x','http://example/admin#secret'):
+            self.profile['boot_context_url']=value
+            with self.subTest(value=value),self.assertRaises(ValueError):self.load()
+
+    def test_preference_for_botsort_is_enforced(self):
+        self.gate['tracker']='bytetrack';(self.root/'gate.json').write_text(json.dumps(self.gate))
+        with self.assertRaises(ValueError):self.load()
+
+    def test_new_profile_starts_without_fixture_or_run_artifacts(self):
+        self.load()
+        self.assertEqual(list(self.root.glob('e2e_manual_*')),[])
+        self.assertFalse((self.root/'camera_e2e_fixture.properties').exists())

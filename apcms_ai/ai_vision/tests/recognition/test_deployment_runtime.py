@@ -161,9 +161,9 @@ class DeploymentRuntimeTests(unittest.TestCase):
                 patch('ai_vision.parking.parking_preview.ParkingPreview') as preview, \
                 patch('cv2.VideoWriter') as writer:
             preview.return_value.wait_until_ready.return_value = None
-            result = record(1, 10, Path(folder), camera_backend='msmf', wait_for_start=True)
+            result = record(1, 10, Path(folder), camera_backend='auto', wait_for_start=True)
             self.assertEqual(result['status'], 'CANCELLED')
-            opened.assert_called_once_with(1, backend='msmf')
+            opened.assert_called_once_with(1, backend='auto')
             writer.assert_not_called()
             self.assertEqual(list(Path(folder).iterdir()), [])
             preview.return_value.close.assert_called_once()

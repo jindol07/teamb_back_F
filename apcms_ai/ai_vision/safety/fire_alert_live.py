@@ -53,7 +53,8 @@ def load_live_payloads(output_dir: Path) -> list[dict]:
 
 # 2. 새로운 이벤트만 미리보기/전송하고 성공한 이벤트는 체크포인트로 남깁니다.
 def delivery_cycle(output_dir: Path, *, send: bool = False, url: str | None = None,
-                   allow_test_records: bool = False, state_file: Path | None = None,
+                   allow_test_records: bool = False, allow_production_records: bool = False,
+                   state_file: Path | None = None,
                    preview_ids: set | None = None, token: str | None = None,
                    timeout: float = 5.0, max_retries: int = 2,
                    post=sender.post_payload) -> dict:
@@ -75,9 +76,11 @@ def delivery_cycle(output_dir: Path, *, send: bool = False, url: str | None = No
         return {"total": len(payloads), "new": len(newly_seen), "already": len(payloads) - len(newly_seen)}
     if not url:
         raise ValueError("실제 HTTP 전송에는 --url이 필요합니다.")
-    sender.validate_endpoint(url)
-    if any(p["is_test"] for p in payloads) and not allow_test_records:
-        raise ValueError("시험 기록은 --allow-test-records가 필요합니다.")
+    sender.validate_delivery_policy(payloads, url,
+                                    allow_test_records=allow_test_records,
+                                    allow_production_records=allow_production_records)
+    if any(p["is_test"] is False for p in payloads) and not token:
+        raise ValueError("운영 알림 전송에는 인증키 환경변수가 필요합니다.")
     checkpoint = Path(state_file) if state_file else output_dir / "fire_alert_sent_state.json"
     outcome = sender.send_pending(payloads, url, state_file=checkpoint, token=token,
                                   timeout=timeout, max_retries=max_retries, post=post)
@@ -106,18 +109,32 @@ def validate_new_output_folder(output_dir: Path) -> None:
 
 
 def run_launcher(output_dir: Path, detector_args: list[str], *, send=False, url=None,
-                 allow_test_records=False, poll_seconds=0.25, token=None,
+                 allow_test_records=False, allow_production_records=False,
+                 poll_seconds=0.25, token=None,
                  timeout=5.0, max_retries=2, state_file=None,
                  process_factory=subprocess.Popen, sleep=time.sleep) -> int:
     """3-3. 감지기와 송신기를 함께 실행하고 종료 후 남은 사건까지 처리합니다."""
     if type(poll_seconds) not in (int, float) or not math.isfinite(poll_seconds) or not 0.05 <= poll_seconds <= 30:
         raise ValueError("poll_seconds는 0.05~30초여야 합니다.")
+    # 명시적 운영 카메라 옵션과 외부 전송 승인, HTTPS, 인증키가 모두 있어야 운영 송신 가능.
+    production = "--production-camera" in detector_args
+    if production and any(a == "--video" or a.startswith("--video=") for a in detector_args):
+        raise ValueError("운영 모드는 --video 입력에서 사용할 수 없습니다.")
     if send:
         if not url:
             raise ValueError("--send에는 --url이 필요합니다.")
         sender.validate_endpoint(url)
-        if not allow_test_records:
-            raise ValueError("이 감지기는 시험 기록을 만듭니다. --allow-test-records가 필요합니다.")
+        if production:
+            if not allow_production_records or allow_test_records:
+                raise ValueError("운영 전송은 --allow-production-records만 지정해야 합니다.")
+            if not url.startswith("https://"):
+                raise ValueError("운영 전송은 HTTPS URL만 허용합니다.")
+            if not token:
+                raise ValueError("운영 전송에는 인증키가 필요합니다.")
+        elif not allow_test_records:
+            raise ValueError("시험 전송은 --allow-test-records가 필요합니다.")
+        elif allow_production_records:
+            raise ValueError("시험 전송에서 --allow-production-records를 지정하지 마세요.")
     if not (0 < timeout <= 60) or type(max_retries) is not int or not 0 <= max_retries <= 5:
         raise ValueError("timeout/max_retries 범위를 확인하세요.")
     validate_new_output_folder(output_dir)
@@ -134,6 +151,7 @@ def run_launcher(output_dir: Path, detector_args: list[str], *, send=False, url=
                 try:
                     result = delivery_cycle(output_dir, send=send, url=url,
                                             allow_test_records=allow_test_records,
+                                            allow_production_records=allow_production_records,
                                             state_file=state_file, preview_ids=preview_ids,
                                             token=token, timeout=timeout, max_retries=max_retries)
                     new_alerts += result["new"]
@@ -147,6 +165,7 @@ def run_launcher(output_dir: Path, detector_args: list[str], *, send=False, url=
         # 감지 종료 직후 기록된 전이도 모두 처리합니다.
         result = delivery_cycle(output_dir, send=send, url=url,
                                 allow_test_records=allow_test_records,
+                                allow_production_records=allow_production_records,
                                 state_file=state_file, preview_ids=preview_ids,
                                 token=token, timeout=timeout, max_retries=max_retries)
         new_alerts += result["new"]
@@ -182,6 +201,8 @@ def main(argv=None) -> int:
     parser.add_argument("--send", action="store_true", help="자동 POST 요청 실행")
     parser.add_argument("--url", help="localhost 모의 서버 또는 HTTPS API")
     parser.add_argument("--allow-test-records", action="store_true", help="시험 데이터 전송 허용")
+    parser.add_argument("--allow-production-records", action="store_true",
+                        help="운영 CAMERA 기록 실제 전송 승인 (HTTPS/인증키 필요)")
     parser.add_argument("--poll-seconds", type=float, default=0.25)
     parser.add_argument("--timeout", type=float, default=5.0)
     parser.add_argument("--max-retries", type=int, default=2)
@@ -197,6 +218,7 @@ def main(argv=None) -> int:
     try:
         return run_launcher(options.output, detector_args, send=options.send,
                             url=options.url, allow_test_records=options.allow_test_records,
+                            allow_production_records=options.allow_production_records,
                             poll_seconds=options.poll_seconds, timeout=options.timeout,
                             max_retries=options.max_retries, token=token,
                             state_file=options.state_file)

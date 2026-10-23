@@ -29,6 +29,25 @@ def observation(index, track=1, box=(25, 25, 75, 90), plate='91소6408', kind='K
 
 
 class EntryIdentityParkingTests(unittest.TestCase):
+
+    def test_plate_nms_is_explicit_and_vehicle_tracking_keeps_previous_options(self):
+        from ai_vision.parking.vehicle_space_tracker import create_vehicle_tracker
+        for target in ('vehicle','plate'):
+            model=Mock(names={0:'plate',1:'car'})
+            model.track.return_value=[Mock(boxes=Mock(id=None))]
+            with patch.dict('sys.modules',{'ultralytics':Mock(YOLO=Mock(return_value=model))}), \
+                    patch('ai_vision.recognition.model_files.require_model_file'):
+                _,track=create_vehicle_tracker(target)
+                self.assertEqual(track(np.zeros((100,100,3),dtype=np.uint8)),[])
+            options=model.track.call_args.kwargs
+            if target=='plate':
+                self.assertTrue(options['agnostic_nms'])
+                self.assertEqual(options['iou'],.5)
+            else:
+                self.assertNotIn('agnostic_nms',options)
+                self.assertNotIn('iou',options)
+
+
     def setUp(self):
         self.identity = {'owner_session_id': 'gate_test', 'event_id': 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
                          'parking_usage_id': 70, 'plate_number': '91소6408', 'confidence': .8}
