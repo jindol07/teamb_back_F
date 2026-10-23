@@ -29,10 +29,10 @@ public class FireSafetyAtomicWriter {
     private final String smokeRisk;
 
     public FireSafetyAtomicWriter(FireSafetyDao dao, ObjectMapper mapper,
-    		@Value("${fire.alert.notification.type:}") String notificationType,
-    		@Value("${fire.alert.admin.status:}") String adminStatus,
-    		@Value("${fire.alert.risk.fire:HIGH}") String fireRisk,
-    		@Value("${fire.alert.risk.smoke:MEDIUM}") String smokeRisk) {
+            @Value("${fire.alert.notification.type:}") String notificationType,
+            @Value("${fire.alert.admin.status:}") String adminStatus,
+            @Value("${fire.alert.risk.fire:HIGH}") String fireRisk,
+            @Value("${fire.alert.risk.smoke:MEDIUM}") String smokeRisk) {
         this.dao = dao;
         this.mapper = mapper;
         this.notificationType = notificationType;
@@ -88,6 +88,17 @@ public class FireSafetyAtomicWriter {
         FireSafetyDao.Incident active = dao.lockActiveGroup(groupHash);
         Long incidentId;
         boolean newIncident = active == null;
+
+        // 1. DB 업무 사건은 미해결 SOURCE_GROUP_HASH 단위로 유지합니다.
+        // 1-1. 새 Python SUSPECTED는 새 incident_id를 뜻하므로, 기존 그룹에 묶여도 재알림을 보냅니다.
+        // 1-2. 같은 Python incident_id의 중복 SUSPECTED는 이력에 이미 있으면 알림을 보내지 않습니다.
+        // 1-3. REOPENED는 원래 정책대로 매번 재알림합니다. CLEARED는 위에서 이미 반환했습니다.
+        boolean notifyAdmins = newIncident || "REOPENED".equals(r.status());
+        if (!newIncident && "SUSPECTED".equals(r.status())) {
+            notifyAdmins = !dao.hasPriorSuspectedInActiveIncident(
+                    active.id(), eventId, groupHash, r.incidentId());
+        }
+
         if (newIncident) {
             Timestamp lastResolved = dao.lastResolvedAt(groupHash);
             if (lastResolved != null && !detectedAt.after(lastResolved))
@@ -105,10 +116,10 @@ public class FireSafetyAtomicWriter {
         }
 
         int notifications = 0;
-        if (newIncident || "REOPENED".equals(r.status())) {
+        if (notifyAdmins) {
             if (notificationType.isBlank() || adminStatus.isBlank())
                 throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE,
-                    "FIRE_ALERT_NOTIFICATION_TYPE / FIRE_ALERT_ADMIN_STATUS 설정이 필요합니다.");
+                    "fire.alert.notification.type / fire.alert.admin.status 설정이 필요합니다.");
             String title = (r.isTest() ? "[TEST] " : "") + r.hazardType() + " 감지 의심";
             String content = "AI " + r.status() + " 관찰; 관리자 현장 확인 필요 (자동 해결 판정 아님)";
             notifications = dao.createNotifications(incidentId, notificationType, title, content, adminStatus);
