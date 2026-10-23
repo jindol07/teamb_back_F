@@ -35,4 +35,30 @@ public interface ReservationRepository
             @Param("startAt") LocalDateTime startAt,
             @Param("endAt") LocalDateTime endAt
     );
+
+    // 선택 기간에 확정 예약이나 현재 주차 이용이 없는 공간 ID 조회
+    @Query(value = """
+        SELECT s.PARKING_SPACE_ID
+        FROM PARKING_SPACE s
+        WHERE s.SPACE_STATUS_CODE IN ('AVAILABLE', 'EMPTY')
+          AND NOT EXISTS (
+              SELECT 1
+              FROM PARKING_RESERVATION r
+              WHERE r.PARKING_SPACE_ID = s.PARKING_SPACE_ID
+                AND r.STATUS_CODE = 'CONFIRMED'
+                AND r.RESERVATION_START_AT <= :endAt
+                AND r.RESERVATION_END_AT >= :startAt
+          )
+          AND NOT EXISTS (
+              SELECT 1
+              FROM PARKING_USAGE u
+              WHERE u.PARKING_SPACE_ID = s.PARKING_SPACE_ID
+                AND u.EXIT_AT IS NULL
+          )
+        ORDER BY s.PARKING_SPACE_ID
+        """, nativeQuery = true)
+    List<Long> findAvailableSpaceIds(
+            @Param("startAt") LocalDateTime startAt,
+            @Param("endAt") LocalDateTime endAt
+    );
 }

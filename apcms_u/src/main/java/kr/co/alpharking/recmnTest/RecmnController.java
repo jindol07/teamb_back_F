@@ -169,15 +169,23 @@ public class RecmnController {
         }
 
         List<String> recommendedZones = new ArrayList<>();
+        Map<String, Double> zoneScores = new java.util.LinkedHashMap<>();
         for (Object recommendationRow : recommendationRows) {
             if (recommendationRow instanceof Map<?, ?> recommendation) {
                 Object zoneCode = recommendation.get("zone_code");
                 if (zoneCode instanceof String) {
                     recommendedZones.add((String) zoneCode);
+                    Object score = recommendation.get("score");
+                    if (score instanceof Number) {
+                        zoneScores.put((String) zoneCode, ((Number) score).doubleValue());
+                    }
                 }
             }
         }
 
+        if (historyData.isEmpty()) {
+            return recmnService.recommendRandomParking(officeId, request, zoneScores);
+        }
 
         return recmnService.recommendParking(officeId, request, recommendedZones);
     }
