@@ -1,3 +1,8 @@
+/** [1023_1010] 파일 안내
+ * 용도: JDBC로 사용자 구획 현황을 읽고 유효 예약을 표시 상태에 반영.
+ * 사용처·연결: ParkingSpaceQueryService.findAll → JdbcTemplate → ParkingSpacePublicRow.
+ * CASE/EXISTS는 반환 상태만 계산한다. 구획 DB 상태를 수정하지 않으며 사용중·사용불가를 예약으로 덮어쓰지 않는다.
+ */
 package kr.co.alpharking.repository.parking;
 
 import java.util.List;
@@ -14,8 +19,10 @@ public class ParkingSpaceQueryRepository {
         this.jdbc = jdbc;
     }
 
+    // [1023_1010] 현재 시각에 유효한 확정 예약을 비어 있는 구획의 반환 상태에만 반영한다. 원본 상태 UPDATE는 없다.
     public List<ParkingSpacePublicRow> findAll() {
         // A의 사용자용 조회와 같은 컬럼/정렬을 사용하며 Oracle 11g SQL을 유지한다.
+        // [1023_1010] SQL 컬럼을 record 생성자 순서로 매핑한다. 메모·차량번호는 조회 대상에 넣지 않는다.
         return jdbc.query("""
                 SELECT s.PARKING_SPACE_ID AS parkingSpaceId,
                        f.FLOOR_NO AS floorNo,

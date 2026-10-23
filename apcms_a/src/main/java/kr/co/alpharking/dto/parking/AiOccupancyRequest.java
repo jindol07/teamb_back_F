@@ -1,3 +1,8 @@
+/** [1023_1010] 파일 안내
+ * 용도: AI 점유 요청 JSON 계약.
+ * 사용처·연결: AiOccupancyController.accept → AiOccupancyService.receive.
+ * @JsonProperty가 snake_case JSON과 Java record 접근자를 연결한다. 감지 시각은 오프셋 포함 문자열이다.
+ */
 package kr.co.alpharking.dto.parking;
 
 import java.math.BigDecimal;

@@ -1,9 +1,11 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!-- [1023_1010] 파일 안내: AI 점유 이벤트의 중복·시간 순서·구획 상태·변경 이력 SQL. AiOccupancyDao와 연결된다. 차량 통과 이벤트 처리 SQL과는 별개다. -->
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
   "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="kr.co.alpharking.dao.parking.AiOccupancyDao">
     <!-- 주차구획 잠금으로 동일 구획의 동시 이벤트 처리를 직렬화 -->
-    <select id="lockByCode" resultType="kr.co.alpharking.dto.parking.ParkingSpaceRow">
+    <!-- [1023_1010] 같은 구획의 점유 이벤트 처리를 직렬화하는 구획 행 잠금. -->
+    <select id="lockByCode" resultType="ParkingSpaceRow">
         SELECT s.PARKING_SPACE_ID AS "parkingSpaceId",
                s.SPACE_STATUS_CODE AS "spaceStatusCode"
           FROM PARKING_SPACE s
@@ -13,16 +15,19 @@
          FOR UPDATE OF s.SPACE_STATUS_CODE
     </select>
     <!-- 전용 EVENT_UUID 컬럼이 없으므로 기존 CLOB의 고유 event_id 필드 탐색 -->
+    <!-- [1023_1010] 구획별 기존 이벤트 RAW_PAYLOAD의 event_id를 검색한다. 신규 전용 UUID 컬럼을 추가하지 않는 현재 중복 검사다. -->
     <select id="countEventId" resultType="int">
         SELECT COUNT(*) FROM AI_DETECTION_EVENT
          WHERE PARKING_SPACE_ID = #{parkingSpaceId}
            AND DBMS_LOB.INSTR(RAW_PAYLOAD, #{needle}) &gt; 0
     </select>
+    <!-- [1023_1010] 점유 이벤트만 대상으로 최신 감지 시각을 조회한다. 다른 유형의 이벤트와 시간 기준을 혼합하지 않는다. -->
     <select id="latestOccupancyDetectedAt" resultType="java.time.LocalDateTime">
         SELECT MAX(DETECTED_AT) FROM AI_DETECTION_EVENT
          WHERE PARKING_SPACE_ID = #{parkingSpaceId}
            AND DBMS_LOB.INSTR(RAW_PAYLOAD, '"event_type":"PARKING_OCCUPANCY"') &gt; 0
     </select>
+    <!-- [1023_1010] selectKey로 기존 시퀀스 ID를 먼저 만들고 감지 시각과 제한된 JSON payload를 저장한다. -->
     <insert id="insertEvent" parameterType="map">
         <selectKey keyProperty="aiDetectionEventId" resultType="long" order="BEFORE">
             SELECT SEQ_AI_DETECTION_EVENT.NEXTVAL FROM DUAL
@@ -33,15 +38,18 @@
           (#{aiDetectionEventId}, #{parkingSpaceId}, #{detectedAt,jdbcType=TIMESTAMP},
            SYSDATE, #{rawPayload,jdbcType=CLOB})
     </insert>
+    <!-- [1023_1010] 구획 점유 상태와 수정 시각을 갱신한다. 보호 상태·지연 이벤트 여부는 서비스가 먼저 검사한다. -->
     <update id="updateStatus">
         UPDATE PARKING_SPACE
            SET SPACE_STATUS_CODE = #{status}, UPDATED_AT = SYSDATE
          WHERE PARKING_SPACE_ID = #{parkingSpaceId}
     </update>
+    <!-- [1023_1010] 상태 변경 전 열려 있던 구획 이력의 유효 구간을 닫는다. -->
     <update id="closeHistory">
         UPDATE PARKING_SPACE_HISTORY SET VALID_TO = SYSDATE
          WHERE PARKING_SPACE_ID = #{parkingSpaceId} AND VALID_TO IS NULL
     </update>
+    <!-- [1023_1010] 변경된 구획 스냅샷을 AI 출처와 이벤트 ID로 이력에 연결한다. -->
     <insert id="insertHistory">
         INSERT INTO PARKING_SPACE_HISTORY
           (PARKING_SPACE_HISTORY_ID, PARKING_SPACE_ID, PARKING_ZONE_ID,
