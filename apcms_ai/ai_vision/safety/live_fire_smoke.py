@@ -71,6 +71,7 @@ class LiveConfig:
     camera_retries: int = 3         # 처음 열기 실패·연결 끊김당 추가 재시도 횟수
     camera_retry_delay: float = 1.0 # 재시도 사이 대기(초); 0 허용
     publish_alert_session: bool = False  # 외부 실시간 전송기가 읽을 세션 메타데이터(기본 꺼짐)
+    production_camera: bool = False  # 기본 시험 모드. 운영은 CAMERA에서 명시적으로만 허용
 
     def __post_init__(self):
         # 사용자 설정 오류를 카메라 접근 전에 거부합니다.
@@ -90,6 +91,10 @@ class LiveConfig:
                 raise ValueError(f"{name}은 0과 1 사이여야 합니다.")
         if type(self.publish_alert_session) is not bool:
             raise ValueError("publish_alert_session은 True/False여야 합니다.")
+        if type(self.production_camera) is not bool:
+            raise ValueError("production_camera는 True/False여야 합니다.")
+        if self.production_camera and self.video_path is not None:
+            raise ValueError("운영 모드는 실제 CAMERA 입력에서만 허용합니다. 영상 파일은 TEST로 처리하세요.")
         if type(self.warmup) is not bool:
             raise ValueError("warmup은 True/False여야 합니다.")
         if type(self.camera_retries) is not int or not 0 <= self.camera_retries <= 20:
@@ -340,6 +345,8 @@ def run_live(config, *, model=None, capture=None, monotonic=None, capture_factor
                   else RESULT_DIR / "safety" / "live" / session_id)
     output_dir.mkdir(parents=True, exist_ok=True)
     started_utc = datetime.now(timezone.utc).isoformat()
+    # 실행 도중 생성하는 sidecar와 종료 summary가 같은 운영/시험 식별자를 사용합니다.
+    record_type = "FIRE_SMOKE_LIVE_PRODUCTION" if config.production_camera else "FIRE_SMOKE_LIVE_TEST"
     # 4-1. 실시간 전송용 식별 정보는 시작 시점에만 선택적으로 기록합니다.
     # 종료 시 만들어지는 summary.json과 정확히 같은 started_at_utc를 사용하므로
     # 실시간 전송과 사후 재전송의 transition_id가 동일하게 유지됩니다.
@@ -348,7 +355,7 @@ def run_live(config, *, model=None, capture=None, monotonic=None, capture_factor
                ("alert_session.json", "summary.json", "incident_history.json", "fire_alert_sent_state.json")):
             raise ValueError("실시간 알림 출력 폴더에는 이전 실행 기록이 없어야 합니다.")
         write_json_atomic(output_dir / "alert_session.json", {
-            "record_type": "FIRE_SMOKE_LIVE_TEST",
+            "record_type": record_type,
             "source": "VIDEO" if config.video_path else "CAMERA",
             "source_name": Path(config.video_path).name if config.video_path else f"camera_{config.camera_index}",
             "started_at_utc": started_utc,
@@ -578,7 +585,7 @@ def run_live(config, *, model=None, capture=None, monotonic=None, capture_factor
             write_json_atomic(output_dir / "incident_history.json", {"transitions": transitions})
             write_json_atomic(output_dir / "incident_states.json", state.snapshot())
             summary = {
-                "record_type": "FIRE_SMOKE_LIVE_TEST", "status": status,
+                "record_type": record_type, "status": status,
                 "error_type": error_type, "source": "VIDEO" if config.video_path else "CAMERA",
                 "source_name": Path(config.video_path).name if config.video_path else f"camera_{config.camera_index}",
                 "started_at_utc": started_utc, "completed_at_utc": datetime.now(timezone.utc).isoformat(),
@@ -660,6 +667,8 @@ def main(argv=None):
                         help="재연결 간 대기 시간(초, 기본 1)")
     parser.add_argument("--publish-alert-session", action="store_true",
                         help="실시간 알림용 세션 메타데이터 기록(기본 꺼짐)")
+    parser.add_argument("--production-camera", action="store_true",
+                        help="실제 카메라 결과를 운영 데이터로 표시. 단독 실행은 HTTP 전송 안 함")
     parser.add_argument("--output", type=Path, help="결과 저장 폴더")
     args = parser.parse_args(argv)
     config = LiveConfig(camera_index=args.camera, video_path=args.video, interval=args.interval,
@@ -674,7 +683,8 @@ def main(argv=None):
                         preroll_max_frames=args.preroll_max_frames, output_dir=args.output,
                         warmup=args.warmup, camera_retries=args.camera_retries,
                         camera_retry_delay=args.camera_retry_delay,
-                        publish_alert_session=args.publish_alert_session)
+                        publish_alert_session=args.publish_alert_session,
+                        production_camera=args.production_camera)
     report = run_live(config)
     print(f"[완료] {report['status']} | 수집 {report['captured_frames']}프레임 | "
           f"추론 {report['inference_samples']}회 | 의심 이벤트 {report['suspected_events']}건")

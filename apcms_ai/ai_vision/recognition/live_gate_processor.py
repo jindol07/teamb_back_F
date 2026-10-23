@@ -31,7 +31,15 @@ from ai_vision.recognition.live_gate_clock import FrameStamp
 class LiveGateProcessor:
     # 2-1. 실행 설정과 버퍼 용량을 초기화합니다.
     # tracker/plate_reader에 가짜 함수를 주입하면 실제 모델 없이 단위 테스트할 수 있습니다.
-    def __init__(self, config, tracker=None, plate_reader=None, max_tracks=16, max_buffer_bytes=32 * 1024 * 1024):
+    def __init__(self, config, tracker=None, plate_reader=None, max_tracks=16, max_buffer_bytes=32 * 1024 * 1024, tracking_target="vehicle", tracking_imgsz=None):
+        if tracking_target not in ("vehicle", "plate"):
+            raise ValueError("추적 대상은 vehicle 또는 plate여야 합니다.")
+        self.tracking_target = tracking_target
+        # 추론 크기만 조절합니다. 통과 좌표와 OCR crop은 원본 해상도를 유지합니다.
+        if tracking_imgsz is not None and (type(tracking_imgsz) is not int or
+                tracking_imgsz not in (640, 960, 1280) or tracking_target != "plate"):
+            raise ValueError("추론 크기는 번호판 추적에서 640, 960, 1280만 지정합니다.")
+        self.tracking_imgsz = tracking_imgsz if tracking_imgsz is not None else (1280 if tracking_target == "plate" else 640)
         self.config = deepcopy(validate_config(config))
         # bool도 Python에서 int의 하위 타입이므로 type(...) is int로 엄격하게 검사합니다.
         if type(max_tracks) is not int or not 1 <= max_tracks <= 128 or type(max_buffer_bytes) is not int or max_buffer_bytes < 1:
@@ -57,7 +65,7 @@ class LiveGateProcessor:
         # 3-1. 실제 추적을 처음 실행할 때만 모델을 읽는 지연 로딩 방식입니다.
         if self._model is None:
             os.environ["YOLO_AUTOINSTALL"] = "false"
-            model = MODEL_DIR / "yolo11n.pt"
+            model = MODEL_DIR / ("license_plate_yolov8n.pt" if self.tracking_target == "plate" else "yolo11n.pt")
             require_model_file(model)
             from ultralytics import YOLO
             self._model = YOLO(model)
@@ -70,21 +78,28 @@ class LiveGateProcessor:
             self._prepare_tracker()
         if self._reader is None:
             from ai_vision.recognition.recognizer import _models
-            _models.plate()
+            if self.tracking_target == "vehicle":
+                _models.plate()
             _models.ocr()
 
     def _track(self, frame):
         self._prepare_tracker()
         # 3-2. COCO 클래스 중 승용차·트럭·버스·오토바이만 추적합니다.
         classes = [key for key, name in self._model.names.items() if name in {"car", "truck", "bus", "motorcycle"}]
+        if self.tracking_target == "plate":
+            classes = list(self._model.names)
+        # 3-2-1. 번호판 모드는 겹친 클래스 상자를 NMS로 합치고 실제 탐지 점수를 보존합니다.
+        extra = {"agnostic_nms": True} if self.tracking_target == "plate" else {}
         # persist=True는 연속 프레임에서 이전 추적 상태를 유지하게 합니다.
         result = self._model.track(frame, persist=True, tracker=self.config["tracker"] + ".yaml",
-                                   classes=classes, conf=.25, iou=.5, imgsz=640, verbose=False)[0]
+                                   classes=classes, conf=.25, iou=.5, imgsz=self.tracking_imgsz, verbose=False, **extra)[0]
         # 3-3. 연결된 ID가 없으면 차량 관찰 기록도 만들지 않습니다.
         if result.boxes.id is None:
             return []
         # 반환 예: [{"track_id": 3, "box": [x1, y1, x2, y2]}]
-        return [{"track_id": int(box.id.item()), "box": list(map(int, box.xyxy[0].tolist()))} for box in result.boxes]
+        return [{"track_id": int(box.id.item()), "box": list(map(int, box.xyxy[0].tolist()))}
+                | ({"plate_detection_confidence": float(box.conf.item())} if self.tracking_target == "plate" else {})
+                for box in result.boxes]
 
     # 4. 차량 이미지(crop)에서 번호판 읽기
     @staticmethod
@@ -174,6 +189,10 @@ class LiveGateProcessor:
                     not isinstance(box, list) or len(box) != 4 or any(type(v) is not int for v in box) or
                     not 0 <= box[0] < box[2] <= width or not 0 <= box[1] < box[3] <= height):
                 raise ValueError("추적 ID·차량 상자가 유효하지 않거나 중복됐습니다.")
+            if self.tracking_target == "plate":
+                confidence = row.get("plate_detection_confidence")
+                if type(confidence) not in (int, float) or not isfinite(confidence) or not 0 <= confidence <= 1:
+                    raise ValueError("번호판 추적에는 실제 탐지 점수가 필요합니다.")
             seen.add(row["track_id"])
         # 검증된 입력만 다음 프레임의 순서 기준으로 사용합니다.
         self._last_frame_index, self._last_seconds = stamp.frame_index, seconds
@@ -222,10 +241,15 @@ class LiveGateProcessor:
             if not entries or seconds - entries[-1]["video_seconds"] >= .25 - 1e-9:
                 if len(entries) >= 3:
                     self._bytes -= entries.popleft()["crop"].nbytes
-                crop = frame[y1:y2, x1:x2]
+                # 번호판 상자는 원본에서 10% 여백을 포함해 OCR하며 통과 위치는 원래 상자 중심입니다.
+                margin_x = int((x2-x1)*.1) if self.tracking_target == "plate" else 0
+                margin_y = int((y2-y1)*.1) if self.tracking_target == "plate" else 0
+                crop = frame[max(0,y1-margin_y):min(height,y2+margin_y), max(0,x1-margin_x):min(width,x2+margin_x)]
                 # 전체 프레임이 아니라 차량 상자 부분을 복사하며 전체 메모리 제한도 확인합니다.
                 if self._bytes + collected_bytes + crop.nbytes <= self._budget:
-                    entries.append({"crop": crop.copy(), "frame_index": stamp.frame_index, "video_seconds": seconds})
+                    entries.append({"crop": crop.copy(), "frame_index": stamp.frame_index, "video_seconds": seconds}
+                                   | ({"plate_detection_confidence": row["plate_detection_confidence"]}
+                                      if self.tracking_target == "plate" else {}))
                     self._bytes += crop.nbytes
                     self._statistics["peak_buffer_bytes"] = max(self._statistics["peak_buffer_bytes"], self._bytes)
                 else:
@@ -250,13 +274,20 @@ class LiveGateProcessor:
             if cancelled is not None and cancelled():
                 raise CancelledError()
             self._statistics["ocr_calls"] += 1
-            result = (self._reader or self._read_plate)(entry["crop"])
+            if self.tracking_target == "plate":
+                # 이미 탐지한 번호판을 다시 차량/번호판 탐지에 넣지 않습니다.
+                from ai_vision.recognition.recognizer import recognize_plate
+                result = (self._reader or recognize_plate)(entry["crop"])
+            else:
+                result = (self._reader or self._read_plate)(entry["crop"])
             if not isinstance(result, dict):
                 raise ValueError("번호판 인식 결과는 객체여야 합니다.")
             sample = {"frame_index": entry["frame_index"], "video_seconds": entry["video_seconds"],
                       "plate_number": result.get("plate_number", ""), "plate_type": result.get("plate_type", "NOT_DETECTED")}
             sample["review_reasons"] = sample_review_reasons([sample])
-            if "plate_detection_confidence" in result:
+            if self.tracking_target == "plate":
+                sample["plate_detection_confidence"] = entry["plate_detection_confidence"]
+            elif "plate_detection_confidence" in result:
                 sample["plate_detection_confidence"] = result["plate_detection_confidence"]
             samples.append(sample)
         return {"record_type": "LIVE_TRACKED_PASSAGE", "http_enabled": False, "track_id": job["track_id"],

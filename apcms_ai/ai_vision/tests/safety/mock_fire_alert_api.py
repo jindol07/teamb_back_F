@@ -34,13 +34,27 @@ class MockAlertHandler(BaseHTTPRequestHandler):
             self._respond(400, {"error": "invalid_json"})
             return
         if transition_id in self.server.received_ids:
-            self._respond(200, {"result": "already_received"})
+            self._respond(200, {
+                "transitionId": transition_id,
+                "outcome": "DUPLICATE",
+                "aiDetectionEventId": 1,
+                "safetyIncidentId": 1,
+                "notificationsCreated": 0,
+                "isTest": request["is_test"],
+            })
             return
         self.server.received_ids.add(transition_id)
         print(f"[수신] {request['hazard_type']} {request.get('status')} | "
               f"incident={str(request.get('incident_id', ''))[:8]} | "
               f"transition={transition_id[:12]} | 시험 데이터", flush=True)
-        self._respond(201, {"result": "received", "transition_id": transition_id})
+        self._respond(201, {
+            "transitionId": transition_id,
+            "outcome": "STORED",
+            "aiDetectionEventId": 1,
+            "safetyIncidentId": None if request["status"] == "CLEARED" else 1,
+            "notificationsCreated": 0,
+            "isTest": request["is_test"],
+        })
 
     def do_GET(self):
         if self.path == "/health":

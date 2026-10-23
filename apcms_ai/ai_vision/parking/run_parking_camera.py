@@ -196,6 +196,7 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
                     vehicle['observations'] = tracking.get('progress', [])
                     if handoff is not None:
                         vehicle['entry_handoff_status'] = handoff.status
+                        vehicle['entry_handoff'] = handoff.snapshot()
                     if view is not None:
                         view.vehicle_progress = vehicle['observations']
                         view.source_label = (f'{tracking_target.upper()} tracking={len(tracking["observations"])} / '

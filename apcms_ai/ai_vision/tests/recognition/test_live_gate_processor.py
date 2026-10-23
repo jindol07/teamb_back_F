@@ -2,7 +2,7 @@
 
 import unittest
 from datetime import datetime, timedelta, timezone
-from unittest.mock import Mock
+from unittest.mock import Mock, MagicMock, patch
 
 import numpy as np
 import cv2  # 기존 sys.modules 모의 처리 전에 네이티브 OpenCV 의존성을 초기화합니다.
@@ -18,6 +18,82 @@ def stamp(index):
 
 
 class LiveGateProcessorTests(unittest.TestCase):
+    def test_plate_mode_uses_plate_model_nms_and_original_confidence(self):
+        processor = LiveGateProcessor(CONFIG, tracking_target='plate')
+        model = Mock(names={0:'plate',1:'plate_alt'})
+        box = Mock()
+        box.id.item.return_value = 7
+        box.xyxy.__getitem__ = Mock(return_value=Mock(tolist=lambda:[10,20,50,40]))
+        box.conf.item.return_value = .73
+        boxes = MagicMock()
+        boxes.id = object()
+        boxes.__iter__.return_value = iter([box])
+        model.track.return_value = [Mock(boxes=boxes)]
+        processor._model = model
+        rows = processor._track(np.zeros((100,100,3),dtype=np.uint8))
+        self.assertEqual(len(rows),1)
+        self.assertEqual(rows[0]['plate_detection_confidence'],.73)
+        self.assertTrue(model.track.call_args.kwargs['agnostic_nms'])
+        self.assertEqual(model.track.call_args.kwargs['imgsz'],1280)
+        self.assertEqual(model.track.call_args.kwargs['classes'],[0,1])
+
+    def test_plate_inference_size_preserves_original_frame_and_coordinates(self):
+        processor = LiveGateProcessor(CONFIG, tracking_target='plate', tracking_imgsz=960)
+        model = Mock(names={0:'plate'})
+        box = MagicMock()
+        box.id.item.return_value = 3
+        box.xyxy[0].tolist.return_value = [100,200,300,240]
+        box.conf.item.return_value = .8
+        boxes = MagicMock(id=object())
+        boxes.__iter__.return_value = iter([box])
+        model.track.return_value = [Mock(boxes=boxes)]
+        processor._model = model
+        frame = np.zeros((1024,1280,3),dtype=np.uint8)
+        rows = processor._track(frame)
+        self.assertIs(model.track.call_args.args[0],frame)
+        self.assertEqual(model.track.call_args.kwargs['imgsz'],960)
+        self.assertEqual(rows[0]['box'],[100,200,300,240])
+
+    def test_invalid_inference_size_or_vehicle_override_is_rejected(self):
+        for value in (True,960.0,0,800,'960'):
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                LiveGateProcessor(CONFIG,tracking_target='plate',tracking_imgsz=value)
+        with self.assertRaises(ValueError):
+            LiveGateProcessor(CONFIG,tracking_imgsz=960)
+
+    def test_plate_crossing_uses_direct_ocr_and_keeps_detection_evidence(self):
+        def tracker(frame):
+            return [row | {'plate_detection_confidence':.72} for row in self.tracker(frame)]
+        processor = LiveGateProcessor(CONFIG, tracker=tracker, tracking_target='plate')
+        with patch('ai_vision.recognition.recognizer.recognize_plate',return_value={
+                'plate_number':'91소6408','plate_type':'KOREAN_VALID','plate_detection_confidence':.99}) as read, \
+                patch.object(processor,'_read_plate',side_effect=AssertionError('Repeated detection forbidden')):
+            passages = self.crossing(processor)
+        self.assertEqual(len(passages),1)
+        self.assertEqual(passages[0]['plate_consensus']['status'],'CONFIRMED')
+        self.assertEqual(read.call_count,3)
+        self.assertTrue(all(x['plate_detection_confidence']==.72 for x in passages[0]['samples']))
+        self.assertEqual(read.call_args.args[0].shape[:2],(24,24))
+
+    def test_plate_mode_rejects_missing_or_invalid_detector_confidence(self):
+        for confidence in (None,True,float('nan'),-1,1.01):
+            processor=LiveGateProcessor(CONFIG,tracker=lambda frame:[{
+                'track_id':1,'box':[10,10,30,30],'plate_detection_confidence':confidence}],tracking_target='plate')
+            with self.subTest(confidence=confidence),self.assertRaises(ValueError):
+                processor.collect(np.zeros((100,100,3),dtype=np.uint8),stamp(0))
+
+    def test_plate_observation_without_crossing_never_reads_number(self):
+        read=Mock(side_effect=AssertionError('No crossing, no OCR'))
+        processor=LiveGateProcessor(CONFIG,tracker=lambda frame:[{
+            'track_id':1,'box':[10,10,30,30],'plate_detection_confidence':.8}],plate_reader=read,tracking_target='plate')
+        for i in range(4):self.assertEqual(processor.process(np.zeros((100,100,3),dtype=np.uint8),stamp(i)),[])
+        read.assert_not_called()
+
+    def test_tracking_target_rejects_invalid_value(self):
+        for value in ('car','',None,True):
+            with self.assertRaises(ValueError):LiveGateProcessor(CONFIG,tracking_target=value)
+
+
     def test_missing_character_reasons_survive_live_session_and_report(self):
         from ai_vision.recognition.live_gate_clock import LiveGateClock
         from ai_vision.recognition.live_gate_session import LiveGateSession

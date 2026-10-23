@@ -68,7 +68,7 @@ class SingleVehicleHandoffTests(unittest.TestCase):
             self.source.record(self.event, self.receipt(self.event, **changes), self.now)
             self.assertIsNone(self.reader.read())
 
-    def test_heartbeat_expiry_and_close_clear_identity(self):
+    def test_heartbeat_expiry_and_close_hold_matching_but_retain_identity(self):
         self.enter()
         self.now += timedelta(seconds=6)
         self.assertIsNone(self.reader.read())
@@ -76,6 +76,87 @@ class SingleVehicleHandoffTests(unittest.TestCase):
         self.assertIsNotNone(self.reader.read())
         self.source.close(self.now)
         self.assertIsNone(self.reader.read())
+        self.assertEqual(self.source.state['active']['parking_usage_id'], 70)
+        self.assertEqual(self.source.state['status'], 'ACTIVE')
+        self.assertEqual(self.reader.snapshot()['retained_identity']['parking_usage_id'], 70)
+        self.assertFalse(self.reader.snapshot()['usable_for_matching'])
+
+    def test_long_observation_gap_retains_identity_and_live_same_owner_recovers(self):
+        self.enter()
+        self.reader.read()
+        self.now += timedelta(minutes=30)
+        self.assertIsNone(self.reader.read())
+        self.assertEqual(self.reader.snapshot()['retained_identity']['parking_usage_id'], 70)
+        self.source.heartbeat(self.now)
+        self.assertEqual(self.reader.read()['parking_usage_id'], 70)
+
+    def test_stopped_file_preserves_identity_even_for_new_reader_but_never_sends(self):
+        self.enter()
+        self.source.close(self.now)
+        reader = SingleVehicleHandoffReader(self.path, clock=lambda: self.now)
+        self.assertIsNone(reader.read())
+        self.assertEqual(reader.status, 'SOURCE_STOPPED')
+        self.assertEqual(reader.snapshot()['retained_identity']['parking_usage_id'], 70)
+
+    def test_matching_exit_after_gap_clears_retained_identity(self):
+        self.enter()
+        self.reader.read()
+        self.now += timedelta(seconds=20)
+        self.assertIsNone(self.reader.read())
+        event = self.event | {'direction': 'EXIT', 'detected_at': self.now.isoformat()}
+        self.source.record(event, self.receipt(event), self.now)
+        self.assertIsNone(self.reader.read())
+        self.assertEqual(self.reader.status, 'EMPTY')
+        self.assertIsNone(self.reader.snapshot()['retained_identity'])
+
+    def test_wrong_exit_or_empty_state_cannot_discard_retained_identity(self):
+        from ai_vision.recognition.local_io import write_json_atomic
+        self.enter()
+        self.reader.read()
+        for exit_row in (None, {'parking_usage_id': 71, 'plate_number': '91소6408',
+                               'event_id': self.event['event_id'], 'detected_at': self.now.isoformat()}):
+            write_json_atomic(self.path, self.source.state | {'status': 'EMPTY', 'active': None, 'last_exit': exit_row})
+            self.assertIsNone(self.reader.read())
+            self.assertEqual(self.reader.snapshot()['retained_identity']['parking_usage_id'], 70)
+            self.assertIsNone(self.reader.last_exit)
+
+    def test_snapshot_is_copy_and_corruption_does_not_erase_known_entry(self):
+        self.enter()
+        self.reader.read()
+        self.reader.snapshot()['retained_identity']['parking_usage_id'] = 999
+        self.path.write_text('{', encoding='utf-8')
+        self.assertIsNone(self.reader.read())
+        self.assertEqual(self.reader.snapshot()['retained_identity']['parking_usage_id'], 70)
+
+    def test_identity_cannot_be_replaced_before_matching_exit(self):
+        from ai_vision.recognition.local_io import write_json_atomic
+        self.enter()
+        self.reader.read()
+        row = self.source.state | {'active': self.source.state['active'] | {'parking_usage_id': 71}}
+        write_json_atomic(self.path, row)
+        self.assertIsNone(self.reader.read())
+        self.assertEqual(self.reader.snapshot()['retained_identity']['parking_usage_id'], 70)
+
+    def test_closed_source_cannot_restart_heartbeat_or_overwrite_entry(self):
+        self.enter()
+        self.source.close(self.now)
+        original = self.path.read_bytes()
+        self.source.heartbeat(self.now + timedelta(seconds=30))
+        self.assertFalse(self.source.allow(self.event, self.now))
+        with self.assertRaises(ValueError):
+            self.source.record(self.event, self.receipt(self.event), self.now)
+        self.source.close(self.now + timedelta(seconds=30))
+        self.assertEqual(self.path.read_bytes(), original)
+
+    def test_late_reader_can_clear_retained_identity_from_matching_exit_only(self):
+        self.enter()
+        self.reader.read()
+        event = self.event | {'direction': 'EXIT'}
+        self.source.record(event, self.receipt(event), self.now)
+        self.now += timedelta(seconds=30)
+        self.assertIsNone(self.reader.read())
+        self.assertIsNone(self.reader.snapshot()['retained_identity'])
+        self.assertIsNone(self.reader.last_exit)
 
     def test_old_file_is_not_overwritten_or_auto_reopened(self):
         self.enter()

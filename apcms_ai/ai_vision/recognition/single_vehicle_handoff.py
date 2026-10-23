@@ -17,12 +17,13 @@ class SingleVehicleHandoff:
         validate_camera_id(camera_id)
         self.path = Path(path)
         self.state = {'record_type': 'SINGLE_VEHICLE_HANDOFF', 'owner_session_id': session_id,
-                      'camera_id': camera_id, 'status': 'EMPTY', 'active': None,
+                      'camera_id': camera_id, 'status': 'EMPTY', 'source_status': 'RUNNING', 'active': None,
                       'updated_at': at.isoformat(), 'reason': None, 'last_exit': None}
         # 1. 이전 실행의 파일을 덮어쓰거나 이전 차량을 자동 복원하지 않습니다.
         with self.path.open('x', encoding='utf-8') as stream:
             json.dump(self.state, stream, ensure_ascii=False)
         self._at = at
+        self._closed = False
 
     def _save(self, at):
         # 비동기 OCR은 과거 수집 시각으로 완료될 수 있으므로 heartbeat 시각을 되돌리지 않습니다.
@@ -32,10 +33,12 @@ class SingleVehicleHandoff:
         write_json_atomic(self.path, self.state)
 
     def heartbeat(self, at):
-        if (at-self._at).total_seconds() >= .5:
+        if not self._closed and (at-self._at).total_seconds() >= .5:
             self._save(at)
 
     def allow(self, event, at):
+        if self._closed:
+            return False
         event = validate_vehicle_payload(event)
         active = self.state['active']
         if event['direction'] == 'ENTRY':
@@ -51,6 +54,8 @@ class SingleVehicleHandoff:
                 and parse_detected_at(event['detected_at']) >= parse_detected_at(active['detected_at']))
 
     def record(self, event, receipt, at):
+        if self._closed:
+            raise ValueError('종료된 입차 신원 기록은 재사용할 수 없습니다.')
         active = self.state['active']
         usage = receipt.get('parking_usage_id')
         if (receipt.get('receipt_verified') is not True or receipt.get('request_attempted') is not True
@@ -65,7 +70,8 @@ class SingleVehicleHandoff:
                 'event_id': event['event_id'], 'detected_at': event['detected_at'],
                 'confidence': event['confidence']})
         elif (event['direction'] == 'EXIT' and receipt['state'] == 'APPLIED' and active is not None
-              and active['plate_number'] == event['plate_number'] and active['parking_usage_id'] == usage):
+              and active['plate_number'] == event['plate_number'] and active['parking_usage_id'] == usage
+              and parse_detected_at(event['detected_at']) >= parse_detected_at(active['detected_at'])):
             self.state.update(status='EMPTY', active=None, reason=None, last_exit={
                 'plate_number': event['plate_number'], 'parking_usage_id': usage,
                 'event_id': event['event_id'], 'detected_at': event['detected_at']})
@@ -74,8 +80,11 @@ class SingleVehicleHandoff:
         self._save(at)
 
     def close(self, at):
-        self.state.update(status='CLOSED', active=None, reason='SOURCE_STOPPED')
-        self._save(at)
+        # 3. 수집 종료는 출차가 아닙니다. 확인된 입차와 보류 사유를 그대로 보관합니다.
+        if not self._closed:
+            self.state['source_status'] = 'STOPPED'
+            self._save(at)
+            self._closed = True
 
 
 class SingleVehicleHandoffReader:
@@ -84,9 +93,15 @@ class SingleVehicleHandoffReader:
         self.owner, self.last_at = None, None
         self.status = 'WAIT_ENTRY'
         self.last_exit = None
+        self._retained = None
+
+    def snapshot(self):
+        # 보관된 신원은 진단용입니다. read()가 반환한 현재 신원만 신규 연결에 사용합니다.
+        return {'status': self.status, 'usable_for_matching': self.status == 'ACTIVE',
+                'retained_identity': dict(self._retained) if self._retained is not None else None}
 
     def read(self):
-        # 2. 손상·만료·출차·종료는 이전 번호를 반환하지 않습니다.
+        # 2. 신원 보관과 신규 전송 허용을 분리합니다. 만료·종료는 출차 근거가 아닙니다.
         self.status = 'WAIT_ENTRY'
         self.last_exit = None
         try:
@@ -96,7 +111,7 @@ class SingleVehicleHandoffReader:
             validate_camera_id(row['camera_id'])
             if (row['record_type'] != 'SINGLE_VEHICLE_HANDOFF' or not isinstance(owner, str)
                     or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_-]{0,95}', owner)
-                    or not -1 <= (self.clock()-at).total_seconds() <= 5
+                    or (self.clock()-at).total_seconds() < -1
                     or (self.owner is not None and owner != self.owner)
                     or (self.last_at is not None and at < self.last_at)):
                 self.status = 'SOURCE_UNAVAILABLE'
@@ -111,10 +126,28 @@ class SingleVehicleHandoffReader:
                         or parse_detected_at(exited['detected_at']) > at):
                     raise ValueError('Invalid verified exit')
                 self.last_exit = dict(exited)
-            if row['status'] != 'ACTIVE':
-                self.status = row['status'] if row['status'] in ('EMPTY', 'CLOSED', 'BLOCKED') else 'INVALID'
+            fresh = (self.clock()-at).total_seconds() <= 5
+            if row['status'] == 'EMPTY':
+                if row['active'] is not None:
+                    raise ValueError('Empty state contains active identity')
+                # 다른 이용의 출차나 단순 EMPTY 파일로 이미 보관한 차량을 지우지 않습니다.
+                if self._retained is not None:
+                    if (exited is None or any(exited[k] != self._retained[k]
+                            for k in ('parking_usage_id', 'plate_number'))
+                            or parse_detected_at(exited['detected_at']) < parse_detected_at(self._retained['detected_at'])):
+                        raise ValueError('Retained identity requires matching verified exit')
+                    self._retained = None
+                if not fresh:
+                    self.last_exit = None
+                self.status = 'EMPTY' if fresh else 'SOURCE_UNAVAILABLE'
+                return None
+            if row['status'] not in ('ACTIVE', 'BLOCKED'):
+                self.status = 'CLOSED' if row['status'] == 'CLOSED' else 'INVALID'
                 return None
             active = row['active']
+            if active is None and row['status'] == 'BLOCKED':
+                self.status = 'BLOCKED'
+                return None
             if (type(active['parking_usage_id']) is not int or active['parking_usage_id'] < 1
                     or not isinstance(active['plate_number'], str)
                     or not re.fullmatch(r'[0-9]{2,3}[가-힣][0-9]{4}', active['plate_number'])
@@ -123,8 +156,21 @@ class SingleVehicleHandoffReader:
                     or parse_detected_at(active['detected_at']) > at
                     or str(uuid.UUID(active['event_id'])) != active['event_id']):
                 raise ValueError('Invalid entry identity')
-            self.status = 'ACTIVE'
-            return dict(active, owner_session_id=owner)
+            identity = dict(active, owner_session_id=owner)
+            if self._retained is not None and identity != self._retained:
+                raise ValueError('Active identity changed without verified exit')
+            self._retained = identity
+            # 유효 신원을 저장해도 A의 신호가 끊기면 새 구획 연결에는 사용하지 않습니다.
+            if not fresh:
+                self.status = 'SOURCE_UNAVAILABLE'
+            elif row.get('source_status', 'RUNNING') != 'RUNNING':
+                self.status = 'SOURCE_STOPPED'
+            else:
+                self.status = row['status']
+            if self.status != 'ACTIVE':
+                self.last_exit = None
+                return None
+            return dict(identity)
         except (OSError, ValueError, KeyError, TypeError, AttributeError, OverflowError):
             self.status = 'SOURCE_UNAVAILABLE'
             self.last_exit = None

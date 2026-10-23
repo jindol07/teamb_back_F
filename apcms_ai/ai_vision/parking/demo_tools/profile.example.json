@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "gate_camera": 0,
+  "parking_camera": 1,
+  "seconds": 300,
+  "plate_number": "",
+  "expected_db_url": "",
+  "boot_context_url": "http://127.0.0.1:81/alpharking/admin",
+  "gate_config": "gate.json",
+  "spaces_config": "spaces.json",
+  "reference": "reference.png"
+}

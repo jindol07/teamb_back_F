@@ -301,8 +301,10 @@ def create_vehicle_tracker(tracking_target='vehicle', imgsz=None):
         raise ValueError('차량 탐지 클래스가 없습니다.')
 
     def track(frame):
+        # 번호판 모델의 겹친 클래스 상자를 같은 번호판 두 대로 세지 않습니다.
+        options = {'agnostic_nms': True, 'iou': .5} if tracking_target == 'plate' else {}
         result = model.track(frame, persist=True, tracker='bytetrack.yaml', classes=classes,
-                             conf=.25, imgsz=imgsz, verbose=False)[0]
+                             conf=.25, imgsz=imgsz, verbose=False, **options)[0]
         return [] if result.boxes.id is None else [
             {'track_id': int(box.id.item()), 'box': list(map(int, box.xyxy[0].tolist()))}
             | ({'plate_detection_confidence': float(box.conf.item())} if tracking_target == 'plate'

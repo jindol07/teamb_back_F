@@ -48,10 +48,21 @@ class _CollectorHandler(BaseHTTPRequestHandler):
             code = self.server.codes.pop(0)
         else:
             code = 201
+        # Spring Boot FireSafetyResponse와 동일한 성공 ACK를 반환합니다.
+        ack = {
+            "transitionId": data["transition_id"],
+            "outcome": "STORED",
+            "aiDetectionEventId": 1,
+            "safetyIncidentId": None if data["status"] == "CLEARED" else 1,
+            "notificationsCreated": 0,
+            "isTest": data["is_test"],
+        }
+        raw = json.dumps(ack).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(raw)))
         self.end_headers()
-        self.wfile.write(b'{}')
+        self.wfile.write(raw)
 
     def log_message(self, *args):
         pass

@@ -9,12 +9,73 @@
 | 결과 API·CSV 내보내기·수동 정답 검토·HTML·진단 | [저장 결과 조회와 검토](docs/RESULTS_REVIEW.md) |
 | Boot 요청 규격·중복 억제·응답 처리·HTTP 경로 | [입출차 연동과 중복 억제](docs/VEHICLE_INTEGRATION.md) |
 
+시연 실행·읽기 전용 사전 점검은 [입출차 연동 설명서](docs/VEHICLE_INTEGRATION.md)의 “시연 실행과 중단 점검”을 참고합니다.
+
+## 설치 파일의 역할
+
+- `apcms_ai/requirements.txt`: 문의·추천·Vision·Notebook을 포함한 통합 패키지 목록입니다.
+- `ai_vision/requirements-runtime.txt`: Vision 실행 버전이며 Docker에서도 사용합니다. 전체 전이 의존성을 고정한 lock 파일은 아닙니다.
+- `ai_vision/requirements.txt`: 위 두 파일을 함께 참조하는 개발 설치 진입점입니다. 중복 버전 선언 대신 통합 조건과 Vision 실행 조건을 동시에 만족시킵니다.
+
+기준 폴더에서 `python -m pip install -r ai_vision/requirements.txt`를 사용합니다. 기존 성공 환경을 덮어쓰기 전에 별도 가상환경에서 확인합니다.
+통합 파일만 설치한 결과, 위 개발 파일로 설치한 결과, Linux runtime 설치 결과는 서로 구분해 기록합니다.
+Windows 새 환경과 AWS Linux runtime 검증은 완료했습니다. 구체적인 범위·한계는 HANDOFF를 기준으로 확인합니다.
+
+## 팀장님 배포 인계
+
+Kubernetes 배포는 팀장님이 일괄 진행합니다. 이 작업에서는 추가 AWS 시험·클러스터 설치·배포를 진행하지 않습니다.
+아래는 Vision API·주차 기능의 실행 조건이며, 문의·추천 통합 서비스와 화재 기능의 배포 검증 결과는 포함하지 않습니다.
+
+| 항목 | 인계 기준 |
+|---|---|
+| Python/플랫폼 | Python3.12, 검증 플랫폼 Linux amd64 CPU |
+| 패키지 | Vision API 단독은 `ai_vision/requirements-runtime.txt`; 통합 개발은 `ai_vision/requirements.txt` |
+| Docker | `ai_vision/Dockerfile`, 빌드 컨텍스트 `apcms_ai`, 전용 `Dockerfile.dockerignore` 함께 사용 |
+| 실행 | Vision 단독 `ai_vision.app:app`, 내부8000, uvicorn worker1. 통합 앱은 `main:app`으로 별도 구분 |
+| 시스템 라이브러리 | Dockerfile의 libgl1/libglib2.0-0/libgomp1, CPU Torch 설치 조건 유지 |
+| YOLO 모델 | `yolo11n.pt`, `license_plate_yolov8n.pt`; 이미지에 포함하지 않고 모델 경로에 읽기 전용 제공 |
+| OCR 모델 | `PP-OCRv5_server_det`, `korean_PP-OCRv5_mobile_rec` 추론 폴더. 두 경로를 함께 지정하며 가중치뿐 아니라 inference.yml/구조파일도 필요 |
+| 저장소/권한 | 모델은 읽기 가능, 결과는 UID10001의 실제 쓰기 가능 경로 필요. 결과 보존 정책은 팀 배포 설정에서 결정 |
+| 상태 확인 | `/health`는 프로세스, `/ready`는 파일·저장소만 확인. 실제 추론 성공과 구분 |
+| 자원 근거 | CPU2/메모리4GiB 제한의 순차 사진 시험에서 최고약2.13GiB/OOM0. 동시·장시간 부하 기준은 아님 |
+| 상태 공유 | 중복 억제·요청 제한이 프로세스 메모리 기준. worker/Pod 복제 확대 시 별도 설계 필요 |
+| 현장 카메라 | SPACE/Q 미리보기와 촬영은 현장 Windows 실행. Pod에서 현장 USB 카메라에 자동 접근한다고 가정하지 않음 |
+| 복구 워커 | 사용자 결정으로 별도 화재 리커버리 워커 제외. 주차 시험 데이터 정리는 별개 |
+
+필요한 환경변수(값에 비밀키를 적거나 로컬 `.env`를 이미지에 복사하지 않습니다):
+
+| 변수 | 용도 |
+|---|---|
+| `VISION_MODEL_DIR` | YOLO 모델 폴더. Docker 기본 `/app/ai_vision/models` |
+| `VISION_OCR_DETECTION_MODEL_DIR` | OCR 탐지 모델 추론 폴더의 컨테이너 내부 경로 |
+| `VISION_OCR_RECOGNITION_MODEL_DIR` | OCR 한국어 인식 모델 추론 폴더의 컨테이너 내부 경로 |
+| `VISION_RESULT_DIR` | 결과 저장 경로. Docker 기본 `/var/lib/vision/results` |
+| `VISION_DATA_DIR` | 주차면 설정 등 데이터 경로. Docker 기본 `/app/ai_vision/data` |
+| `VISION_CORS_ORIGINS` | 브라우저 직접 접근 시 허용 origin의 JSON 배열. 기본 `[]` |
+
+`YOLO_AUTOINSTALL=false`, `PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK=True`, `MPLBACKEND=Agg`는 Dockerfile에 설정돼 있습니다.
+OCR 경로를 지정하지 않으면 캐시/다운로드 경로를 사용할 수 있으므로, 외부망 없이 실행할 배포에서는 두 모델 경로를 명시합니다.
+
+```bash
+# apcms_ai 디렉터리에서 팀 배포 이미지 생성
+# 모델·결과·비밀설정은 빌드 묶음에 넣지 않습니다.
+docker build -f ai_vision/Dockerfile -t apcms-vision:handoff .
+```
+
+Vision API의 이미지 인식 실행 자체에는 DB 계정이 필요하지 않습니다. 주차 이벤트를 Boot로 전송하는 현장 프로세스는 별도로 Boot context URL·API 키·명시적 전송 활성화와 API 계약을 맞춰야 합니다.
+점유 송신기의 실제 설정명은 `PARKING_AI_BASE_URL`, `PARKING_AI_API_KEY`(기존 호환 `AI_OCCUPANCY_API_KEY`), `PARKING_AI_SEND_ENABLED`이며 기본 전송은 비활성입니다.
+입출차·구획연결 CLI와 시연 프로필의 설정 방법, 자동해제 비활성·DB LINK_VERSION/트리거 및 AWS11g 적용 상태는 [입출차 연동](docs/VEHICLE_INTEGRATION.md)과 [HANDOFF](docs/HANDOFF.md)를 함께 확인합니다.
+JDK/Gradle과 직접 DB 도우미는 Windows 시험행 생성·정리 도구의 전제이며 Vision API Pod의 필수 의존성은 아닙니다.
+
+최신 검증: Windows 새 환경895개 회귀/실제HTTP인식, AWS Docker 서버 검사72개 통과·개발도구1개 제외/91소6408 인식/서버 및 컨테이너 재시작 재성공.
+Linux 결과는 Vision API·주차 소스 범위이며 기존 서비스 교체·Kubernetes·최종 Boot/DB 연결·실차 검증은 하지 않았습니다.
+
 ## 현재 구현과 검증 범위
 
 - 저장 영상의 차량 추적 → 화면 방향 UP/DOWN 판정 → 통과 ID별 OCR → 결과 저장
 - 저장 결과 조회·검색·CSV, 수동 번호판 정답 비교, 오프라인 이미지 검토, 로그 연결 진단
 - 입출차 요청 검증·초안·메모리 중복 억제·응답 분류·기본 비활성 HTTP 클라이언트
-- 기존 Python 3.12.7 가상환경의 최신 전체 자동 테스트 745개 통과
+- 최신 회귀검사·실제 시연 결과와 남은 우선순위는 [작업 인수인계](docs/HANDOFF.md)의 현재 상태 표를 기준으로 확인
 - 실시간 차량·번호판·구획 진행 표시, 기준 사진 겹침 확인, 구획 설정 기반 빈 기준 촬영은 [영상 분석 설명서](docs/VIDEO_ANALYSIS.md)에 통합
 - 카메라 프레임 수집·추적·OCR·기본 비활성 전송 판단의 세션 루프 구현
 - 선택적인 최신 프레임 수집 및 원격 OCR 비동기 처리: 유한 대기열·원본 시각 보관·미완료 작업 집계
