@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<!-- DashboardDao의 일별 통계 조회. DATE 열에 함수를 적용하지 않고 날짜 범위로 검색한다. -->
+<mapper namespace="kr.co.alpharking.dao.dashboard.DashboardDao">
+    <select id="findDailySummary" resultType="DailyParkingSummaryRow">
+        SELECT TO_CHAR(SUMMARY_DATE, 'YYYY-MM-DD') AS "summaryDate",
+               USAGE_COUNT AS "usageCount",
+               RESERVATION_COUNT AS "reservationCount",
+               VISITOR_COUNT AS "visitorCount"
+          FROM DAILY_PARKING_SUMMARY
+         WHERE SUMMARY_DATE &gt;= TO_DATE(#{startDate}, 'YYYY-MM-DD')
+           AND SUMMARY_DATE &lt; TO_DATE(#{endDate}, 'YYYY-MM-DD')
+         ORDER BY SUMMARY_DATE
+    </select>
+    <!-- 최근 입차 200건에 제한하지 않고 전체 입차·출차의 발생 시각으로 최신 5건을 고른다. -->
+    <select id="findRecentParkingEvents" resultType="DashboardParkingEventRow">
+        WITH recent_events AS (
+            SELECT * FROM (
+                SELECT * FROM (
+                    SELECT PARKING_USAGE_ID, VEHICLE_NUMBER, PARKING_SPACE_ID,
+                           ENTRY_AT AS EVENT_AT, 'ENTRY' AS EVENT_TYPE
+                      FROM PARKING_USAGE WHERE ENTRY_AT IS NOT NULL
+                    UNION ALL
+                    SELECT PARKING_USAGE_ID, VEHICLE_NUMBER, PARKING_SPACE_ID,
+                           EXIT_AT AS EVENT_AT, 'EXIT' AS EVENT_TYPE
+                      FROM PARKING_USAGE WHERE EXIT_AT IS NOT NULL
+                )
+                ORDER BY EVENT_AT DESC, PARKING_USAGE_ID DESC, EVENT_TYPE DESC
+            ) WHERE ROWNUM &lt;= 5
+        )
+        SELECT e.PARKING_USAGE_ID AS "parkingUsageId",
+               e.VEHICLE_NUMBER AS "vehicleNumber",
+               e.EVENT_TYPE AS "eventType",
+               TO_CHAR(e.EVENT_AT, 'YYYY-MM-DD"T"HH24:MI:SS') AS "occurredAt",
+               CASE WHEN f.FLOOR_NO IS NULL THEN NULL
+                    ELSE TO_CHAR(f.FLOOR_NO) || 'F-' || z.ZONE_CODE || s.SPACE_NUMBER
+                END AS "spaceCode"
+          FROM recent_events e
+          LEFT JOIN PARKING_SPACE s ON s.PARKING_SPACE_ID = e.PARKING_SPACE_ID
+          LEFT JOIN PARKING_ZONE z ON z.PARKING_ZONE_ID = s.PARKING_ZONE_ID
+          LEFT JOIN PARKING_FLOOR f ON f.PARKING_FLOOR_ID = z.PARKING_FLOOR_ID
+         ORDER BY e.EVENT_AT DESC, e.PARKING_USAGE_ID DESC, e.EVENT_TYPE DESC
+    </select>
+</mapper>

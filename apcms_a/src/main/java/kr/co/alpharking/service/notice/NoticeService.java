@@ -219,12 +219,6 @@ public class NoticeService {
 		String changedAt = noticeDao.getCurrentDateTime();
 
 		// 4. 기존에 유효한 공지사항 버전 종료
-//		int closedCount = noticeDao.closeCurrentNoticeHistory(noticeId, changedAt);
-//
-//		if (closedCount != 1) {
-//			throw new IllegalStateException("현재 유효한 공지사항 버전이 정확히 1건이어야 합니다.");
-		
-		//}
 		int closedCount = noticeDao.closeCurrentNoticeHistory(noticeId, changedAt);
 
 		if (closedCount != 1) {
