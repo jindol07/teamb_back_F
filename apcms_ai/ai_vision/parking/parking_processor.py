@@ -98,6 +98,12 @@ class ParkingOccupancyProcessor:
                 for key, value in self.states.items()]
 
     def matching_spaces(self, seconds):
+        return self._continuous_spaces(seconds, 'OCCUPIED')
+
+    def empty_spaces(self, seconds):
+        return self._continuous_spaces(seconds, 'EMPTY')
+
+    def _continuous_spaces(self, seconds, status):
         # 4. 화면 표시용 마지막 확정값과 현재 차량 연결에 쓸 연속 근거를 구분합니다.
         if (type(seconds) not in (int, float) or not math.isfinite(seconds) or seconds < 0
                 or (self._last_call is not None and seconds < self._last_call)):
@@ -105,7 +111,7 @@ class ParkingOccupancyProcessor:
         if self._last_sample is None or seconds - self._last_sample > self._gap:
             return set()
         return {key for key, state in self.states.items()
-                if state['confirmed'] == state['previous'] == 'OCCUPIED'
+                if state['confirmed'] == state['previous'] == status
                 and state['same_count'] >= self._stable}
 
     def occupancy(self):

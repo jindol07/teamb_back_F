@@ -19,7 +19,6 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
-import jakarta.annotation.PostConstruct;
 
 @EnableWebSecurity
 @Configuration
@@ -62,7 +61,6 @@ public class SecurityConfig {
                 .httpBasic((basic) -> basic.disable())
             	//.authenticationProvider(daoAuthenticationProvider())
                 .authorizeHttpRequests((auth) -> auth
-                		.requestMatchers("/api/notice/**").permitAll()
                         .requestMatchers("/api/auth/**").permitAll() // /api/auth/** 에서 오는 모든 요청은 허용
                         .requestMatchers("/demos/**").permitAll() 
                         .requestMatchers("/api/gallery/**").permitAll()

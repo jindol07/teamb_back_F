@@ -145,6 +145,7 @@ public class ParkingSpaceService {
         ParkingUsageRow affected = null;
         boolean usageChanged = false;
         // [1023_1010] 사용중 보정은 기존 미출차 기록을 선택해야 한다. 다른 구획 연결·중복 번호판·점유 충돌을 거절한다.
+        String reservationChange = "";
         if ("ASSIGN".equals(action)) {
             if (!"OCCUPIED".equals(status) || request.parkingUsageId() == null) {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "사용중으로 연결할 기존 입차 기록을 선택해 주세요.");
@@ -168,6 +169,9 @@ public class ParkingSpaceService {
                 conflict("다른 차량이 연결된 구획입니다. 기존 차량 기록을 먼저 정리해 주세요.");
             }
             usageChanged = affected.getParkingSpaceId() == null;
+            if (usageChanged) {
+                reservationChange = " / 예약 연결 " + reservationLabel(affected.getParkingReservationId()) + "→없음(수동 연결)";
+            }
             if (usageChanged && usages.assignSpace(affected.getParkingUsageId(), id) != 1) conflict("차량 연결 상태가 변경되었습니다.");
         // [1023_1010] DETACH는 입차 기록을 유지하고 구획만 해제한다. EXIT는 실제 출차 시각까지 검증해 출차 처리한다.
         } else if ("DETACH".equals(action) || "EXIT".equals(action)) {
@@ -176,6 +180,8 @@ public class ParkingSpaceService {
                 throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "사용가능 처리할 현재 연결 차량을 확인해 주세요.");
             }
             affected = active.getFirst();
+            reservationChange = " / 예약 연결 " + reservationLabel(affected.getParkingReservationId())
+                + ("EXIT".equals(action) ? " 유지(출차 이력)" : "→없음");
             if ("EXIT".equals(action)) {
                 final LocalDateTime exit;
                 try { exit = LocalDateTime.parse(request.exitAt()); }
@@ -209,8 +215,9 @@ public class ParkingSpaceService {
                 + " / " + action + " / 기존 " + beforeUsage
                 + (affected == null ? "" : " / 대상 " + describe(affected))
                 + ("ASSIGN".equals(action) ? "→구획 " + id : "DETACH".equals(action) ? "→구획 미연결" : "")
-                + ("EXIT".equals(action) ? " / 출차 " + request.exitAt() : "") + " / 사유: " + reason;
         // [1023_1010] 실제 컬럼의 문자/바이트 제한을 확인한다. 내용을 몰래 자르거나 컬럼을 변경하지 않는다.
+                + ("EXIT".equals(action) ? " / 출차 " + request.exitAt() : "")
+                + reservationChange + " / 사유: " + reason;
         if (dao.countValidTextColumns(memo, audit) != 3) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "메모 또는 보정 이력이 기존 DB 컬럼 길이를 초과합니다. 입력을 줄여 주세요.");
         }
@@ -231,9 +238,10 @@ public class ParkingSpaceService {
     // [1023_1010] 감사 이력에 이용 기록 ID·차량번호·구획을 식별 가능한 문자열로 기록한다.
     private static String describe(ParkingUsageRow usage) {
         return "#" + usage.getParkingUsageId() + " " + usage.getVehicleNumber()
-                + "(구획 " + usage.getParkingSpaceId() + ")";
+                + "(구획 " + usage.getParkingSpaceId() + ", 예약 " + reservationLabel(usage.getParkingReservationId()) + ")";
     }
     // [1023_1010] 동시 변경·연결 충돌을 HTTP 409로 전달한다.
+    private static String reservationLabel(Long id) { return id == null ? "없음" : "#" + id; }
     private static void conflict(String message) {
         throw new ResponseStatusException(HttpStatus.CONFLICT, message);
     }

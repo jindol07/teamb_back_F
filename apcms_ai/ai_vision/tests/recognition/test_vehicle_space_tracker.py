@@ -28,6 +28,170 @@ def observation(index, track=1, box=(25, 25, 75, 90), plate='91소6408', kind='K
         'plate_detection_confidence': .9}}
 
 
+class EntryIdentityParkingTests(unittest.TestCase):
+    def setUp(self):
+        self.identity = {'owner_session_id': 'gate_test', 'event_id': 'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+                         'parking_usage_id': 70, 'plate_number': '91소6408', 'confidence': .8}
+        self.frame = np.zeros((140, 240, 3), dtype=np.uint8)
+        self.track = Mock(return_value=[{'track_id': 1, 'box': [25,25,75,90], 'vehicle_detection_confidence': .9}])
+        self.observer = VehicleSpaceObserver(CONFIG, tracker=self.track, handoff_reader=lambda: self.identity)
+        self.addCleanup(self.observer.close)
+        self.observer.prepare()
+
+    def process(self, i, spaces=None):
+        return self.observer.process(i, i*.5, self.frame, eligible_spaces={'A-01'} if spaces is None else spaces)
+
+    def match(self):
+        events=[]
+        for i in range(5):
+            events.extend(self.process(i)['events'])
+        return events
+
+    def test_single_stationary_target_uses_entry_identity_without_ocr(self):
+        events = self.match()
+        match = next(e for e in events if e['kind'] == 'LOCAL_SPACE_MATCH')
+        self.assertEqual(match['identity_basis'], 'SINGLE_VEHICLE_ENTRY_HANDOFF')
+        self.assertEqual(match['parking_usage_id'], 70)
+        self.assertEqual(self.observer.summary()['ocr_submitted'], 0)
+        self.assertEqual(self.observer.tracker.states[1]['samples'], [])
+        self.assertEqual(self.observer.tracker.states[1]['number'], '91소6408')
+
+    def test_exit_or_source_loss_immediately_removes_current_identity(self):
+        self.match()
+        self.identity = None
+        self.process(5)
+        self.assertFalse(any(s['matched'] for s in self.observer.tracker.states.values()))
+
+    def test_new_entry_generation_requires_new_dwell(self):
+        self.match()
+        self.identity = self.identity | {'event_id': 'a47ac10b-58cc-4372-a567-0e02b2c3d479', 'parking_usage_id': 71}
+        outcome = self.process(5)
+        self.assertFalse(any(e['kind'] == 'LOCAL_SPACE_MATCH' for e in outcome['events']))
+        self.assertIsNone(self.observer.tracker.states[1]['matched'])
+
+    def test_multiple_targets_revoke_instead_of_guessing_identity(self):
+        self.match()
+        self.track.return_value += [{'track_id': 2, 'box': [135,25,180,90], 'vehicle_detection_confidence': .9}]
+        self.process(5, {'A-01','A-02'})
+        self.assertFalse(any(s['matched'] for s in self.observer.tracker.states.values()))
+
+    def test_no_identity_never_accumulates_dwell_or_creates_match(self):
+        self.identity = None
+        for i in range(7):
+            self.assertFalse(any(e['kind'] == 'LOCAL_SPACE_MATCH' for e in self.process(i)['events']))
+
+    def test_missing_target_confidence_prevents_assignment(self):
+        self.track.return_value[0].pop('vehicle_detection_confidence')
+        self.assertFalse(any(e['kind'] == 'LOCAL_SPACE_MATCH' for e in self.match()))
+
+    def test_multiple_occupied_spaces_hold_even_with_single_target(self):
+        for i in range(6):
+            self.assertFalse(any(e['kind'] == 'LOCAL_SPACE_MATCH' for e in self.process(i, {'A-01','A-02'})['events']))
+
+
+class PlateConflictRecoveryTests(unittest.TestCase):
+    def make_tracker(self):
+        tracker = VehicleSpaceTracker(CONFIG, recover_plate_conflicts=True)
+        for i in range(5):
+            tracker.process(i, i*.5, [observation(i)])
+        tracker.process(5, 2.5, [observation(5, plate='91스6408')])
+        self.assertIsNone(tracker.states[1]['matched'])
+        return tracker
+
+    def test_only_five_fresh_consistent_frames_recover(self):
+        tracker = self.make_tracker()
+        for i in range(6, 10):
+            tracker.process(i, i*.5, [observation(i)])
+            self.assertIsNone(tracker.states[1]['matched'])
+        events = tracker.process(10, 5, [observation(10)])
+        self.assertEqual(tracker.states[1]['number'], '91소6408')
+        self.assertTrue(any(e['kind'] == 'PLATE_RECOVERED' for e in events))
+
+    def test_alternating_valid_numbers_never_recover(self):
+        tracker = self.make_tracker()
+        for i in range(6, 30):
+            tracker.process(i, i*.5, [observation(i, plate='91스6408' if i%2 else '91소6408')])
+            self.assertIsNone(tracker.states[1]['matched'])
+
+    def test_invalid_frame_breaks_fresh_consistency(self):
+        tracker = self.make_tracker()
+        for i in range(6, 11):
+            tracker.process(i, i*.5, [observation(i, kind='REVIEW' if i == 8 else 'KOREAN_VALID')])
+        self.assertIsNone(tracker.states[1]['matched'])
+
+    def test_five_fast_frames_do_not_meet_recovery_duration(self):
+        tracker = self.make_tracker()
+        for i in range(6, 11):
+            row = observation(i)
+            seconds = 2.5+(i-5)*.3
+            row['plate_sample']['video_seconds'] = seconds
+            tracker.process(i, seconds, [row])
+        self.assertIsNone(tracker.states[1]['matched'])
+
+    def test_occupancy_loss_discards_conflict_recovery_evidence(self):
+        tracker = self.make_tracker()
+        tracker.process(6, 3, [observation(6)], eligible_spaces=set())
+        self.assertNotIn('conflict_after', tracker.states[1])
+        self.assertEqual(tracker.states[1]['samples'], [])
+
+
+class PlateMotionWindowTests(unittest.TestCase):
+    def setUp(self):
+        self.config = {'image_width': 1280, 'image_height': 1024, 'spaces': [
+            {'id': 'A-01', 'points': [[1, 1], [600, 1], [600, 900], [1, 900]]},
+            {'id': 'A-02', 'points': [[650, 1], [1250, 1], [1250, 900], [650, 900]]}]}
+        self.tracker = VehicleSpaceTracker(self.config, motion_window_seconds=.1)
+        for i in range(141):
+            self.feed(i, i * .015)
+        self.assertEqual(self.tracker.states[1]['matched'], 'A-01')
+
+    def feed(self, index, seconds, dx=0, eligible=None):
+        row = observation(index, box=(200+dx, 200, 290+dx, 230))
+        row['plate_sample']['video_seconds'] = seconds
+        if index % 20:
+            row.pop('plate_sample')
+        return self.tracker.process(index, seconds, [row], eligible_spaces=eligible)
+
+    def test_pixel_jitter_at_fifteen_milliseconds_keeps_connection(self):
+        for i in range(141, 180):
+            events = self.feed(i, i * .015, i % 2)
+            self.assertFalse(any(e['kind'] == 'MATCH_REVIEW' for e in events))
+        self.assertEqual(self.tracker.states[1]['matched'], 'A-01')
+
+    def test_sustained_motion_still_withdraws_connection(self):
+        events = []
+        for i in range(141, 151):
+            events.extend(self.feed(i, i * .015, (i-140)*2))
+        self.assertTrue(any(e.get('reason') == 'POSITION_MOVED' for e in events))
+        self.assertIsNone(self.tracker.states[1]['matched'])
+
+    def test_space_change_is_immediate(self):
+        events = self.feed(141, 2.115, 500)
+        self.assertTrue(any(e.get('reason') == 'SPACE_CHANGED' for e in events))
+        self.assertIsNone(self.tracker.states[1]['matched'])
+
+    def test_occupancy_loss_is_immediate(self):
+        events = self.feed(141, 2.115, eligible=set())
+        self.assertTrue(any(e.get('reason') == 'OCCUPANCY_NOT_CONTINUOUS' for e in events))
+        self.assertEqual(self.tracker.states[1]['samples'], [])
+
+    def test_absence_discards_connection_and_old_evidence(self):
+        self.tracker.process(141, 2.115, [])
+        self.feed(142, 2.13)
+        self.assertIsNone(self.tracker.states[1]['matched'])
+        self.assertEqual(self.tracker.states[1]['samples'], [])
+
+    def test_input_size_defaults_and_explicit_override(self):
+        from ai_vision.parking.vehicle_space_tracker import tracking_image_size
+        self.assertEqual(tracking_image_size('plate'), 1280)
+        self.assertEqual(tracking_image_size('vehicle'), 640)
+        self.assertEqual(tracking_image_size('plate', 640), 640)
+        self.assertEqual(tracking_image_size('plate', 960), 960)
+        for value in (True, 640.0, 320, '1280'):
+            with self.assertRaises(ValueError):
+                tracking_image_size('plate', value)
+
+
 class VehicleSpaceTrackerTests(unittest.TestCase):
     def test_occupancy_loss_revokes_plate_and_requires_fresh_dwell_and_samples(self):
         tracker = VehicleSpaceTracker(CONFIG)
@@ -281,6 +445,21 @@ class VehicleSpaceObserverTests(unittest.TestCase):
             self.assertEqual(observer.current_matches(occupancy, index * .5), [])
         self.assertEqual(observer.tracker.states[1]['since'], 3)
         self.assertTrue(all(s['video_seconds'] >= 3 for s in observer.tracker.states[1]['samples']))
+
+    def test_plate_conflict_keeps_async_ocr_running_until_fresh_recovery(self):
+        row = dict(self.row, plate_detection_confidence=.9)
+        reader = Mock(side_effect=[self.result,
+            dict(self.result, plate_number='91스6408')] + [self.result]*14)
+        observer = self.observer(reader=reader, tracker=Mock(return_value=[row]), tracking_target='plate')
+        events = []
+        for index in range(14):
+            outcome = observer.process(index, index*.5, self.frame, eligible_spaces={'A-01'})
+            events.extend(outcome['events'])
+            self.finish(observer)
+        self.assertTrue(any(e['kind'] == 'PLATE_CONFLICT' for e in events))
+        self.assertTrue(any(e['kind'] == 'PLATE_RECOVERED' for e in events))
+        self.assertEqual(observer.tracker.states[1]['number'], '91소6408')
+        self.assertGreater(reader.call_count, 7)
 
     def test_ocr_wait_does_not_stop_tracking_or_queue_more_images(self):
         started, release, finished = threading.Event(), threading.Event(), threading.Event()
@@ -565,6 +744,21 @@ class RunVehicleSpaceTrackingTests(unittest.TestCase):
         self.reader = Mock(return_value={'plate_number': '91소6408', 'plate_type': 'KOREAN_VALID',
                                         'plate_detection_confidence': .9})
 
+    def test_no_match_uses_ocr_or_dwell_from_before_continuous_occupancy(self):
+        occupied = np.zeros((140, 240, 3), dtype=np.uint8)
+        occupied[10:120, 10:95] = 255
+        self.capture.get.side_effect = [2.0, 17.0]
+        self.capture.read.side_effect = [(True, np.zeros_like(occupied))] * 5 + [(True, occupied)] * 12 + [(False, None)]
+        output = self.root / 'occupancy_order'
+        with patch('cv2.VideoCapture', return_value=self.capture):
+            run(self.source, self.config, output, tracker=self.tracker,
+                plate_reader=self.reader, reference_path=self.reference_image())
+        events = [json.loads(line) for line in (output / 'events.jsonl').read_text(encoding='utf-8').splitlines()]
+        matches = [event for event in events if event['kind'] == 'LOCAL_SPACE_MATCH']
+        self.assertTrue(matches)
+        self.assertTrue(all(event['local_occupancy_confirmed'] for event in matches))
+        self.assertGreaterEqual(matches[0]['video_seconds'], 6.5)
+
     def test_observations_and_match_use_video_time_without_sending(self):
         output = self.root / 'result'
         with patch('cv2.VideoCapture', return_value=self.capture):
@@ -778,7 +972,8 @@ class RunVehicleSpaceTrackingTests(unittest.TestCase):
     def test_same_video_confirmed_occupancy_and_plate_candidate_are_joined_without_events(self):
         occupied = np.zeros((140, 240, 3), dtype=np.uint8)
         occupied[10:120, 10:95] = 255
-        self.capture.read.side_effect = [(True, occupied.copy())] * 7 + [(False, None)]
+        self.capture.get.side_effect = [2.0, 11.0]
+        self.capture.read.side_effect = [(True, occupied.copy())] * 11 + [(False, None)]
         with patch('cv2.VideoCapture', return_value=self.capture), \
                 patch('ai_vision.parking.parking_processor.create_occupancy_event',
                       side_effect=AssertionError('저장 영상에서 전송 이벤트 생성 금지')):
@@ -799,7 +994,7 @@ class RunVehicleSpaceTrackingTests(unittest.TestCase):
             report = run(self.source, self.config, self.root / 'held', tracker=self.tracker,
                          plate_reader=self.reader, reference_path=self.reference_image())
         self.assertEqual(report['current_matches'], [])
-        self.assertEqual(report['held_matches'][0]['reason'], 'LOCAL_OCCUPANCY_NOT_CONFIRMED')
+        self.assertEqual(report['held_matches'], [])
         self.assertEqual(report['analysis_outcome'], 'NO_CURRENT_MATCH')
 
     def test_first_empty_observation_holds_old_occupied_confirmation(self):
@@ -813,7 +1008,7 @@ class RunVehicleSpaceTrackingTests(unittest.TestCase):
         self.assertEqual(report['current_matches'], [])
         self.assertEqual(report['local_occupancy']['matching_space_ids'], [])
         self.assertEqual(report['local_occupancy']['occupancy']['occupied_count'], 1)
-        self.assertEqual(len(report['held_matches']), 1)
+        self.assertEqual(report['held_matches'], [])
 
     def test_reference_resolution_and_missing_reference_fail_before_opening_video(self):
         import cv2
@@ -851,26 +1046,28 @@ class RunVehicleSpaceTrackingTests(unittest.TestCase):
         try:
             frame = np.zeros((140, 240, 3), dtype=np.uint8)
             frame[10:120, 10:95] = 255
-            for _ in range(7):
+            for _ in range(11):
                 writer.write(frame)
         finally:
             writer.release()
         report = run(source, self.config, self.root / 'real_joined', tracker=self.tracker,
                      plate_reader=self.reader, reference_path=self.reference_image())
         self.assertEqual(report['analysis_outcome'], 'LOCAL_MATCH_WITH_OCCUPANCY')
-        self.assertEqual(report['frames'], 7)
+        self.assertEqual(report['frames'], 11)
         self.assertEqual(report['recognition_mode'], 'INJECTED')
         self.assertFalse(report['http_enabled'])
 
     def test_context_review_requires_active_entry_even_with_local_occupancy(self):
         fixture = MatchContextTests()
         fixture.setUp()
+        fixture.context['fetched_at'] = '2026-10-22T12:00:06+09:00'
         fixture.context['active_usages'] = []
         context = self.root / 'no_entry_context.json'
         write_json_atomic(context, fixture.context)
         occupied = np.zeros((140, 240, 3), dtype=np.uint8)
         occupied[10:120, 10:95] = 255
-        self.capture.read.side_effect = [(True, occupied)] * 7 + [(False, None)]
+        self.capture.get.side_effect = [2.0, 11.0]
+        self.capture.read.side_effect = [(True, occupied)] * 11 + [(False, None)]
         with patch('cv2.VideoCapture', return_value=self.capture):
             report = run(self.source, self.config, self.root / 'no_entry', tracker=self.tracker,
                          plate_reader=self.reader, reference_path=self.reference_image(),
@@ -884,11 +1081,13 @@ class RunVehicleSpaceTrackingTests(unittest.TestCase):
     def test_local_occupancy_and_entry_context_are_reviewed_without_reservation_claim(self):
         fixture = MatchContextTests()
         fixture.setUp()
+        fixture.context['fetched_at'] = '2026-10-22T12:00:06+09:00'
         context = self.root / 'entry_context.json'
         write_json_atomic(context, fixture.context)
         occupied = np.zeros((140, 240, 3), dtype=np.uint8)
         occupied[10:120, 10:95] = 255
-        self.capture.read.side_effect = [(True, occupied)] * 7 + [(False, None)]
+        self.capture.get.side_effect = [2.0, 11.0]
+        self.capture.read.side_effect = [(True, occupied)] * 11 + [(False, None)]
         with patch('cv2.VideoCapture', return_value=self.capture):
             report = run(self.source, self.config, self.root / 'with_entry', tracker=self.tracker,
                          plate_reader=self.reader, reference_path=self.reference_image(),
@@ -897,6 +1096,249 @@ class RunVehicleSpaceTrackingTests(unittest.TestCase):
         self.assertEqual(report['context_review']['decision'], 'CONTEXT_MATCHED_LOCAL_ONLY')
         self.assertFalse(report['context_review']['reservation_checked'])
         self.assertFalse(report['http_enabled'])
+
+
+class PlatePositionTrackingTests(unittest.TestCase):
+    def test_plate_observer_uses_real_detection_confidence_and_withdraws_on_occupancy_loss(self):
+        row = {'track_id': 1, 'box': [25, 25, 75, 90], 'plate_detection_confidence': .61}
+        reader = Mock(return_value={'plate_number': '91소6408', 'plate_type': 'KOREAN_VALID',
+                                     'plate_detection_confidence': .99})
+        observer = VehicleSpaceObserver(CONFIG, tracker=lambda frame: [row], plate_reader=reader, tracking_target='plate')
+        self.addCleanup(observer.close)
+        observer.prepare()
+        events = []
+        frame = np.zeros((140, 240, 3), dtype=np.uint8)
+        for index in range(7):
+            if observer._pending is not None:
+                observer._pending.result(timeout=3)
+            events.extend(observer.process(index, index * .5, frame, eligible_spaces={'A-01'})['events'])
+        matches = [event for event in events if event['kind'] == 'LOCAL_SPACE_MATCH']
+        self.assertEqual(len(matches), 1)
+        self.assertEqual(matches[0]['plate_detection_confidence'], .61)
+        self.assertEqual(matches[0]['space_id'], 'A-01')
+        if observer._pending is not None:
+            observer._pending.result(timeout=3)
+        result = observer.process(7, 3.5, frame, eligible_spaces=set())
+        self.assertTrue(any(event['kind'] == 'MATCH_REVIEW' for event in result['events']))
+        self.assertIsNone(observer.tracker.states[1]['matched'])
+
+    def test_plate_target_prepares_direct_ocr_without_second_plate_detector(self):
+        from ai_vision.parking.vehicle_space_tracker import read_tracked_plate
+        observer = VehicleSpaceObserver(CONFIG, tracker=Mock(return_value=[]), tracking_target='plate', ocr_execution='thread')
+        self.addCleanup(observer.close)
+        with patch('ai_vision.recognition.recognizer._models') as models:
+            observer.prepare()
+            models.plate.assert_not_called()
+            models.ocr.assert_called_once()
+        self.assertIs(observer._reader, read_tracked_plate)
+        crop = np.zeros((20, 80, 3), dtype=np.uint8)
+        with patch('ai_vision.recognition.recognizer.recognize_plate', return_value={'plate_number': '91소6408'}) as read:
+            self.assertEqual(observer._reader(crop)['plate_number'], '91소6408')
+        self.assertIs(read.call_args.args[0], crop)
+
+    def test_missing_actual_plate_confidence_fails_before_ocr(self):
+        reader = Mock()
+        observer = VehicleSpaceObserver(CONFIG, tracker=lambda frame: [{'track_id': 1, 'box': [25,25,75,90]}],
+            plate_reader=reader, tracking_target='plate')
+        self.addCleanup(observer.close)
+        observer.prepare()
+        with self.assertRaises(ValueError):
+            observer.process(0, 0, np.zeros((140,240,3), dtype=np.uint8))
+        reader.assert_not_called()
+
+    def test_unknown_tracking_target_is_rejected_before_model_loading(self):
+        from ai_vision.parking.vehicle_space_tracker import create_vehicle_tracker
+        with self.assertRaises(ValueError):
+            create_vehicle_tracker('automatic-paper')
+        with self.assertRaises(ValueError):
+            VehicleSpaceObserver(CONFIG, tracking_target=True)
+
+
+class PlatePositionVideoTests(unittest.TestCase):
+    setUp = RunVehicleSpaceTrackingTests.setUp
+
+    def test_saved_video_uses_plate_confidence_and_existing_consensus(self):
+        self.tracker.return_value[0]['plate_detection_confidence'] = .62
+        self.reader.return_value = {'plate_number': '91소6408', 'plate_type': 'KOREAN_VALID'}
+        output = self.root / 'plate_target'
+        with patch('cv2.VideoCapture', return_value=self.capture):
+            report = run(self.source, self.config, output, tracker=self.tracker,
+                         plate_reader=self.reader, tracking_target='plate')
+        events = [json.loads(line) for line in (output / 'events.jsonl').read_text(encoding='utf-8').splitlines()]
+        match = next(event for event in events if event['kind'] == 'LOCAL_SPACE_MATCH')
+        self.assertEqual(match['plate_detection_confidence'], .62)
+        self.assertEqual(report['tracking_target'], 'plate')
+        self.assertFalse(report['http_enabled'])
+
+    def test_plate_target_rejects_remote_vehicle_crop_reader_before_capture(self):
+        with patch('cv2.VideoCapture') as capture:
+            with self.assertRaises(ValueError):
+                run(self.source, self.config, self.root / 'remote_plate', tracking_target='plate',
+                    vision_api_url='http://example.invalid')
+            capture.assert_not_called()
+
+
+class ProcessSpaceOCRTests(unittest.TestCase):
+    def observer(self, pool):
+        row = {'track_id': 1, 'box': [25,25,75,90], 'plate_detection_confidence': .63}
+        observer = VehicleSpaceObserver(CONFIG, tracker=lambda frame: [dict(row)], tracking_target='plate')
+        self.addCleanup(observer.close)
+        ready = Mock()
+        ready.result.return_value = 12345
+        pending = Mock()
+        pending.done.return_value = False
+        pending.result.return_value = None
+        pool.submit.side_effect = [ready, pending, pending]
+        with patch('concurrent.futures.ProcessPoolExecutor', return_value=pool), \
+                patch('ai_vision.recognition.recognizer._models') as models:
+            observer.prepare()
+            models.ocr.assert_not_called()
+            models.plate.assert_not_called()
+        return observer, row, pending
+
+    def test_default_local_plate_ocr_uses_spawn_worker_and_only_one_pending_crop(self):
+        from ai_vision.parking.vehicle_space_tracker import prepare_space_ocr_process, recognize_space_ocr_process
+        pool = Mock()
+        observer, row, pending = self.observer(pool)
+        frame = np.zeros((140,240,3), dtype=np.uint8)
+        observer.process(0,0,frame)
+        observer.process(1,.5,frame)
+        self.assertEqual(pool.submit.call_count,2)
+        self.assertIs(pool.submit.call_args_list[0].args[0],prepare_space_ocr_process)
+        self.assertIs(pool.submit.call_args_list[1].args[0],recognize_space_ocr_process)
+        self.assertEqual(pool.submit.call_args_list[1].args[1]['plate_detection_confidence'],.63)
+        self.assertEqual(observer.summary()['ocr_execution'],'process')
+        self.assertEqual(observer.summary()['ocr_worker_pid'],12345)
+        observer.close()
+        pool.shutdown.assert_called_once_with(wait=True,cancel_futures=True)
+
+    def test_process_result_retains_original_frame_and_cannot_attach_after_movement(self):
+        from ai_vision.parking.vehicle_space_tracker import pack_space_ocr_result
+        pool = Mock()
+        observer,row,pending = self.observer(pool)
+        frame = np.zeros((140,240,3),dtype=np.uint8)
+        observer.process(0,0,frame)
+        job = pool.submit.call_args.args[1]
+        packed = pack_space_ocr_result(job,{'plate_number':'91소6408','plate_type':'KOREAN_VALID'},'plate')
+        self.assertEqual(packed['sample']['frame_index'],0)
+        self.assertEqual(packed['sample']['video_seconds'],0)
+        row['box'] = [140,25,190,90]
+        pending.done.return_value = True
+        pending.result.return_value = packed
+        result = observer.process(1,.5,frame)
+        self.assertEqual(observer.tracker.states[1]['space'],'A-02')
+        self.assertEqual(observer.tracker.states[1]['samples'],[])
+        self.assertFalse(any(e['kind']=='LOCAL_SPACE_MATCH' for e in result['events']))
+
+    def test_worker_failure_propagates_and_cleanup_still_runs(self):
+        from concurrent.futures.process import BrokenProcessPool
+        pool = Mock()
+        observer,row,pending = self.observer(pool)
+        frame = np.zeros((140,240,3),dtype=np.uint8)
+        observer.process(0,0,frame)
+        pending.done.return_value = True
+        pending.result.side_effect = BrokenProcessPool('worker ended')
+        with self.assertRaises(BrokenProcessPool):
+            observer.process(1,.5,frame)
+        observer.close()
+        pool.shutdown.assert_called_once()
+
+    def test_process_execution_cannot_silently_serialize_injected_reader(self):
+        with self.assertRaises(ValueError):
+            VehicleSpaceObserver(CONFIG,plate_reader=Mock(),ocr_execution='process')
+
+    def test_process_result_is_picklable_without_camera_or_bound_observer(self):
+        from concurrent.futures import ProcessPoolExecutor
+        from multiprocessing import get_context
+        from ai_vision.parking.vehicle_space_tracker import pack_space_ocr_result
+        job = {'track_id':1,'space_id':'A-01','since':0,'frame_index':3,
+               'video_seconds':1.5,'plate_detection_confidence':.63}
+        with ProcessPoolExecutor(max_workers=1,mp_context=get_context('spawn')) as pool:
+            result = pool.submit(pack_space_ocr_result,job,
+                {'plate_number':'91소6408','plate_type':'KOREAN_VALID'},'plate').result(timeout=30)
+        self.assertEqual(result['sample']['plate_detection_confidence'],.63)
+        self.assertEqual(result['sample']['video_seconds'],1.5)
+
+
+class ConnectionWithdrawalReasonTests(unittest.TestCase):
+    def matched(self):
+        tracker = VehicleSpaceTracker(CONFIG)
+        for index in range(5):
+            tracker.process(index,index*.5,[observation(index)],eligible_spaces={'A-01','A-02'})
+        self.assertEqual(tracker.states[1]['matched'],'A-01')
+        return tracker
+
+    def test_position_space_boundary_and_missing_observation_have_distinct_reasons(self):
+        for box,reason in [((40,25,90,90),'POSITION_MOVED'),((145,25,195,90),'SPACE_CHANGED'),
+                           ((95,25,125,90),'OUTSIDE_SPACE')]:
+            with self.subTest(reason=reason):
+                tracker = self.matched()
+                events = tracker.process(5,2.5,[observation(5,box=box)])
+                event = next(e for e in events if e['kind']=='MATCH_REVIEW')
+                self.assertEqual(event['reason'],reason)
+                self.assertEqual(event['plate_number'],'91소6408')
+                self.assertGreater(event['evidence']['distance_pixels'],0)
+        tracker = self.matched()
+        event = next(e for e in tracker.process(5,2.5,[]) if e['kind']=='MATCH_REVIEW')
+        self.assertEqual(event['reason'],'TRACK_NOT_OBSERVED')
+        self.assertEqual(event['evidence']['elapsed_seconds'],.5)
+
+    def test_gap_is_not_reported_as_physical_departure(self):
+        tracker = self.matched()
+        row = observation(5)
+        row['plate_sample']['video_seconds'] = 4
+        event = next(e for e in tracker.process(5,4,[row]) if e['kind']=='TRACK_LOST')
+        self.assertEqual(event['reason'],'OBSERVATION_GAP')
+        self.assertEqual(event['evidence']['elapsed_seconds'],2)
+        self.assertEqual(event['plate_number'],'91소6408')
+        self.assertIsNone(tracker.states[1]['matched'])
+
+    def test_occupancy_and_multiple_tracks_have_distinct_reasons(self):
+        tracker = self.matched()
+        events = tracker.process(5,2.5,[observation(5)],eligible_spaces=set())
+        event = next(e for e in events if e['kind']=='MATCH_REVIEW')
+        self.assertEqual(event['reason'],'OCCUPANCY_NOT_CONTINUOUS')
+        self.assertFalse(event['evidence']['occupancy_eligible'])
+        tracker = self.matched()
+        events = tracker.process(5,2.5,[observation(5),observation(5,track=2)])
+        event = next(e for e in events if e['kind']=='MATCH_REVIEW')
+        self.assertEqual(event['reason'],'MULTIPLE_TRACKS_IN_SPACE')
+        self.assertEqual(event['evidence']['observed_tracks_in_space'],2)
+
+    def test_plate_conflict_also_emits_explicit_withdrawal_once(self):
+        tracker = self.matched()
+        events = tracker.process(5,2.5,[observation(5,plate='30고5957')])
+        reviews = [e for e in events if e['kind']=='MATCH_REVIEW']
+        self.assertEqual(len(reviews),1)
+        self.assertEqual(reviews[0]['reason'],'PLATE_CONFLICT')
+        self.assertEqual(reviews[0]['plate_number'],'91소6408')
+        self.assertIsNone(tracker.states[1]['matched'])
+        events = tracker.process(6,3,[observation(6,plate='30고5957')])
+        self.assertFalse(any(e['kind']=='MATCH_REVIEW' for e in events))
+
+    def test_duplicate_plate_reason_identifies_competing_track(self):
+        tracker = self.matched()
+        events = []
+        for index in range(5,10):
+            events.extend(tracker.process(index,index*.5,[observation(index),
+                observation(index,track=2,box=(145,25,195,90))]))
+        event = next(e for e in events if e.get('reason')=='DUPLICATE_PLATE')
+        self.assertEqual(event['evidence']['conflicting_track_id'],2)
+        self.assertTrue(all(state['matched'] is None for state in tracker.states.values()))
+
+
+class WithdrawalSummaryVideoTests(unittest.TestCase):
+    setUp = RunVehicleSpaceTrackingTests.setUp
+
+    def test_saved_video_summary_and_jsonl_agree_on_withdrawal_reason(self):
+        self.tracker.side_effect = [[{'track_id':1,'box':[25,25,75,90]}]]*5 + [
+            [{'track_id':1,'box':[145,25,195,90]}]]*2
+        output = self.root/'withdrawal_summary'
+        with patch('cv2.VideoCapture',return_value=self.capture):
+            report = run(self.source,self.config,output,tracker=self.tracker,plate_reader=self.reader)
+        self.assertEqual(report['connection_withdrawal_counts'],{'SPACE_CHANGED':1})
+        events = [json.loads(line) for line in (output/'events.jsonl').read_text(encoding='utf-8').splitlines()]
+        self.assertEqual(sum(e.get('reason')=='SPACE_CHANGED' for e in events),1)
 
 
 if __name__ == '__main__':

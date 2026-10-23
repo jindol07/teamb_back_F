@@ -44,6 +44,13 @@ class FakeCapture:
 
 
 class RunLiveGateTests(unittest.TestCase):
+    def test_handoff_requires_real_explicit_http_before_opening_camera(self):
+        with patch('cv2.VideoCapture') as opened:
+            for flags in (['--single-vehicle-handoff'], ['--demo','--single-vehicle-handoff']):
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    main(flags+['--output-dir','unused_handoff'])
+            opened.assert_not_called()
+
     def test_cancelled_preparation_does_not_read_or_process_measurement_frames(self):
         capture, processor, preview = Mock(), Mock(), Mock()
         report = execute(capture, processor, self.session(), preview=preview, start_cancelled=True)

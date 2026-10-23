@@ -12,6 +12,7 @@ import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.server.ResponseStatusException;
 import kr.co.alpharking.dto.parking.AiVehicleEventRequest;
+import kr.co.alpharking.dto.parking.AiSpaceReleaseRequest;
 import kr.co.alpharking.dto.parking.AiVehicleEventResponse;
 import kr.co.alpharking.service.parking.AiVehicleEventService;
 
@@ -42,5 +43,11 @@ public class AiVehicleEventController {
                                           @RequestBody AiVehicleEventRequest request) {
         requireKey(token);
         return service.receive(request,"VEHICLE_SPACE_MATCH");
+    }
+    @PostMapping("/space-release-events")
+    public AiVehicleEventResponse release(@RequestHeader(value="X-AI-API-Key", required=false) String token,
+                                          @RequestBody AiSpaceReleaseRequest request) {
+        requireKey(token);
+        return service.release(request);
     }
 }
