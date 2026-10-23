@@ -34,6 +34,9 @@ public interface NoticeDao {
 	// 기존 첨부파일 정보를 새 파일 정보로 수정
 	int updateNoticeFile(NoticeFiles nfdto);
 
+	// 공지 소속까지 일치하는 첨부정보만 제거합니다. 실제 파일은 이력용으로 보존합니다.
+	int deleteNoticeFile(@Param("noticeId") Integer noticeId, @Param("attachmentId") Integer attachmentId);
+
 	// DB 현재 시각 조회
 	String getCurrentDateTime();
 

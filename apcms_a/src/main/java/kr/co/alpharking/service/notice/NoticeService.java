@@ -165,6 +165,38 @@ public class NoticeService {
 		return true;
 	}
 
+	// 내용·첨부정보·이력을 같은 트랜잭션에서 저장합니다. 실패 시 모두 롤백됩니다.
+	@Transactional
+	public boolean updateNoticeWithFile(NoticeCreateReq request, NoticeFiles newFile, Long adminId) {
+		if (!updateNotice(request, adminId)) return false;
+		if (newFile != null && !replaceNoticeFile(request.getNoticeId(), newFile, adminId)) {
+			throw new IllegalStateException("첨부파일을 저장할 공지사항이 없습니다.");
+		}
+		return true;
+	}
+
+	// 내용 수정과 첨부 삭제를 함께 커밋하며, 기존 물리 파일은 이력 보존을 위해 삭제하지 않습니다.
+	@Transactional
+	public boolean updateNoticeRemovingFile(NoticeCreateReq request, Long adminId) {
+		if (!updateNotice(request, adminId)) return false;
+		List<NoticeFiles> files = noticeDao.findFilesByNoticeId(request.getNoticeId());
+		if (files == null || files.isEmpty()) return true;
+		if (files.size() > 1) throw new IllegalStateException("기존 첨부파일이 여러 개입니다. 관리자 확인이 필요합니다.");
+		NoticeFiles old = files.get(0);
+		NoticeCreateReq notice = noticeDao.findById(request.getNoticeId());
+		NoticeHistory history = createNoticeHistory(notice, adminId, "FILE_DELETE", "공지사항 첨부파일 삭제", noticeDao.getCurrentDateTime());
+		history.setNoticeAttachmentId(old.getNoticeAttachmentId());
+		history.setOriginalName(old.getOriginalName());
+		history.setStoredName(old.getStoredName());
+		history.setFilePath(old.getFilePath());
+		history.setFileSize(old.getFileSize());
+		noticeDao.insertNoticeHistory(history);
+		if (noticeDao.deleteNoticeFile(request.getNoticeId(), old.getNoticeAttachmentId()) != 1) {
+			throw new IllegalStateException("첨부파일 정보 삭제에 실패했습니다.");
+		}
+		return true;
+	}
+
 	/**
 	 * 공지사항 소프트 삭제 및 버전 유효 기간 관리
 	 */
@@ -302,6 +334,9 @@ public class NoticeService {
 
 		// 3. 기존 첨부파일 조회
 		List<NoticeFiles> existingFiles = noticeDao.findFilesByNoticeId(noticeId);
+		if (existingFiles != null && existingFiles.size() > 1) {
+			throw new IllegalStateException("기존 첨부파일이 여러 개입니다. 관리자 확인이 필요합니다.");
+		}
 
 		// 4. 새 첨부파일에 공지사항 번호 설정
 		newFile.setNoticeId(noticeId);
@@ -344,6 +379,15 @@ public class NoticeService {
 			newFile.setNoticeAttachmentId(noticeDao.nextAttachmentId());
 
 			noticeDao.addfile(List.of(newFile));
+
+			// 기존 첨부가 없는 공지에 파일을 추가한 경우에도 이력을 남깁니다.
+			NoticeHistory history = createNoticeHistory(notice, changedByAdminId, "FILE_ADD", "공지사항 첨부파일 추가", changedAt);
+			history.setNoticeAttachmentId(newFile.getNoticeAttachmentId());
+			history.setOriginalName(newFile.getOriginalName());
+			history.setStoredName(newFile.getStoredName());
+			history.setFilePath(newFile.getFilePath());
+			history.setFileSize(newFile.getFileSize());
+			noticeDao.insertNoticeHistory(history);
 		}
 
 		return true;
