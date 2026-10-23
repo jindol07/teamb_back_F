@@ -108,6 +108,96 @@ class EntryIdentityParkingTests(unittest.TestCase):
             self.assertFalse(any(e['kind'] == 'LOCAL_SPACE_MATCH' for e in self.process(i, {'A-01','A-02'})['events']))
 
 
+class VerifiedEntryIdentityTests(unittest.TestCase):
+    def setUp(self):
+        from concurrent.futures import Future
+        class ImmediateExecutor:
+            def submit(self, fn, *args):
+                result = Future()
+                try: result.set_result(fn(*args))
+                except Exception as error: result.set_exception(error)
+                return result
+            def shutdown(self, **kwargs): pass
+        self.identity = {'owner_session_id':'entry_test', 'event_id':'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+                         'parking_usage_id':70, 'plate_number':'91소6408', 'confidence':.8}
+        self.number = '91소6408'
+        self.rows = [{'track_id':1,'box':[25,25,75,90],'plate_detection_confidence':.9}]
+        self.frame = np.zeros((140,240,3),dtype=np.uint8)
+        self.reader = Mock(side_effect=lambda crop:{'plate_number':self.number,
+                           'plate_type':'KOREAN_VALID' if self.number else 'UNREADABLE'})
+        self.observer = VehicleSpaceObserver(CONFIG, tracker=lambda frame:self.rows, plate_reader=self.reader,
+            tracking_target='plate', ocr_execution='thread', handoff_reader=lambda:self.identity,
+            verify_handoff_plate=True)
+        self.observer.prepare();self.addCleanup(self.observer.close)
+        self.observer._executor.shutdown(wait=True)
+        self.observer._executor = ImmediateExecutor()
+
+    def process(self,i,spaces=None):
+        return self.observer.process(i,i*.5,self.frame,eligible_spaces={'A-01'} if spaces is None else spaces)
+
+    def observe(self,start=0,end=9):
+        return [e for i in range(start,end) for e in self.process(i)['events']]
+
+    def test_b_ocr_must_agree_with_entry_before_candidate(self):
+        from ai_vision.recognition.vehicle_live_candidate import create_space_match_candidate
+        self.assertFalse(any(e['kind']=='LOCAL_SPACE_MATCH' for e in self.process(0)['events']))
+        matches=[e for e in self.observe(1) if e['kind']=='LOCAL_SPACE_MATCH']
+        self.assertEqual(len(matches),1)
+        event=matches[0]
+        self.assertEqual(event['identity_basis'],'ENTRY_AND_B_PLATE_OCR')
+        self.assertEqual(event['parking_usage_id'],70)
+        self.assertEqual(event['plate_consensus']['status'],'CONFIRMED')
+        self.assertGreaterEqual(len(event['samples']),2)
+        current=[{k:event[k] for k in ['track_id','space_id','plate_number']}]
+        candidate=create_space_match_candidate({**event,'kind':'LIVE_SPACE_MATCH'},current,'PARKING_1','2020-01-01T00:00:00Z')
+        self.assertEqual(candidate['expected_parking_usage_id'],70)
+        self.assertEqual(candidate['identity_verification']['basis'],'ENTRY_AND_B_PLATE_OCR')
+        self.assertEqual(self.observer.summary()['identity_status'],'VERIFIED')
+        self.assertGreater(self.observer.summary()['ocr_submitted'],0)
+
+    def test_other_b_plate_is_not_replaced_by_entry_number(self):
+        self.number='12가3456'
+        events=self.observe()
+        self.assertFalse(any(e['kind']=='LOCAL_SPACE_MATCH' for e in events))
+        self.assertTrue(any(e['kind']=='IDENTITY_MISMATCH' for e in events))
+        self.assertEqual(self.observer.summary()['identity_status'],'PLATE_MISMATCH')
+        self.assertTrue(all(s['matched'] is None for s in self.observer.tracker.states.values()))
+
+    def test_unreadable_plate_never_uses_single_vehicle_assumption(self):
+        self.number=''
+        self.assertFalse(any(e['kind']=='LOCAL_SPACE_MATCH' for e in self.observe()))
+        self.assertEqual(self.observer.summary()['identity_status'],'VERIFYING_PLATE')
+
+    def test_old_entry_generation_ocr_is_discarded(self):
+        self.process(0)
+        self.identity={**self.identity,'event_id':'a47ac10b-58cc-4372-a567-0e02b2c3d479',
+                       'parking_usage_id':71,'plate_number':'12가3456'}
+        self.number='12가3456'
+        self.process(1)
+        self.assertEqual(self.observer.tracker.states[1]['samples'],[])
+        matches=[e for e in self.observe(2,10) if e['kind']=='LOCAL_SPACE_MATCH']
+        self.assertEqual(len(matches),1)
+        self.assertEqual(matches[0]['parking_usage_id'],71)
+        self.assertTrue(all(s['plate_number']=='12가3456' for s in matches[0]['samples']))
+
+    def test_source_loss_and_multiple_targets_do_not_verify(self):
+        self.observe()
+        self.identity=None
+        self.assertFalse(any(e['kind']=='LOCAL_SPACE_MATCH' for e in self.process(9)['events']))
+        self.assertEqual(self.observer.summary()['identity_status'],'WAIT_ENTRY')
+        self.assertFalse(self.observer.tracker.states)
+
+    def test_multiple_targets_are_not_assigned_the_same_entry_number(self):
+        self.rows += [{'track_id':2,'box':[130,25,180,90],'plate_detection_confidence':.9}]
+        self.assertFalse(any(e['kind']=='LOCAL_SPACE_MATCH' for e in self.observe()))
+        self.assertEqual(self.reader.call_count,0)
+        self.assertEqual(self.observer.summary()['identity_status'],'AMBIGUOUS_OBSERVATION')
+
+    def test_verification_requires_handoff_before_creating_worker(self):
+        with self.assertRaises(ValueError):
+            VehicleSpaceObserver(CONFIG,verify_handoff_plate=True)
+
+
 class PlateConflictRecoveryTests(unittest.TestCase):
     def make_tracker(self):
         tracker = VehicleSpaceTracker(CONFIG, recover_plate_conflicts=True)

@@ -174,6 +174,8 @@ class SpaceMatchDeliveryFlow:
                   'payload': deepcopy(event), 'receipt': None, 'automatic_retry_allowed': False}
         if expected_usage is not None:
             record['expected_parking_usage_id'] = expected_usage
+        if 'identity_verification' in candidate:
+            record['identity_verification'] = deepcopy(candidate['identity_verification'])
         self.records.append(record)
         self._seen.add(observation_key)
         # 2. 저장에 실패하면 전송하지 않습니다. 같은 후보도 자동 재시도하지 않습니다.

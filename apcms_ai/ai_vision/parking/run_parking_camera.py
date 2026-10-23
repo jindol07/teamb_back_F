@@ -24,7 +24,7 @@ from ai_vision.recognition.latest_frame_capture import LatestFrameCapture
 def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=60, preview=True,
                enable_http=False, allowed_codes=(), environment=None, previous_report=None,
                publish_results=False, camera_backend='default', track_vehicles=False,
-               vehicle_tracker=None, plate_reader=None, enable_space_http=False, camera_id=None, enable_space_release_http=False, tracking_target='vehicle', ocr_execution='auto', tracking_imgsz=None, handoff_path=None):
+               vehicle_tracker=None, plate_reader=None, enable_space_http=False, camera_id=None, enable_space_release_http=False, tracking_target='vehicle', ocr_execution='auto', tracking_imgsz=None, handoff_path=None, verify_handoff_plate=False):
     # 1. 저장 경로와 입력을 먼저 확인하여 기존 운영 결과를 보호합니다.
     if type(camera_index) is not int or not 0 <= camera_index <= 99:
         raise ValueError('카메라 번호는 0~99 정수여야 합니다.')
@@ -37,7 +37,9 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
         raise ValueError('구획 연결 전송에는 차량 관찰·점유 전송·카메라 ID가 필요합니다.')
     if type(enable_space_release_http) is not bool or (enable_space_release_http and not enable_space_http):
         raise ValueError('구획 해제는 구획 연결 전송과 함께 활성화하세요.')
-    if handoff_path is not None and (not track_vehicles or plate_reader is not None or enable_space_release_http):
+    if type(verify_handoff_plate) is not bool or (verify_handoff_plate and handoff_path is None):
+        raise ValueError('동일 차량 재확인에는 입차 신원 전달 파일이 필요합니다.')
+    if handoff_path is not None and (not track_vehicles or (plate_reader is not None and not verify_handoff_plate) or enable_space_release_http):
         raise ValueError('한 대 시연 신원 전달에는 추적이 필요하며 독립 OCR·중간 자동 해제는 함께 사용하지 않습니다.')
     from ai_vision.parking.vehicle_space_tracker import validate_tracking_target, tracking_image_size
     validate_tracking_target(tracking_target)
@@ -102,6 +104,8 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
             # 1-1. 모델 준비는 측정 시계·카메라 시작 전에 끝냅니다. 기존 점유 전송과는 분리합니다.
             from ai_vision.parking.vehicle_space_tracker import VehicleSpaceObserver
             observer_options = {'handoff_reader': handoff.read} if handoff is not None else {}
+            if verify_handoff_plate:
+                observer_options['verify_handoff_plate'] = True
             vehicle_observer = VehicleSpaceObserver(config, tracker=vehicle_tracker, plate_reader=plate_reader,
                                                     tracking_target=tracking_target, ocr_execution=ocr_execution, tracking_imgsz=tracking_imgsz,
                                                     **observer_options)
@@ -298,6 +302,7 @@ def main(argv=None):
     parser.add_argument('--tracking-imgsz', type=int, choices=(640,960,1280), help='기본 plate=1280, vehicle=640')
     parser.add_argument('--tracking-target', choices=('vehicle', 'plate'), default='vehicle', help='차체 또는 번호판 위치 추적')
     parser.add_argument('--single-vehicle-handoff', type=Path, help='A카메라의 현재 실행 신원 파일. 한 대 시연에서만 사용')
+    parser.add_argument('--verify-handoff-plate', action='store_true', help='B에서 번호판을 재인식해 A의 입차 차량과 일치할 때만 구획 연결')
     parser.add_argument('--camera-id', help='Boot에서 구분할 주차 카메라 ID')
     parser.add_argument('--track-vehicles', action='store_true', help='차량·번호판·구획 관찰. 연결 전송은 별도 활성화 필요')
     args = parser.parse_args(argv)
@@ -308,7 +313,7 @@ def main(argv=None):
                             camera_backend=args.camera_backend, track_vehicles=args.track_vehicles,
                             enable_space_http=args.enable_space_http, camera_id=args.camera_id,
                             enable_space_release_http=args.enable_space_release_http, tracking_target=args.tracking_target, ocr_execution=args.ocr_execution, tracking_imgsz=args.tracking_imgsz,
-                            handoff_path=args.single_vehicle_handoff)
+                            handoff_path=args.single_vehicle_handoff, verify_handoff_plate=args.verify_handoff_plate)
     except (ValueError, OSError, RuntimeError) as error:
         print(f'실행 실패: {error}')
         return 1

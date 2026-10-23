@@ -85,6 +85,31 @@ class VehicleLiveCandidateTests(unittest.TestCase):
 
 
 class SpaceMatchCandidateTests(unittest.TestCase):
+    def test_verified_entry_candidate_rejects_wrong_plate_or_forged_consensus(self):
+        from ai_vision.recognition.vehicle_live_candidate import create_space_match_candidate
+        samples=live_passage()['samples']
+        event={'kind':'LIVE_SPACE_MATCH','track_id':2,'space_id':'A-01','plate_number':'91소6408',
+               'plate_detection_confidence':.8,'identity_basis':'ENTRY_AND_B_PLATE_OCR',
+               'entry_plate_number':'91소6408','parking_usage_id':70,
+               'entry_event_id':'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+               'samples':samples,'plate_consensus':summarize_plate_samples(samples)}
+        current=[{k:event[k] for k in ['track_id','space_id','plate_number']}]
+        def convert(value): return create_space_match_candidate(value,current,'PARKING_1','2020-01-01T00:00:00Z')
+        candidate=convert(event)
+        self.assertEqual(candidate['expected_parking_usage_id'],70)
+        from ai_vision.recognition.vehicle_delivery_flow import SpaceMatchDeliveryFlow
+        flow=SpaceMatchDeliveryFlow()
+        try:
+            flow.submit(candidate,('verification',1),lambda:None)
+            self.assertEqual(flow.records[0]['identity_verification'],candidate['identity_verification'])
+            candidate['identity_verification']['plate_number']='changed'
+            self.assertEqual(flow.records[0]['identity_verification']['plate_number'],'91소6408')
+        finally:flow.close(lambda:None)
+        self.assertEqual(convert({**event,'entry_plate_number':'12가3456'})['status'],'BLOCKED')
+        for change in ({'samples':samples[:1]}, {'plate_consensus':{}},
+                       {'parking_usage_id':True},{'entry_event_id':'wrong'}):
+            with self.subTest(change=change),self.assertRaises(ValueError):convert({**event,**change})
+
     def test_current_live_match_maps_db_code_and_preserves_source_time(self):
         from ai_vision.recognition.vehicle_live_candidate import create_space_match_candidate
         current = {'track_id': 2, 'space_id': 'A-01', 'plate_number': '91소6408'}

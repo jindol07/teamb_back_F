@@ -351,7 +351,7 @@ def recognize_space_ocr_process(job, crop, tracking_target):
 class VehicleSpaceObserver:
     """추적과 OCR 한 건을 분리하며 로컬 번호판 OCR은 별도 프로세스에서 처리합니다."""
 
-    def __init__(self, config, tracker=None, plate_reader=None, max_crop_bytes=8 * 1024 * 1024, tracking_target='vehicle', ocr_execution='auto', tracking_imgsz=None, handoff_reader=None):
+    def __init__(self, config, tracker=None, plate_reader=None, max_crop_bytes=8 * 1024 * 1024, tracking_target='vehicle', ocr_execution='auto', tracking_imgsz=None, handoff_reader=None, verify_handoff_plate=False):
         from concurrent.futures import ThreadPoolExecutor
         if type(max_crop_bytes) is not int or max_crop_bytes < 1:
             raise ValueError('번호판 작업 이미지의 메모리 한도를 확인하세요.')
@@ -359,6 +359,13 @@ class VehicleSpaceObserver:
             raise ValueError('OCR 실행 방식은 auto/thread/process여야 합니다.')
         if ocr_execution == 'process' and plate_reader is not None:
             raise ValueError('주입한 OCR 함수는 thread 실행을 사용하세요.')
+        if type(verify_handoff_plate) is not bool or (verify_handoff_plate and handoff_reader is None):
+            raise ValueError('입차 차량 재확인에는 신원 전달과 명시적인 참/거짓 설정이 필요합니다.')
+        if handoff_reader is not None and (not callable(handoff_reader) or
+                (plate_reader is not None and not verify_handoff_plate)):
+            raise ValueError('기존 신원 전달 모드에서는 독립 OCR을 함께 사용하지 않습니다.')
+        self._verify_handoff_plate = verify_handoff_plate
+        self._pending_identity_key = None
         self._requested_execution = ocr_execution
         self._ocr_execution, self._ocr_pid = 'thread', None
         self._source_gap_max = self._track_seconds_max = self._ocr_seconds_max = 0.0
@@ -376,8 +383,6 @@ class VehicleSpaceObserver:
         self._current_observed = False
         self._duplicate_times = 0
         self._submitted = self._completed = self._abandoned = self._oversize = self._peak = 0
-        if handoff_reader is not None and (not callable(handoff_reader) or plate_reader is not None):
-            raise ValueError('신원 전달 모드는 독립 OCR과 함께 사용하지 않습니다.')
         self._handoff_reader, self._identity_key = handoff_reader, None
         self._identity_status = 'WAIT_ENTRY' if handoff_reader is not None else 'INDEPENDENT_OCR'
 
@@ -389,7 +394,7 @@ class VehicleSpaceObserver:
         if self._track is None:
             self._model, self._track = (create_vehicle_tracker() if self.tracking_target == 'vehicle' and self.tracking_imgsz == 640
                                          else create_vehicle_tracker(self.tracking_target, self.tracking_imgsz))
-        if self._handoff_reader is not None:
+        if self._handoff_reader is not None and not self._verify_handoff_plate:
             self._ocr_execution = 'entry_handoff'
             self._prepared = True
             return
@@ -439,6 +444,7 @@ class VehicleSpaceObserver:
             self._source_gap_max = max(self._source_gap_max, gap)
             self._source_gap_count += gap > self.tracker.gap
         completed = []
+        completed_identity_key = self._pending_identity_key
         if self._pending is not None and self._pending.done():
             future, self._pending = self._pending, None
             completed.append(future.result())
@@ -467,7 +473,9 @@ class VehicleSpaceObserver:
             if key != self._identity_key:
                 self.tracker.states.clear()
                 self._identity_key = key
-            self._identity_status = 'ACTIVE' if identity is not None else 'WAIT_ENTRY'
+            if self._verify_handoff_plate and completed_identity_key != key:
+                completed = []  # 이전 입차 세대의 늦은 OCR은 현재 차량에 사용하지 않습니다.
+            self._identity_status = ('VERIFYING_PLATE' if self._verify_handoff_plate else 'ACTIVE') if identity is not None else 'WAIT_ENTRY'
             # 복수 대상·복수 점유에서는 A의 번호를 어느 대상에 줄지 추측하지 않습니다.
             if identity is None or len(valid) != 1 or eligible_spaces is None or len(eligible_spaces) != 1:
                 valid = []
@@ -476,7 +484,7 @@ class VehicleSpaceObserver:
                 valid = [{k: v for k, v in row.items() if k != 'plate_sample'} for row in valid]
         events = self.tracker.process(frame_index, seconds, valid, completed_samples=completed,
                                       eligible_spaces=eligible_spaces)
-        if identity is not None and len(valid) == 1:
+        if identity is not None and len(valid) == 1 and not self._verify_handoff_plate:
             row = valid[0]
             state = self.tracker.states[row['track_id']]
             confidence = row.get('plate_detection_confidence' if self.tracking_target == 'plate'
@@ -492,11 +500,38 @@ class VehicleSpaceObserver:
                     'plate_detection_confidence': min(identity['confidence'], confidence),
                     'identity_basis': 'SINGLE_VEHICLE_ENTRY_HANDOFF',
                     'entry_event_id': identity['event_id'], 'parking_usage_id': identity['parking_usage_id']})
+        if self._verify_handoff_plate:
+            verified_events = []
+            for event in events:
+                if event['kind'] != 'LOCAL_SPACE_MATCH':
+                    verified_events.append(event)
+                    continue
+                state = self.tracker.states[event['track_id']]
+                if identity is None or event['plate_number'] != identity['plate_number']:
+                    state.update(matched=None, number='')
+                    self._identity_status = 'PLATE_MISMATCH'
+                    verified_events.append({**event, 'kind': 'IDENTITY_MISMATCH',
+                                            'reason': 'ENTRY_AND_PARKING_PLATES_DIFFER'})
+                    continue
+                verified_events.append({**event, 'identity_basis': 'ENTRY_AND_B_PLATE_OCR',
+                    'entry_event_id': identity['event_id'], 'parking_usage_id': identity['parking_usage_id'],
+                    'entry_plate_number': identity['plate_number'],
+                    'samples': deepcopy(state['samples']),
+                    'plate_consensus': summarize_plate_samples(state['samples'])})
+            events = verified_events
+            if identity is not None and len(valid) == 1 and any(v['seen'] == seconds and v['matched'] is not None and v['number'] == identity['plate_number']
+                                            for v in self.tracker.states.values()):
+                self._identity_status = 'VERIFIED'
+            elif self._identity_status == 'VERIFYING_PLATE' and any(
+                    summarize_plate_samples(v['samples'])['status'] == 'CONFIRMED'
+                    and summarize_plate_samples(v['samples'])['plate_number'] != identity['plate_number']
+                    for v in self.tracker.states.values()):
+                self._identity_status = 'PLATE_MISMATCH'
         self._current_observed = True
         self._last_submit = {key: value for key, value in self._last_submit.items()
                              if key[0] in self.tracker.states and
                              self.tracker.states[key[0]]['since'] == key[1]}
-        if self._pending is None and self._handoff_reader is None:
+        if self._pending is None and (self._handoff_reader is None or self._verify_handoff_plate):
             candidates = []
             for row in valid:
                 state = self.tracker.states[row['track_id']]
@@ -522,6 +557,7 @@ class VehicleSpaceObserver:
                     self._pending = self._executor.submit(recognize_space_ocr_process, job, crop, self.tracking_target)
                 else:
                     self._pending = self._executor.submit(self._recognize, job, crop)
+                self._pending_identity_key = self._identity_key
                 self._last_submit[key] = seconds
                 self._submitted += 1
                 self._peak = max(self._peak, size)
@@ -544,6 +580,8 @@ class VehicleSpaceObserver:
                 status = 'WAIT_DWELL'
             else:
                 status = 'WAIT_PLATE'
+            if self._verify_handoff_plate and status in ('LOCAL_MATCH', 'WAIT_PLATE') and self._identity_status != 'VERIFIED':
+                status = 'IDENTITY_MISMATCH' if self._identity_status == 'PLATE_MISMATCH' else 'WAIT_IDENTITY'
             latest = state['samples'][-1] if state['samples'] else {}
             progress.append({'track_id': row['track_id'], 'box': list(row['box']), 'space_id': space,
                              'status': status, 'plate_number': state['number'] or latest.get('plate_number', ''),
@@ -567,7 +605,8 @@ class VehicleSpaceObserver:
                 'motion_window_seconds': self.tracker.motion_window, 'ocr_submitted': self._submitted, 'ocr_completed': self._completed,
                 'ocr_abandoned': self._abandoned, 'oversize_crops': self._oversize,
                 'pending_ocr': self._pending is not None, 'peak_crop_bytes': self._peak,
-                'identity_mode': 'ENTRY_HANDOFF' if self._handoff_reader is not None else 'INDEPENDENT_OCR',
+                'identity_mode': ('ENTRY_AND_B_PLATE_OCR' if self._verify_handoff_plate else
+                                  'ENTRY_HANDOFF' if self._handoff_reader is not None else 'INDEPENDENT_OCR'),
                 'identity_status': self._identity_status,
                 'duplicate_time_frames': self._duplicate_times,
                 'closed': self._closed}

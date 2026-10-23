@@ -843,6 +843,19 @@ class ParkingCameraTests(ParkingSceneFixture, unittest.TestCase):
         observer.close.assert_called_once()
         capture.assert_not_called()
 
+    def test_verified_handoff_cli_and_missing_source_preflight(self):
+        from ai_vision.parking import run_parking_camera as camera
+        summary={'status':'COMPLETED','read_frames':0,'events':[],'http_requests':0,'error_type':None}
+        with patch.object(camera,'run_camera',return_value=summary) as execute:
+            camera.main(['--reference','empty.png','--config','spaces.json','--output-dir','out',
+                         '--track-vehicles','--tracking-target','plate','--single-vehicle-handoff','entry.json',
+                         '--verify-handoff-plate'])
+        self.assertTrue(execute.call_args.kwargs['verify_handoff_plate'])
+        self.assertFalse(execute.call_args.kwargs['enable_space_http'])
+        with patch.object(camera,'open_camera') as capture,self.assertRaises(ValueError):
+            camera.run_camera('empty.png','spaces.json','out',track_vehicles=True,verify_handoff_plate=True)
+        capture.assert_not_called()
+
     def test_process_execution_cli_reaches_runner_without_enabling_http(self):
         from ai_vision.parking import run_parking_camera as camera
         summary = {'status':'COMPLETED','read_frames':0,'events':[],'http_requests':0,'error_type':None}
@@ -1771,7 +1784,7 @@ class DemoSessionRecoveryTests(unittest.TestCase):
         folder=self.root/'parking';folder.mkdir()
         (folder/'parking_camera_check.json').write_text(json.dumps({'status':'STOPPED','vehicle_space':{
             'statistics':{'ocr_submitted':0},'entry_handoff':{'status':'EMPTY','retained_identity':None},
-            'deliveries':[{'status':'APPLIED','payload':{'event_type':'VEHICLE_SPACE_MATCH'},'receipt':{'receipt_verified':True,'parking_usage_id':9}}]}}),encoding='utf-8')
+            'deliveries':[{'status':'APPLIED','payload':{'event_id':'match','event_type':'VEHICLE_SPACE_MATCH','plate_number':'91소6408','space_code':'999F-Z01'},'receipt':{'event_id':'match','event_type':'VEHICLE_SPACE_MATCH','state':'APPLIED','request_attempted':True,'receipt_verified':True,'parking_usage_id':9}}]}}),encoding='utf-8')
 
     def finish(self, stopped=True, prepared=True):
         from ai_vision.parking.demo_session import finalize_trial
@@ -1785,6 +1798,81 @@ class DemoSessionRecoveryTests(unittest.TestCase):
         self.assertTrue(result['success']);self.assertEqual(result['incomplete_reasons'],[])
         self.assertIn('usage_id=9',self.manifest.read_text())
         self.assertEqual(self.db.call_args_list, [unittest.mock.call('inspect'),unittest.mock.call('cleanup')])
+
+    def test_phase_requires_same_usage_match_before_done(self):
+        from ai_vision.parking.demo_session import demo_phase
+        self.journal(); self.parking()
+        rows=[json.loads(line) for line in (self.root/'gate_http_journal.jsonl').read_text().splitlines()]
+        parking=read_json(self.root/'parking/parking_camera_check.json')
+        self.assertTrue(demo_phase([], None, '91소6408').startswith('1 ENTRY'))
+        self.assertTrue(demo_phase(rows[:2], None, '91소6408').startswith('2 PARK'))
+        self.assertTrue(demo_phase(rows[:2], parking, '91소6408').startswith('3 REMOVE'))
+        self.assertTrue(demo_phase(rows, parking, '91소6408').startswith('4 DONE'))
+        rows[-1]['receipt']['parking_usage_id']=10
+        self.assertTrue(demo_phase(rows, parking, '91소6408').startswith('STOP:'))
+
+    def test_malformed_live_snapshots_do_not_crash_or_show_done(self):
+        from ai_vision.parking.demo_session import demo_phase
+        self.journal()
+        rows=[json.loads(line) for line in (self.root/'gate_http_journal.jsonl').read_text().splitlines()]
+        for value in (None, [], {'vehicle_space':[]}, {'vehicle_space':{'deliveries':{}}},
+                      {'vehicle_space':{'deliveries':[None,{}, {'payload':[]} ]}}):
+            with self.subTest(value=value):
+                self.assertTrue(demo_phase(rows,value,'91소6408').startswith('2 PARK'))
+
+    def test_unverified_or_uncorrelated_exit_does_not_show_done(self):
+        from ai_vision.parking.demo_session import demo_phase
+        self.journal();self.parking()
+        rows=[json.loads(line) for line in (self.root/'gate_http_journal.jsonl').read_text().splitlines()]
+        parking=read_json(self.root/'parking/parking_camera_check.json')
+        for key,value in [('receipt_verified',False),('request_attempted',False),('event_id','other'),
+                          ('event_type','OTHER'),('state','UNCHANGED'),('parking_usage_id',True)]:
+            changed=copy.deepcopy(rows);changed[-1]['receipt'][key]=value
+            with self.subTest(key=key):
+                self.assertTrue(demo_phase(changed,parking,'91소6408').startswith('3 REMOVE'))
+        self.assertTrue(demo_phase(rows[:2]+rows[-1:],parking,'91소6408').startswith('3 REMOVE'))
+
+    def test_match_identity_mismatch_blocks_phase_and_final_success(self):
+        from ai_vision.parking.demo_session import demo_phase
+        self.fixture();self.journal();self.parking()
+        path=self.root/'parking/parking_camera_check.json'
+        original=read_json(path)
+        rows=[json.loads(line) for line in (self.root/'gate_http_journal.jsonl').read_text().splitlines()]
+        for section,key,value in [('payload','plate_number','12가3456'),('payload','space_code','1F-A01'),
+                                  ('receipt','event_id','wrong'),('receipt','event_type','OTHER'),
+                                  ('receipt','request_attempted',False),('receipt','parking_usage_id',True),
+                                  ('receipt','parking_usage_id',10),('receipt','state','HELD')]:
+            changed=copy.deepcopy(original);changed['vehicle_space']['deliveries'][0][section][key]=value
+            with self.subTest(key=key,value=value):
+                self.assertTrue(demo_phase(rows,changed,'91소6408').startswith('2 PARK'))
+                path.write_text(json.dumps(changed),encoding='utf-8')
+                result=self.finish();self.assertFalse(result['success'])
+                self.assertIn('match_same_usage',result['incomplete_reasons'])
+
+    def test_verified_mode_requires_b_ocr_and_recorded_identity_proof(self):
+        from ai_vision.parking.demo_session import demo_phase
+        from ai_vision.recognition.plate_consensus import summarize_plate_samples
+        self.fixture();self.journal();self.parking()
+        self.report['identity_verification_required']=True
+        first=self.finish()
+        self.assertFalse(first['success'])
+        path=self.root/'parking/parking_camera_check.json'
+        parking=read_json(path)
+        rows=[json.loads(line) for line in (self.root/'gate_http_journal.jsonl').read_text().splitlines()]
+        self.assertTrue(demo_phase(rows,parking,'91소6408',True).startswith('2 PARK'))
+        parking['vehicle_space']['statistics'].update(ocr_submitted=2,identity_mode='ENTRY_AND_B_PLATE_OCR')
+        record=parking['vehicle_space']['deliveries'][0]
+        record.update(expected_parking_usage_id=9,identity_verification={
+            'basis':'ENTRY_AND_B_PLATE_OCR','entry_event_id':'f47ac10b-58cc-4372-a567-0e02b2c3d479',
+            'plate_number':'91소6408','plate_consensus':summarize_plate_samples([
+                {'frame_index':i,'video_seconds':i*.5,'plate_number':'91소6408','plate_type':'KOREAN_VALID'} for i in (1,2)])})
+        path.write_text(json.dumps(parking),encoding='utf-8')
+        self.assertTrue(demo_phase(rows,parking,'91소6408',True).startswith('4 DONE'))
+        self.assertTrue(self.finish()['success'])
+        for change in ({'ocr_submitted':0},{'identity_mode':'ENTRY_HANDOFF'}):
+            changed=copy.deepcopy(parking);changed['vehicle_space']['statistics'].update(change)
+            path.write_text(json.dumps(changed),encoding='utf-8')
+            self.assertFalse(self.finish()['success'])
 
     def test_cancel_before_fixture_does_not_call_database(self):
         self.assertEqual(self.finish(prepared=False)['cleanup'],'NO_DB_FIXTURE_CREATED');self.db.assert_not_called()

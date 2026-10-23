@@ -69,7 +69,8 @@ class ParkingPreview:
         labels = []
         statuses = {'OUTSIDE_SPACE': '구획 경계 확인', 'WAIT_OCCUPANCY': '점유 확인 대기',
                     'PLATE_CONFLICT': '번호 충돌 확인', 'AMBIGUOUS_SPACE': '다중 차량 확인',
-                    'LOCAL_MATCH': '로컬 연결', 'WAIT_DWELL': '정차 확인 중', 'WAIT_PLATE': '번호판 확인 필요'}
+                    'LOCAL_MATCH': '로컬 연결', 'WAIT_DWELL': '정차 확인 중', 'WAIT_PLATE': '번호판 확인 필요',
+                    'WAIT_IDENTITY': '입차 차량 번호 대조 중', 'IDENTITY_MISMATCH': '입차 차량 번호 불일치'}
         for row in self.vehicle_progress:
             x1, y1, x2, y2 = row['box']
             color = (0, 220, 0) if row['status'] == 'LOCAL_MATCH' else (0, 180, 255)
