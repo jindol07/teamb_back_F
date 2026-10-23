@@ -1,3 +1,8 @@
+/** [1023_1010] 파일 안내
+ * 용도: A 소켓의 첫 AUTH에 대한 관리자 JWT·계정 검증.
+ * 사용처·연결: A ParkingWebSocketHandler.authenticate → 기존 JwtTokenProvider·UserDetailsService.
+ * ADMIN과 Admin principal을 검사하고 만료 시각만 Identity에 보관한다. JWT 원문은 보관하지 않는다.
+ */
 package kr.co.alpharking.websocket.parking;
 
 import java.time.Instant;
@@ -19,6 +24,7 @@ public class ParkingWebSocketAuthService {
         this.userDetailsService = userDetailsService;
     }
 
+    // [1023_1010] JWT 서명·만료·role을 검증한 뒤 기존 계정 조회와 현재 계정 상태·권한도 확인한다.
     public Identity authenticate(String token) {
         if (token == null || token.isBlank() || token.length() > 8192) {
             throw new BadCredentialsException("JWT 인증이 필요합니다.");
@@ -40,5 +46,6 @@ public class ParkingWebSocketAuthService {
         return new Identity(user.getUsername(), expiresAt);
     }
 
+    // [1023_1010] 인증된 이름·만료 시각만 보관한다. 원본 토큰과 비밀 키를 세션에 남기지 않는다.
     public record Identity(String username, Instant expiresAt) {}
 }
