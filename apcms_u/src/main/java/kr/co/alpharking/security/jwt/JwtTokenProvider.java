@@ -30,9 +30,9 @@ public class JwtTokenProvider {
 //	Key key = Keys.secretKeyFor(SignatureAlgorithm.HS512);
 	
 	private final Key key;
+	private final long accessTime;
 
-	public JwtTokenProvider(@Value("${app.jwt.secret-base64}") String secretBase64) {
-
+	public JwtTokenProvider(@Value("${app.jwt.secret-base64}") String secretBase64, @Value("${app.jwt.access-seconds}") long accessTime) {
 	    if (!StringUtils.hasText(secretBase64)) {
 	        throw new IllegalStateException(
 	                "JWT_SECRET_BASE64 환경변수가 설정되지 않았습니다.");
@@ -54,17 +54,19 @@ public class JwtTokenProvider {
 	    }
 
 	    this.key = Keys.hmacShaKeyFor(keyBytes);
+	    this.accessTime = accessTime;
 	}
 	
+	public long getAccessValidityMillis() {
+	    return accessTime;
+	}
 	
 	// JWT Token을 생성 - 인증된 사용자에게 발급을 함 -> 클라이언트(React) 
 	public String  createToken(Authentication authentication) {
-		
 		UserDetails userDetails = (UserDetails) authentication.getPrincipal();
 		Date now = new Date();
 		
-		//JWT가 발급 되고 나서 약 1시간(3600000 밀리초) 동안 만료 시간을 설정
-		Date expiryDate = new Date(now.getTime() + 3600000);
+		Date expiryDate = new Date(now.getTime() + accessTime);
 		
 		//Role 가져오기------------------------------------
 		String role = authentication.getAuthorities().stream()

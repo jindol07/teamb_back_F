@@ -30,8 +30,11 @@ public class JwtTokenProvider {
 //	Key key = Keys.secretKeyFor(SignatureAlgorithm.HS512);
 	
 	private final Key key;
+	private final long accessTime;
 
-	public JwtTokenProvider(@Value("${app.jwt.secret-base64}") String secretBase64) {
+	public JwtTokenProvider(
+			@Value("${app.jwt.secret-base64}") String secretBase64,
+			@Value("${app.jwt.access-millis}") long accessTime) {
 
 	    if (!StringUtils.hasText(secretBase64)) {
 	        throw new IllegalStateException(
@@ -54,6 +57,11 @@ public class JwtTokenProvider {
 	    }
 
 	    this.key = Keys.hmacShaKeyFor(keyBytes);
+	    this.accessTime = accessTime;
+	}
+
+	public long getAccessValidityMillis() {
+		return accessTime;
 	}
 	
 	
@@ -63,8 +71,8 @@ public class JwtTokenProvider {
 		UserDetails userDetails = (UserDetails) authentication.getPrincipal();
 		Date now = new Date();
 		
-		//JWT가 발급 되고 나서 약 1시간(3600000 밀리초) 동안 만료 시간을 설정
-		Date expiryDate = new Date(now.getTime() + 3600000);
+		// access 만료 시간은 환경변수(JWT_ACCESS_MILLISECONDS)로 관리한다.
+		Date expiryDate = new Date(now.getTime() + accessTime);
 		
 		//Role 가져오기------------------------------------
 		String role = authentication.getAuthorities().stream()
