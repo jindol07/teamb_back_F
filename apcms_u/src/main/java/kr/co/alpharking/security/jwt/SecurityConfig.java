@@ -72,6 +72,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/ws/parking/spaces").permitAll()
                         // 사용자 주차현황은 기존과 동일하게 로그인한 사용자만 조회한다.
                         .requestMatchers(HttpMethod.GET, "/api/parking/spaces").authenticated()
+                        // AI 주차 추천은 로그인한 사용자만 요청할 수 있다.
+                        .requestMatchers(HttpMethod.POST, "/api/recmn/recommend").authenticated()
                         //.requestMatchers("/api/chatbot/**").permitAll()
                         
                         
