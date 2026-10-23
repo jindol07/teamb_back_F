@@ -235,6 +235,45 @@ public class ReservationService {
                 .toList();
     }
 
+    // 선택 기간에 예약이 없는 주차 공간 ID 조회
+    public List<Long> getAvailableSpaceIds(String startDateStr, String endDateStr) {
+        LocalDate startDate;
+        LocalDate endDate;
+
+        try {
+            startDate = LocalDate.parse(
+                    startDateStr,
+                    DateTimeFormatter.ISO_DATE);
+
+            endDate = LocalDate.parse(
+                    endDateStr,
+                    DateTimeFormatter.ISO_DATE);
+        } catch (DateTimeParseException e) {
+            throw new IllegalArgumentException(
+                    "예약 날짜는 yyyy-MM-dd 형식이어야 합니다.");
+        }
+
+        if (endDate.isBefore(startDate)) {
+            throw new IllegalArgumentException(
+                    "종료일은 시작일보다 빠를 수 없습니다.");
+        }
+
+        if (startDate.isBefore(LocalDate.now())) {
+            throw new IllegalArgumentException(
+                    "오늘 이전 날짜는 조회할 수 없습니다.");
+        }
+
+        if (endDate.isAfter(startDate.plusDays(2))) {
+            throw new IllegalArgumentException(
+                    "주차 이용 기간은 최대 3일까지 가능합니다.");
+        }
+
+        LocalDateTime startAt = startDate.atStartOfDay();
+        LocalDateTime endAt = endDate.atTime(23, 59, 59);
+
+        return reservationRepository.findAvailableSpaceIds(startAt, endAt);
+    }
+
     // 전체 예약 최신순 조회
     public List<ReservationRes> getAllReservations() {
         return reservationRepository
