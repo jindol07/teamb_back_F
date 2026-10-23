@@ -10,16 +10,21 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 
 import kr.co.alpharking.dao.vehicle.VehicleChangeRequestDao;
 import kr.co.alpharking.dto.vehicle.VehicleChangeRequestDTO;
+import kr.co.alpharking.dto.notification.NotificationDto;
+import kr.co.alpharking.service.notification.NotificationService;
 
 @Service
 @Transactional
 public class VehicleChangeRequestService {
 
 	private final VehicleChangeRequestDao vehicleChangeRequestDao;
+	private final NotificationService notificationService;
 	private final ObjectMapper objectMapper = new ObjectMapper(); // 직접 생성
 
-	public VehicleChangeRequestService(VehicleChangeRequestDao vehicleChangeRequestDao) {
+	public VehicleChangeRequestService(VehicleChangeRequestDao vehicleChangeRequestDao,
+			NotificationService notificationService) {
 		this.vehicleChangeRequestDao = vehicleChangeRequestDao;
+		this.notificationService = notificationService;
 	}
 
 	// 차량 변경 요청 등록
@@ -72,16 +77,7 @@ public class VehicleChangeRequestService {
 				throw new IllegalStateException("검토된 추가 차량을 생성하지 못했습니다.");
 			}
 
-			// CK_VCR_TARGET 제약조건에 따라 반려된 ADD 요청은 target_vehicle_id를 비워 둔다.
-			// 승인된 요청만 생성 차량 ID를 요청 행에 연결한다.
-			if ("APPROVED".equals(status)) {
-				int linked = vehicleChangeRequestDao.updateTargetVehicleId(storedRequest);
-
-				if (linked != 1) {
-					throw new IllegalStateException("요청 데이터에 차량 ID를 연결하지 못했습니다.");
-				}
-			}
-
+			// ADD 요청은 DB 제약조건에 따라 target_vehicle_id를 연결하지 않습니다.
 			// 승인 또는 반려 이력 저장
 			int historyCreated = vehicleChangeRequestDao.addReviewedAddHistory(storedRequest);
 
@@ -91,6 +87,7 @@ public class VehicleChangeRequestService {
 
 			// 반려일 때만 감사 로그 저장
 			saveRejectAuditLog(vehicleChangeRequest, beforeData, status);
+			notifyOffice(storedRequest, status);
 
 			return;
 		}
@@ -105,6 +102,31 @@ public class VehicleChangeRequestService {
 
 		// 반려일 때만 감사 로그 저장
 		saveRejectAuditLog(vehicleChangeRequest, beforeData, status);
+		notifyOffice(storedRequest, status);
+	}
+
+	private void notifyOffice(VehicleChangeRequestDTO request, String status) {
+		if (!"ADD".equals(request.getRequesttypecode())) {
+			return;
+		}
+		NotificationDto notification = new NotificationDto();
+		notification.setOffice_id(request.getOfficeid());
+		notification.setNotification_type_code("APPROVED".equals(status)
+				? "VEHICLE_APPROVED" : "VEHICLE_REJECTED");
+		notification.setTitle("APPROVED".equals(status) ? "차량 등록 승인" : "차량 등록 반려");
+		String message = "차량번호 " + request.getRequestedvehiclenumber()
+				+ ("APPROVED".equals(status) ? " 등록 신청이 승인되었습니다."
+						: " 등록 신청이 반려되었습니다.");
+		if ("REJECTED".equals(status) && request.getReviewreason() != null
+				&& !request.getReviewreason().isBlank()) {
+			message += " 반려 사유: " + request.getReviewreason();
+		}
+		notification.setContent(message);
+		notification.setVehicle_change_request_id(request.getVehiclechangerequestid());
+		int inserted = notificationService.createNotification(notification);
+		if (inserted != 1) {
+			throw new IllegalStateException("차량 검토 결과 알림을 저장하지 못했습니다.");
+		}
 	}
 
 	// 반려 감사 로그: REJECTED일 때만 호출

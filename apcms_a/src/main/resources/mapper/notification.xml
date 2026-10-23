@@ -48,26 +48,18 @@
 	</select>
 
 	<!-- 알림 등록 -->
-	<insert id="insertNotification"
-		parameterType="noti"
-		useGeneratedKeys="true"
-		keyProperty="notification_id">
-		INSERT INTO notification (
-		office_id,
-		notification_type_code,
-		title,
-		content,
-		read_yn,
-		created_at
-		) VALUES (
-		#{office_id},
-		#{notification_type_code},
-		#{title},
-		#{content},
-		'N',
-		CURRENT_TIMESTAMP
-		)
-	</insert>
+	<insert id="insertNotification" parameterType="noti">
+        <selectKey keyProperty="notification_id" resultType="long" order="BEFORE">
+            SELECT SEQ_NOTIFICATION.NEXTVAL FROM dual
+        </selectKey>
+        INSERT INTO notification (
+        notification_id, office_id, notification_type_code, title, content,
+        read_yn, created_at, vehicle_change_request_id
+        ) VALUES (
+        #{notification_id}, #{office_id}, #{notification_type_code}, #{title},
+        #{content}, 'N', SYSDATE, #{vehicle_change_request_id}
+        )
+    </insert>
 
 	<!-- 읽음 처리 -->
 	<update id="updateReadYn">

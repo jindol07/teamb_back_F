@@ -26,24 +26,25 @@ public class NotificationController {
 
 	// 전체 알림 조회
 	@GetMapping
-	public ResponseEntity<List<NotificationEntity>> getNotifications(@RequestParam String recipienttypecode,
-			@RequestParam Long recipientid) {
+	public ResponseEntity<List<NotificationEntity>> getNotifications(
+			@RequestParam("recipienttypecode") String recipienttypecode,
+			@RequestParam("recipientid") Long recipientid) {
 
 		return ResponseEntity.ok(notificationService.getNotifications(recipienttypecode, recipientid));
 	}
 
 	// 읽지 않은 알림 조회
 	@GetMapping("/unread")
-	public ResponseEntity<List<NotificationEntity>> getUnreadNotifications(@RequestParam String recipienttypecode,
-			@RequestParam Long recipientid) {
+	public ResponseEntity<List<NotificationEntity>> getUnreadNotifications(@RequestParam("recipienttypecode") String recipienttypecode,
+			@RequestParam("recipientid") Long recipientid) {
 
 		return ResponseEntity.ok(notificationService.getUnreadNotifications(recipienttypecode, recipientid));
 	}
 
 	// 읽지 않은 알림 개수 조회
 	@GetMapping("/unread/count")
-	public ResponseEntity<Map<String, Long>> getUnreadCount(@RequestParam String recipienttypecode,
-			@RequestParam Long recipientid) {
+	public ResponseEntity<Map<String, Long>> getUnreadCount(@RequestParam("recipienttypecode") String recipienttypecode,
+			@RequestParam("recipientid") Long recipientid) {
 
 		long count = notificationService.getUnreadCount(recipienttypecode, recipientid);
 
@@ -52,8 +53,8 @@ public class NotificationController {
 
 	// 알림 읽음 처리
 	@PostMapping("/{notificationid}/read")
-	public ResponseEntity<Void> markAsRead(@PathVariable Long notificationid, @RequestParam String recipienttypecode,
-			@RequestParam Long recipientid) {
+	public ResponseEntity<Void> markAsRead(@PathVariable("notificationid") Long notificationid, @RequestParam("recipienttypecode") String recipienttypecode,
+			@RequestParam("recipientid") Long recipientid) {
 
 		notificationService.markAsRead(notificationid, recipienttypecode, recipientid);
 

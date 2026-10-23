@@ -32,7 +32,7 @@ public class MileageController {
     }
 
     @GetMapping("/{id}")
-    public MileagehistoryDto findById(@PathVariable Long id) {
+    public MileagehistoryDto findById(@PathVariable("id") Long id) {
         return mileagehistoryService.findById(id);
     }
 
@@ -43,13 +43,13 @@ public class MileageController {
     }
 
     @PutMapping("/{id}")
-    public MileagehistoryDto update(@PathVariable Long id, @RequestBody MileagehistoryDto mileagehistory) {
+    public MileagehistoryDto update(@PathVariable("id") Long id, @RequestBody MileagehistoryDto mileagehistory) {
         return mileagehistoryService.update(id, mileagehistory);
     }
 
     @DeleteMapping("/{id}")
     @ResponseStatus(HttpStatus.NO_CONTENT)
-    public void delete(@PathVariable Long id) {
+    public void delete(@PathVariable("id") Long id) {
         mileagehistoryService.delete(id);
     }
 }
