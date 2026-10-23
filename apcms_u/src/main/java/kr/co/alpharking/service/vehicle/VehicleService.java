@@ -42,8 +42,9 @@ public class VehicleService {
         }
         String vehicleNumber = request.getVehicleNumber() == null ? "" : request.getVehicleNumber().trim();
         String vehicleModel = request.getVehicleModel() == null ? "" : request.getVehicleModel().trim();
-        if (vehicleNumber.isEmpty() || vehicleModel.isEmpty()) {
-            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "차량번호와 차종을 입력해주세요.");
+        String ownerName = request.getOwnerName() == null ? "" : request.getOwnerName().trim();
+        if (vehicleNumber.isEmpty() || ownerName.isEmpty() || vehicleModel.isEmpty()) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "차량번호, 차주명과 차종을 입력해주세요.");
         }
         if (vehicleRepository.existsByVehicleNumberAndRegistrationStatusCodeInAndDeletedAtIsNull(
                 vehicleNumber, ACTIVE_REGISTRATION_STATUSES)) {
@@ -53,11 +54,11 @@ public class VehicleService {
                 officeId, vehicleNumber, "REQUESTED")) {
             throw new ResponseStatusException(HttpStatus.CONFLICT, "이미 처리 중인 차량 등록 신청입니다.");
         }
-
         VehicleChangeRequest vehicleRequest = new VehicleChangeRequest();
         vehicleRequest.setOfficeId(officeId);
         vehicleRequest.setRequestTypeCode("ADD");
         vehicleRequest.setRequestedVehicleNumber(vehicleNumber);
+        vehicleRequest.setRequestedOwnerName(ownerName);
         vehicleRequest.setRequestedVehicleModel(vehicleModel);
         vehicleRequest.setRequestedVehicleTypeCode("PERSONAL");
         vehicleRequest.setRequestReason("마이페이지 차량 등록 신청");
