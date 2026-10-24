@@ -28,30 +28,104 @@ public class ChatbotConversationRepository {
             WHERE INQUIRY_CONVERSATION_ID = ? AND OFFICE_ID = ? AND ENDED_AT IS NULL
             """, Integer.class, id, officeId) == 1;
     }
-
+    //1023: 오라클21c
+//    public Optional<Long> latest(long officeId) {
+//        return jdbc.query("""
+//            SELECT INQUIRY_CONVERSATION_ID FROM INQUIRY_CONVERSATION
+//            WHERE OFFICE_ID = ? AND ENDED_AT IS NULL
+//            ORDER BY CREATED_AT DESC, INQUIRY_CONVERSATION_ID DESC FETCH FIRST 1 ROW ONLY
+//            """, (rs, row) -> rs.getLong(1), officeId).stream().findFirst();
+//    }
+    
+    //1023: 오라클11g : 배포
     public Optional<Long> latest(long officeId) {
         return jdbc.query("""
-            SELECT INQUIRY_CONVERSATION_ID FROM INQUIRY_CONVERSATION
-            WHERE OFFICE_ID = ? AND ENDED_AT IS NULL
-            ORDER BY CREATED_AT DESC, INQUIRY_CONVERSATION_ID DESC FETCH FIRST 1 ROW ONLY
-            """, (rs, row) -> rs.getLong(1), officeId).stream().findFirst();
+            SELECT INQUIRY_CONVERSATION_ID
+            FROM (
+                SELECT INQUIRY_CONVERSATION_ID
+                FROM INQUIRY_CONVERSATION
+                WHERE OFFICE_ID = ?
+                  AND ENDED_AT IS NULL
+                ORDER BY CREATED_AT DESC,
+                         INQUIRY_CONVERSATION_ID DESC
+            )
+            WHERE ROWNUM = 1
+            """,
+            (rs, row) -> rs.getLong(1),
+            officeId
+        ).stream().findFirst();
     }
-
+    
+    //1023: 오라클21c
+//    public Optional<Exchange> findExchange(long officeId, String requestId) {
+//        return jdbc.query("""
+//            SELECT c.INQUIRY_CONVERSATION_ID, q.MESSAGE_CONTENT AS QUESTION,
+//                   a.MESSAGE_CONTENT AS ANSWER, a.RAG_SOURCE_JSON AS METADATA,
+//                   q.INQUIRY_MESSAGE_ID AS QUESTION_ID, a.INQUIRY_MESSAGE_ID AS ANSWER_ID
+//            FROM INQUIRY_CONVERSATION c
+//            JOIN INQUIRY_MESSAGE q ON q.INQUIRY_CONVERSATION_ID = c.INQUIRY_CONVERSATION_ID
+//            JOIN INQUIRY_MESSAGE a ON a.INQUIRY_CONVERSATION_ID = c.INQUIRY_CONVERSATION_ID
+//            WHERE c.OFFICE_ID = ? AND q.SENDER_TYPE_CODE = 'USER' AND a.SENDER_TYPE_CODE = 'AI'
+//              AND JSON_VALUE(q.RAG_SOURCE_JSON, '$.requestId' RETURNING VARCHAR2(36) NULL ON ERROR) = ?
+//              AND JSON_VALUE(a.RAG_SOURCE_JSON, '$.requestId' RETURNING VARCHAR2(36) NULL ON ERROR) = ?
+//            """, (rs, row) -> new Exchange(rs.getLong("INQUIRY_CONVERSATION_ID"),
+//                rs.getString("QUESTION"), rs.getString("ANSWER"), rs.getString("METADATA"),
+//                rs.getString("QUESTION_ID"), rs.getString("ANSWER_ID")), officeId, requestId, requestId)
+//            .stream().findFirst();
+//    }
+    
+    //1023: 오라클11g : 배포
     public Optional<Exchange> findExchange(long officeId, String requestId) {
+
+        if (requestId == null ||
+            !requestId.matches("[0-9a-fA-F-]{36}")) {
+            throw new IllegalArgumentException("올바르지 않은 requestId");
+        }
+
         return jdbc.query("""
-            SELECT c.INQUIRY_CONVERSATION_ID, q.MESSAGE_CONTENT AS QUESTION,
-                   a.MESSAGE_CONTENT AS ANSWER, a.RAG_SOURCE_JSON AS METADATA,
-                   q.INQUIRY_MESSAGE_ID AS QUESTION_ID, a.INQUIRY_MESSAGE_ID AS ANSWER_ID
+            SELECT
+                c.INQUIRY_CONVERSATION_ID,
+                q.MESSAGE_CONTENT AS QUESTION,
+                a.MESSAGE_CONTENT AS ANSWER,
+                a.RAG_SOURCE_JSON AS METADATA,
+                q.INQUIRY_MESSAGE_ID AS QUESTION_ID,
+                a.INQUIRY_MESSAGE_ID AS ANSWER_ID
             FROM INQUIRY_CONVERSATION c
-            JOIN INQUIRY_MESSAGE q ON q.INQUIRY_CONVERSATION_ID = c.INQUIRY_CONVERSATION_ID
-            JOIN INQUIRY_MESSAGE a ON a.INQUIRY_CONVERSATION_ID = c.INQUIRY_CONVERSATION_ID
-            WHERE c.OFFICE_ID = ? AND q.SENDER_TYPE_CODE = 'USER' AND a.SENDER_TYPE_CODE = 'AI'
-              AND JSON_VALUE(q.RAG_SOURCE_JSON, '$.requestId' RETURNING VARCHAR2(36) NULL ON ERROR) = ?
-              AND JSON_VALUE(a.RAG_SOURCE_JSON, '$.requestId' RETURNING VARCHAR2(36) NULL ON ERROR) = ?
-            """, (rs, row) -> new Exchange(rs.getLong("INQUIRY_CONVERSATION_ID"),
-                rs.getString("QUESTION"), rs.getString("ANSWER"), rs.getString("METADATA"),
-                rs.getString("QUESTION_ID"), rs.getString("ANSWER_ID")), officeId, requestId, requestId)
-            .stream().findFirst();
+
+            JOIN INQUIRY_MESSAGE q
+              ON q.INQUIRY_CONVERSATION_ID =
+                 c.INQUIRY_CONVERSATION_ID
+
+            JOIN INQUIRY_MESSAGE a
+              ON a.INQUIRY_CONVERSATION_ID =
+                 c.INQUIRY_CONVERSATION_ID
+
+            WHERE c.OFFICE_ID = ?
+              AND q.SENDER_TYPE_CODE = 'USER'
+              AND a.SENDER_TYPE_CODE = 'AI'
+
+              AND REGEXP_LIKE(
+                  q.RAG_SOURCE_JSON,
+                  '"requestId"[[:space:]]*:[[:space:]]*"' || ? || '"'
+              )
+
+              AND REGEXP_LIKE(
+                  a.RAG_SOURCE_JSON,
+                  '"requestId"[[:space:]]*:[[:space:]]*"' || ? || '"'
+              )
+            """,
+            (rs, row) -> new Exchange(
+                rs.getLong("INQUIRY_CONVERSATION_ID"),
+                rs.getString("QUESTION"),
+                rs.getString("ANSWER"),
+                rs.getString("METADATA"),
+                rs.getString("QUESTION_ID"),
+                rs.getString("ANSWER_ID")
+            ),
+            officeId,
+            requestId,
+            requestId
+        ).stream().findFirst();
     }
 
     public long create(long officeId, String title) {
@@ -80,14 +154,49 @@ public class ChatbotConversationRepository {
         return Long.toString(id);
     }
 
+  //1023: 오라클21c
+//    public List<Message> messages(long conversationId) {
+//        return jdbc.query("""
+//            SELECT * FROM (
+//                SELECT INQUIRY_MESSAGE_ID, SENDER_TYPE_CODE, MESSAGE_CONTENT FROM INQUIRY_MESSAGE
+//                WHERE INQUIRY_CONVERSATION_ID = ? AND SENDER_TYPE_CODE IN ('USER', 'AI')
+//                ORDER BY INQUIRY_MESSAGE_ID DESC FETCH FIRST 40 ROWS ONLY
+//            ) ORDER BY INQUIRY_MESSAGE_ID ASC
+//            """, (rs, row) -> new Message(rs.getString("INQUIRY_MESSAGE_ID"),
+//                rs.getString("SENDER_TYPE_CODE"), rs.getString("MESSAGE_CONTENT")), conversationId);
+//    }
+    
+  //1023: 오라클11g : 배포
     public List<Message> messages(long conversationId) {
+
         return jdbc.query("""
-            SELECT * FROM (
-                SELECT INQUIRY_MESSAGE_ID, SENDER_TYPE_CODE, MESSAGE_CONTENT FROM INQUIRY_MESSAGE
-                WHERE INQUIRY_CONVERSATION_ID = ? AND SENDER_TYPE_CODE IN ('USER', 'AI')
-                ORDER BY INQUIRY_MESSAGE_ID DESC FETCH FIRST 40 ROWS ONLY
-            ) ORDER BY INQUIRY_MESSAGE_ID ASC
-            """, (rs, row) -> new Message(rs.getString("INQUIRY_MESSAGE_ID"),
-                rs.getString("SENDER_TYPE_CODE"), rs.getString("MESSAGE_CONTENT")), conversationId);
+            SELECT
+                INQUIRY_MESSAGE_ID,
+                SENDER_TYPE_CODE,
+                MESSAGE_CONTENT
+            FROM (
+                SELECT *
+                FROM (
+                    SELECT
+                        INQUIRY_MESSAGE_ID,
+                        SENDER_TYPE_CODE,
+                        MESSAGE_CONTENT
+                    FROM INQUIRY_MESSAGE
+                    WHERE INQUIRY_CONVERSATION_ID = ?
+                      AND SENDER_TYPE_CODE IN ('USER', 'AI')
+                    ORDER BY INQUIRY_MESSAGE_ID DESC
+                )
+                WHERE ROWNUM <= 40
+            )
+            ORDER BY INQUIRY_MESSAGE_ID ASC
+            """,
+            (rs, row) -> new Message(
+                rs.getString("INQUIRY_MESSAGE_ID"),
+                rs.getString("SENDER_TYPE_CODE"),
+                rs.getString("MESSAGE_CONTENT")
+            ),
+            conversationId
+        );
     }
+    
 }

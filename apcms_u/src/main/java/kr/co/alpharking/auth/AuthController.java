@@ -12,6 +12,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
+import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
@@ -70,11 +71,34 @@ public class AuthController {
 			System.out.print("jwtLog~~~~~~~ =>" + jwt);
 			
 			return ResponseEntity.ok(new AuthResponse(jwt));
-		} catch (Exception e) {
-			System.out.println("인증 오류   :  " + e);
-		}
+		} //catch (Exception e) {
+			//System.out.println("인증 오류   :  " + e);
+		//}
+		
+		// 1023 : 실패 예외 처리 : 200 + null 반환 이슈
+		catch (AuthenticationException e) {
+	        // 아이디 또는 비밀번호 오류 등의 인증 실패
+	        SecurityContextHolder.clearContext();
+
+	        return ResponseEntity
+	                .status(HttpStatus.UNAUTHORIZED)
+	                .build();
+
+	    } catch (Exception e) {
+	        // JWT 생성 오류 등 예상하지 못한 서버 오류
+	        SecurityContextHolder.clearContext();
+
+	        // 실제 운영 코드에서는 Logger로 예외 기록 권장
+	        System.err.println("로그인 처리 오류: " + e.getClass().getName());
+
+	        return ResponseEntity
+	                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+	                .build();
+	    }
+		
 		// AuthenticationResponse에 JWT 토큰을 담아 클라이언트에게 반환
-		return ResponseEntity.ok(new AuthResponse(null));
+		// 1023 : 200 + null 반환..
+		//return ResponseEntity.ok(new AuthResponse(null));
 	}
 
 	// 사용자 로그아웃 처리

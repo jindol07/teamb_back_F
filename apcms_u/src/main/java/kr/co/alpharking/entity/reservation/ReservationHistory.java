@@ -26,7 +26,7 @@ public class ReservationHistory {
     @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "seq_parking_reservation_history_gen")
     @SequenceGenerator(
             name = "seq_parking_reservation_history_gen",
-            sequenceName = "SEQ_PARKING_RESERVATION_HISTORY",
+            sequenceName = "SEQ_PARKING_RESV_HIST",
             allocationSize = 1
     )
     @Column(name = "PARKING_RESERVATION_HISTORY_ID")

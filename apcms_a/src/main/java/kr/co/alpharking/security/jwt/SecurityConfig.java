@@ -22,6 +22,10 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 import jakarta.annotation.PostConstruct;
 import jakarta.servlet.DispatcherType;
 
+//1023: 배포 CORS 이슈
+import java.util.Arrays;
+import org.springframework.beans.factory.annotation.Value;
+
 @EnableWebSecurity
 @Configuration
 public class SecurityConfig {
@@ -31,6 +35,10 @@ public class SecurityConfig {
 	// 사용자 상세 정보를 제공하는 서비스
 	@Autowired
 	private UserDetailsService userDetailsService;
+	
+	//1023: 배포 CORS 이슈
+	@Value("${app.cors.origins}")
+	private String corsOrigins;
 	
 	//단방향 비밀번호 인코딩 -> 시큐리티는 데이터 베이스에 저장할 때 암호화 해서 저장
 	@Bean
@@ -53,6 +61,8 @@ public class SecurityConfig {
             AuthenticationConfiguration authenticationConfiguration) throws Exception {
         return authenticationConfiguration.getAuthenticationManager();
     }
+    
+    
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         		http
@@ -99,22 +109,58 @@ public class SecurityConfig {
                 .logout((logout) -> logout.disable());
         return http.build();
     }
+    
+// 1023: 배포 CORS 이슈
+//    @Bean
+//    public CorsConfigurationSource corsConfigurationSource() {
+//        CorsConfiguration corsConfiguration = new CorsConfiguration();
+//        corsConfiguration.setAllowCredentials(true);
+//        corsConfiguration.setAllowedOrigins(// React 그러니까 개발 클라이언트 접속만 허용 
+//        		List.of("http://192.168.0.13:3000", "http://localhost:3000")
+//        		);
+//        corsConfiguration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
+//        corsConfiguration.setAllowedHeaders(List.of("*"));
+//
+//        UrlBasedCorsConfigurationSource urlBasedCorsConfigurationSource = new UrlBasedCorsConfigurationSource();
+//        urlBasedCorsConfigurationSource.registerCorsConfiguration("/**", corsConfiguration);
+//
+//        return urlBasedCorsConfigurationSource;
+//
+//    }// corsConfigurationSource
+    
+  //1023: 배포 CORS 이슈   
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
+
         CorsConfiguration corsConfiguration = new CorsConfiguration();
+
         corsConfiguration.setAllowCredentials(true);
-        corsConfiguration.setAllowedOrigins(// React 그러니까 개발 클라이언트 접속만 허용 
-        		List.of("http://192.168.0.108:3000", "http://localhost:3000")
-        		);
-        corsConfiguration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
+
+        // application.properties 또는 AWS 환경변수에서 허용 Origin 조회
+        corsConfiguration.setAllowedOrigins(
+            Arrays.stream(corsOrigins.split(","))
+                .map(String::trim)
+                .filter(origin -> !origin.isEmpty())
+                .toList()
+        );
+
+        corsConfiguration.setAllowedMethods(
+            List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
+        );
+
         corsConfiguration.setAllowedHeaders(List.of("*"));
 
-        UrlBasedCorsConfigurationSource urlBasedCorsConfigurationSource = new UrlBasedCorsConfigurationSource();
-        urlBasedCorsConfigurationSource.registerCorsConfiguration("/**", corsConfiguration);
+        corsConfiguration.setExposedHeaders(
+            List.of("Authorization")
+        );
 
-        return urlBasedCorsConfigurationSource;
+        UrlBasedCorsConfigurationSource source =
+            new UrlBasedCorsConfigurationSource();
 
-    }// corsConfigurationSource
+        source.registerCorsConfiguration("/**", corsConfiguration);
+
+        return source;
+    }
 
 }
 
