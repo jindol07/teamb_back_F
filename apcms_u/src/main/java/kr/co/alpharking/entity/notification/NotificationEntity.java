@@ -9,6 +9,7 @@ import jakarta.persistence.GeneratedValue;
 import jakarta.persistence.GenerationType;
 import jakarta.persistence.Id;
 import jakarta.persistence.Table;
+import jakarta.persistence.SequenceGenerator;
 
 // JPA 알림 데이터 구조
 @Entity
@@ -16,7 +17,8 @@ import jakarta.persistence.Table;
 public class NotificationEntity {
 
     @Id
-    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    @GeneratedValue(strategy = GenerationType.SEQUENCE, generator = "notification_seq")
+    @SequenceGenerator(name = "notification_seq", sequenceName = "SEQ_NOTIFICATION", allocationSize = 1)
     @Column(name = "NOTIFICATION_ID")
     private Long notificationid; // 알림 ID
 

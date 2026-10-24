@@ -20,6 +20,7 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import jakarta.annotation.PostConstruct;
+import jakarta.servlet.DispatcherType;
 
 //1023: 배포 CORS 이슈
 import java.util.Arrays;
@@ -72,6 +73,8 @@ public class SecurityConfig {
                 .httpBasic((basic) -> basic.disable())
             	//.authenticationProvider(daoAuthenticationProvider())
                 .authorizeHttpRequests((auth) -> auth
+                		// 오류 처리용 내부 디스패치만 허용
+                	    .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                         // 관리자 공지 API는 목록·상세·다운로드·변경 이력을 포함해 ADMIN만 접근합니다.
                         // 일반 사용자 공지 조회는 사용자 서버의 API를 사용합니다.
                         .requestMatchers("/api/notice", "/api/notice/**").hasAuthority("ADMIN")
@@ -88,6 +91,7 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.POST,
                                 "/api/parking/ai/vehicle-events",
                                 "/api/parking/ai/space-match-events",
+                                "/api/parking/ai/space-release-events",
                                 "/api/parking/ai/occupancy-events").permitAll()
                         // 민감 정보를 제외한 현황도 로그인은 필요하다.
                         .requestMatchers(HttpMethod.GET, "/api/parking/spaces/public").authenticated()

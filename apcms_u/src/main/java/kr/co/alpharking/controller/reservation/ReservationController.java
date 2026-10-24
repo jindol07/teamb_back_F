@@ -12,6 +12,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import kr.co.alpharking.dto.reservation.ReservationReq;
@@ -61,6 +62,18 @@ public class ReservationController {
         Office office = (Office) authentication.getPrincipal();
         return ResponseEntity.ok(
                 reservationService.getReservationsByOfficeId(office.getOffice_id()));
+    }
+
+    /**
+     * 선택 기간에 예약 가능한 주차 공간 조회
+     * GET /alpharking/api/reservation/availability
+     */
+    @GetMapping("/availability")
+    public ResponseEntity<List<Long>> getAvailableSpaceIds(
+            @RequestParam("start_date_str") String startDateStr,
+            @RequestParam("end_date_str") String endDateStr) {
+        return ResponseEntity.ok(
+                reservationService.getAvailableSpaceIds(startDateStr, endDateStr));
     }
 
     /**

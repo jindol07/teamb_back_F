@@ -16,6 +16,9 @@ import kr.co.alpharking.entity.reservation.ReservationHistory;
 import kr.co.alpharking.repository.reservation.ReservationHistoryRepository;
 import kr.co.alpharking.repository.reservation.ReservationRepository;
 import lombok.RequiredArgsConstructor;
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+import jakarta.persistence.LockModeType;
 
 @Service
 @RequiredArgsConstructor
@@ -24,6 +27,9 @@ public class ReservationService {
 
     private final ReservationRepository reservationRepository;
     private final ReservationHistoryRepository reservationHistoryRepository;
+
+    @PersistenceContext
+    private EntityManager entityManager;
 
     // 로그인 기능 병합 전 테스트용 오피스 ID
     @Value("${reservation.test-office-id:1}")
@@ -143,6 +149,8 @@ public class ReservationService {
         LocalDateTime startAt = startDate.atStartOfDay();
         LocalDateTime endAt = endDate.atTime(23, 59, 59);
 
+        // AI 연결과 같은 구획 행을 잠근 뒤 중복을 확인한다. 없는 예약 행만 잠그면 새 예약 삽입을 막지 못한다.
+        requireSpaceLock(parkingSpaceId);
         // 동일 주차 공간의 예약 시간 중복 확인
         long overlappingCount =
                 reservationRepository.countOverlappingReservations(
@@ -190,12 +198,28 @@ public class ReservationService {
      */
     @Transactional
     public void cancelReservation(Long reservationId) {
-        Reservation reservation = reservationRepository.findById(reservationId)
+        if (reservationId == null || reservationId <= 0) {
+            throw new IllegalArgumentException("올바른 예약 ID가 필요합니다.");
+        }
+        Long spaceId = reservationRepository.findSpaceIdForReservation(reservationId)
+                .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 예약입니다."));
+        requireSpaceLock(spaceId);
+        Reservation reservation = reservationRepository.findLockedById(reservationId)
                 .orElseThrow(() -> new IllegalArgumentException("존재하지 않는 예약입니다."));
 
+        // 같은 영속성 컨텍스트에 예전 엔티티가 있어도 잠금 후 최신 DB 상태를 다시 읽는다.
+        entityManager.refresh(reservation, LockModeType.PESSIMISTIC_WRITE);
+        if (!spaceId.equals(reservation.getParkingSpaceId())) {
+            throw new IllegalArgumentException("예약 구획이 변경되었습니다. 다시 조회해 주세요.");
+        }
+
         // 이미 취소된 예약인지 확인
-        if ("CANCELED".equals(reservation.getStatusCode())) {
+        if ("CANCELED".equals(reservation.getStatusCode()) || reservation.getCancelledAt() != null) {
             throw new IllegalArgumentException("이미 취소된 예약입니다.");
+        }
+
+        if (reservationRepository.countActiveUsageForReservation(reservationId) > 0) {
+            throw new IllegalArgumentException("현재 주차 이용에 연결된 예약은 취소할 수 없습니다. 연결 또는 출차 기록을 먼저 확인해 주세요.");
         }
 
         LocalDateTime now = LocalDateTime.now();
@@ -220,6 +244,12 @@ public class ReservationService {
         reservationHistoryRepository.save(history);
     }
 
+    private void requireSpaceLock(Long spaceId) {
+        if (spaceId == null || !spaceId.equals(reservationRepository.lockParkingSpace(spaceId))) {
+            throw new IllegalArgumentException("존재하지 않는 주차 공간입니다.");
+        }
+    }
+
     // 로그인한 사용자의 취소되지 않았고 만료되지 않은 예약 조회
     public List<ReservationRes> getReservationsByOfficeId(Long officeId) {
         if (officeId == null) {
@@ -233,6 +263,45 @@ public class ReservationService {
                 .stream()
                 .map(ReservationRes::from)
                 .toList();
+    }
+
+    // 선택 기간에 예약이 없는 주차 공간 ID 조회
+    public List<Long> getAvailableSpaceIds(String startDateStr, String endDateStr) {
+        LocalDate startDate;
+        LocalDate endDate;
+
+        try {
+            startDate = LocalDate.parse(
+                    startDateStr,
+                    DateTimeFormatter.ISO_DATE);
+
+            endDate = LocalDate.parse(
+                    endDateStr,
+                    DateTimeFormatter.ISO_DATE);
+        } catch (DateTimeParseException e) {
+            throw new IllegalArgumentException(
+                    "예약 날짜는 yyyy-MM-dd 형식이어야 합니다.");
+        }
+
+        if (endDate.isBefore(startDate)) {
+            throw new IllegalArgumentException(
+                    "종료일은 시작일보다 빠를 수 없습니다.");
+        }
+
+        if (startDate.isBefore(LocalDate.now())) {
+            throw new IllegalArgumentException(
+                    "오늘 이전 날짜는 조회할 수 없습니다.");
+        }
+
+        if (endDate.isAfter(startDate.plusDays(2))) {
+            throw new IllegalArgumentException(
+                    "주차 이용 기간은 최대 3일까지 가능합니다.");
+        }
+
+        LocalDateTime startAt = startDate.atStartOfDay();
+        LocalDateTime endAt = endDate.atTime(23, 59, 59);
+
+        return reservationRepository.findAvailableSpaceIds(startAt, endAt);
     }
 
     // 전체 예약 최신순 조회

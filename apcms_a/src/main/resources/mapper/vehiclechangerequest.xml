@@ -176,17 +176,7 @@
 		WHERE vehicle_change_request_id = #{vehiclechangerequestid}
 		AND request_status_code = 'REQUESTED'
 	</update>
-	<!-- 생성한 차량 ID를 요청 데이터에 연결 -->
-	<update id="updateTargetVehicleId">
-		UPDATE vehicle_change_request
-		SET target_vehicle_id = #{targetvehicleid}
-		WHERE vehicle_change_request_id = #{vehiclechangerequestid}
-		AND request_type_code = 'ADD'
-		AND request_status_code = 'APPROVED'
-	</update>
-
-
-	<!-- 승인/반려 결과를 추가 등록 차량 행에 반영; 비 ADD 요청은 변경하지 않는다. -->
+<!-- 승인/반려 결과를 추가 등록 차량 행에 반영; 비 ADD 요청은 변경하지 않는다. -->
 	<update id="applyAddReviewToVehicle">
 		UPDATE vehicle v
 		SET registration_status_code = (

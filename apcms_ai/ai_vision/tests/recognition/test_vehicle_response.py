@@ -3,6 +3,7 @@
 import json
 import unittest
 from ai_vision.recognition.vehicle_response import assess_response
+from ai_vision.recognition.vehicle_response import assess_space_match_response
 
 
 def sample_event():
@@ -12,7 +13,39 @@ def sample_event():
             "plate_number": "91소6408", "confidence": .8}
 
 
+def sample_space_event():
+    return {k: v for k, v in sample_event().items() if k != 'direction'} | {
+        'event_type': 'VEHICLE_SPACE_MATCH', 'space_code': '1F-A01', 'method': 'TRACKING'}
+
+
 class VehicleResponseTests(unittest.TestCase):
+    def test_space_response_matches_space_and_preserves_pending(self):
+        event = sample_space_event()
+        body = {'eventId': event['event_id'], 'eventType': event['event_type'], 'plateNumber': event['plate_number'],
+                'spaceCode': event['space_code'], 'parkingUsageId': 70}
+        for outcome, state in [('PROCESSED', 'APPLIED'), ('UNCHANGED', 'UNCHANGED'), ('PENDING', 'HELD')]:
+            result = assess_space_match_response(event, 200, json.dumps(body | {'outcome': outcome}))
+            self.assertEqual(result['state'], state)
+            self.assertTrue(result['receipt_verified'])
+            self.assertFalse(result['automatic_retry_allowed'])
+        result = assess_space_match_response(event, 200, json.dumps(body | {'outcome': 'PENDING', 'parkingUsageId': None}))
+        self.assertEqual(result['state'], 'HELD')
+
+    def test_space_response_rejects_other_space_passage_and_missing_usage(self):
+        event = sample_space_event()
+        body = {'eventId': event['event_id'], 'eventType': event['event_type'], 'plateNumber': event['plate_number'],
+                'spaceCode': event['space_code'], 'parkingUsageId': 70, 'outcome': 'PROCESSED'}
+        for change in ({'spaceCode': '1F-A02'}, {'spaceCode': None}, {'eventType': 'VEHICLE_PASSAGE'},
+                       {'parkingUsageId': None}, {'parkingUsageId': True}):
+            result = assess_space_match_response(event, 200, json.dumps(body | change))
+            self.assertEqual(result['state'], 'DELIVERY_UNKNOWN')
+            self.assertFalse(result['receipt_verified'])
+
+    def test_space_response_timeout_does_not_claim_rejection_or_retry(self):
+        result = assess_space_match_response(sample_space_event(), transport_error='TIMEOUT')
+        self.assertEqual(result['state'], 'DELIVERY_UNKNOWN')
+        self.assertFalse(result['automatic_retry_allowed'])
+
     def setUp(self):
         self.event = sample_event()
         self.body = {"eventId": self.event["event_id"], "eventType": "VEHICLE_PASSAGE", "plateNumber": "91소6408",
@@ -68,3 +101,33 @@ class VehicleResponseTests(unittest.TestCase):
                        {"status_code": 200, "transport_error": "TIMEOUT"}):
             with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
                 assess_response(self.event, **kwargs)
+
+
+class SpaceReleaseResponseTests(unittest.TestCase):
+    def test_release_success_requires_original_usage_and_next_generation(self):
+        from ai_vision.tests.recognition.test_vehicle_contract import SpaceReleaseContractTests
+        from ai_vision.recognition.vehicle_response import assess_space_release_response
+        event = SpaceReleaseContractTests().event()
+        body = {'eventId': event['event_id'], 'eventType': event['event_type'], 'plateNumber': '91소6408',
+                'spaceCode': '1F-A01', 'parkingUsageId': 70, 'linkVersion': 5, 'outcome': 'PROCESSED'}
+        result = assess_space_release_response(event, 200, json.dumps(body))
+        self.assertEqual(result['state'], 'APPLIED')
+        self.assertEqual(result['link_version'], 5)
+        for change in ({'linkVersion': 4}, {'linkVersion': None}, {'linkVersion': True},
+                       {'parkingUsageId': 71}, {'spaceCode': '1F-A02'}, {'outcome': 'UNCHANGED'}):
+            with self.subTest(change=change):
+                result = assess_space_release_response(event, 200, json.dumps(body | change))
+                self.assertEqual(result['state'], 'DELIVERY_UNKNOWN')
+                self.assertFalse(result['receipt_verified'])
+        result = assess_space_release_response(event, 200, json.dumps(body | {'outcome': 'PENDING', 'linkVersion': None}))
+        self.assertEqual(result['state'], 'HELD')
+        self.assertFalse(result['automatic_retry_allowed'])
+
+    def test_match_keeps_nullable_version_for_existing_server(self):
+        from ai_vision.recognition.vehicle_response import assess_space_match_response
+        event = sample_space_event()
+        body = {'eventId': event['event_id'], 'eventType': event['event_type'], 'plateNumber': '91소6408',
+                'spaceCode': event['space_code'], 'parkingUsageId': 70, 'outcome': 'PROCESSED'}
+        self.assertIsNone(assess_space_match_response(event, 200, json.dumps(body))['link_version'])
+        self.assertEqual(assess_space_match_response(event, 200, json.dumps(body | {'linkVersion': 4}))['link_version'], 4)
+        self.assertEqual(assess_space_match_response(event, 200, json.dumps(body | {'linkVersion': True}))['state'], 'DELIVERY_UNKNOWN')

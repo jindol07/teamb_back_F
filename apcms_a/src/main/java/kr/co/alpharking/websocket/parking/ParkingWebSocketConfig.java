@@ -1,3 +1,8 @@
+/** [1023_1010] 파일 안내
+ * 용도: A의 주차 현황 WebSocket 경로·허용 Origin 등록.
+ * 사용처·연결: Spring 설정 검색 → /ws/parking/spaces → A ParkingWebSocketHandler.
+ * 실제 URL에는 A context-path가 붙는다. Origin 허용은 JWT 인증을 대신하지 않는다.
+ */
 package kr.co.alpharking.websocket.parking;
 
 import java.util.Arrays;
@@ -22,6 +27,7 @@ public class ParkingWebSocketConfig implements WebSocketConfigurer {
     }
 
     @Override
+    // [1023_1010] Spring이 실제 소켓 경로에 handler를 등록한다. 이 등록과 별개로 첫 메시지 JWT 검증을 통과해야 한다.
     public void registerWebSocketHandlers(WebSocketHandlerRegistry registry) {
         // context-path를 포함한 실제 주소: /alpharking/admin/ws/parking/spaces
         registry.addHandler(handler, "/ws/parking/spaces")

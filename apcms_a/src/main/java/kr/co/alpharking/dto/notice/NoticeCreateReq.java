@@ -17,6 +17,10 @@ public class NoticeCreateReq {
 	private String title;
 	private String content;
 	private int viewCount;
+	// 목록의 첨부 아이콘 표시용: 파일별 상세 조회 없이 개수만 전달합니다.
+	private int attachmentCount;
+	// 수정 화면에서 기존 첨부 삭제를 명시한 경우에만 적용합니다.
+	private boolean removeAttachment;
 	private String createdAt;
 	private String updatedAt;
 	private String deletedAt;

@@ -19,7 +19,6 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
-import jakarta.annotation.PostConstruct;
 
 //1023: 배포 CORS 이슈
 import java.util.Arrays;
@@ -70,7 +69,6 @@ public class SecurityConfig {
                 .httpBasic((basic) -> basic.disable())
             	//.authenticationProvider(daoAuthenticationProvider())
                 .authorizeHttpRequests((auth) -> auth
-                		.requestMatchers("/api/notice/**").permitAll()
                         .requestMatchers("/api/auth/**").permitAll() // /api/auth/** 에서 오는 모든 요청은 허용
                         .requestMatchers("/demos/**").permitAll() 
                         .requestMatchers("/api/gallery/**").permitAll()
@@ -82,6 +80,8 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/ws/parking/spaces").permitAll()
                         // 사용자 주차현황은 기존과 동일하게 로그인한 사용자만 조회한다.
                         .requestMatchers(HttpMethod.GET, "/api/parking/spaces").authenticated()
+                        // AI 주차 추천은 로그인한 사용자만 요청할 수 있다.
+                        .requestMatchers(HttpMethod.POST, "/api/recmn/recommend").authenticated()
                         //.requestMatchers("/api/chatbot/**").permitAll()
                         
                         
@@ -131,7 +131,6 @@ public class SecurityConfig {
 
         // 쿠키 등 인증 정보가 포함된 요청 허용
         corsConfiguration.setAllowCredentials(true);
-
         // application.properties 또는 환경변수에서 허용 Origin 읽기
         corsConfiguration.setAllowedOrigins(
             Arrays.stream(corsOrigins.split(","))

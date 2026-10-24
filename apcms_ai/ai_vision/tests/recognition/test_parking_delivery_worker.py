@@ -215,3 +215,88 @@ class ParkingDeliveryWorkerTests(unittest.TestCase):
         self.assertEqual(report['deliveries'][0]['status'], 'UPDATED')
         capture.release.assert_called_once()
         preview.close.assert_called_once()
+
+
+class SpaceMatchReportTests(unittest.TestCase):
+    def test_applied_match_without_release_version_is_reviewed_not_replayed(self):
+        from ai_vision.parking.inspect_parking_camera import inspect_report
+        from ai_vision.recognition.local_io import write_json_atomic
+        with tempfile.TemporaryDirectory(dir=RESULT_DIR) as folder:
+            target = Path(folder) / 'report.json'
+            write_json_atomic(target, {'status': 'COMPLETED', 'dry_run': False,
+                'http_requests': 0, 'events': [], 'deliveries': [], 'vehicle_space': {
+                    'http_enabled': True, 'release_http_enabled': True, 'deliveries': [{
+                        'status': 'APPLIED', 'blocking_reason': 'SPACE_RELEASE_VERSION_UNAVAILABLE'}]}})
+            result = inspect_report(target)
+            self.assertTrue(result['requires_review'])
+            self.assertEqual(result['uncertain_count'], 0)
+            self.assertEqual(result['space_match_receipt_counts'], {'APPLIED': 1})
+            self.assertEqual(result['space_delivery_blocking_reasons'], {'SPACE_RELEASE_VERSION_UNAVAILABLE': 1})
+            self.assertIn('재전송하지', result['next_action'])
+
+    def test_restart_inspection_includes_assignment_unknown_and_pending(self):
+        from ai_vision.parking.inspect_parking_camera import inspect_report
+        from ai_vision.recognition.local_io import write_json_atomic
+        with tempfile.TemporaryDirectory(dir=RESULT_DIR) as folder:
+            target = Path(folder) / 'report.json'
+            for state, review, uncertain in [('DISABLED', False, 0), ('APPLIED', False, 0),
+                    ('IN_FLIGHT', True, 1), ('DELIVERY_UNKNOWN', True, 1), ('HELD', True, 0)]:
+                report = {'status': 'COMPLETED', 'dry_run': state == 'DISABLED', 'http_requests': 0,
+                          'events': [], 'deliveries': [], 'vehicle_space': {
+                          'http_enabled': state != 'DISABLED', 'deliveries': [{'status': state}]}}
+                write_json_atomic(target, report)
+                result = inspect_report(target)
+                self.assertEqual(result['requires_review'], review, state)
+                self.assertEqual(result['uncertain_count'], uncertain, state)
+
+    def test_disabled_report_cannot_hide_assignment_attempt(self):
+        from ai_vision.parking.inspect_parking_camera import inspect_report
+        from ai_vision.recognition.local_io import write_json_atomic
+        with tempfile.TemporaryDirectory(dir=RESULT_DIR) as folder:
+            target = Path(folder) / 'report.json'
+            write_json_atomic(target, {'status': 'COMPLETED', 'dry_run': True, 'http_requests': 0,
+                'events': [], 'deliveries': [], 'vehicle_space': {
+                'http_enabled': False, 'deliveries': [{'status': 'IN_FLIGHT'}]}})
+            with self.assertRaises(ValueError):
+                inspect_report(target)
+
+
+    def test_release_unknown_is_reviewed_and_requires_explicit_release_mode(self):
+        from ai_vision.parking.inspect_parking_camera import inspect_report
+        from ai_vision.recognition.local_io import write_json_atomic
+        with tempfile.TemporaryDirectory(dir=RESULT_DIR) as folder:
+            target = Path(folder) / 'report.json'
+            report = {'status': 'COMPLETED', 'dry_run': False, 'http_requests': 0, 'events': [],
+                'deliveries': [], 'vehicle_space': {'http_enabled': True, 'release_http_enabled': True,
+                'deliveries': [{'status': 'DELIVERY_UNKNOWN', 'payload': {'event_type': 'VEHICLE_SPACE_RELEASE'}}]}}
+            write_json_atomic(target, report)
+            result = inspect_report(target)
+            self.assertTrue(result['requires_review'])
+            self.assertEqual(result['uncertain_count'], 1)
+            report['vehicle_space']['release_http_enabled'] = False
+            write_json_atomic(target, report)
+            with self.assertRaises(ValueError):
+                inspect_report(target)
+
+
+    def test_old_and_new_withdrawal_reasons_are_separated_without_changing_http_review(self):
+        from ai_vision.parking.inspect_parking_camera import inspect_report
+        from ai_vision.recognition.local_io import write_json_atomic
+        with tempfile.TemporaryDirectory(dir=RESULT_DIR) as folder:
+            path = Path(folder)/'report.json'
+            write_json_atomic(path,{'status':'COMPLETED','dry_run':True,'http_requests':0,
+                'events':[],'deliveries':[],'vehicle_space':{'http_enabled':False,'events':[
+                {'kind':'MATCH_REVIEW','reason':'POSITION_MOVED'},
+                {'kind':'TRACK_LOST','reason':'OBSERVATION_GAP'},
+                {'kind':'MATCH_REVIEW'}, {'kind':'LOCAL_SPACE_MATCH'}]}})
+            result = inspect_report(path)
+            self.assertEqual(result['connection_withdrawal_counts'],
+                             {'POSITION_MOVED':1,'OBSERVATION_GAP':1,'UNKNOWN_LEGACY':1})
+            self.assertFalse(result['requires_review'])
+            self.assertEqual(result['uncertain_count'],0)
+
+    def test_invalid_observation_event_list_is_rejected(self):
+        from ai_vision.parking.inspect_parking_camera import summarize_connection_reviews
+        for events in (None,{},[None]):
+            with self.assertRaises(ValueError):
+                summarize_connection_reviews(events)

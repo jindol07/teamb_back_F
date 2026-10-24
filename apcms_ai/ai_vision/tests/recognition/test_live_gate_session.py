@@ -23,6 +23,45 @@ def passage():
 
 
 class LiveGateSessionTests(unittest.TestCase):
+    def test_single_vehicle_mode_transfers_verified_entry_and_exit_to_other_reader(self):
+        import tempfile
+        from pathlib import Path
+        from ai_vision.paths import RESULT_DIR
+        from ai_vision.recognition.single_vehicle_handoff import SingleVehicleHandoffReader
+        client = Mock(enabled=True)
+        client.send.side_effect = lambda event: {'event_id': event['event_id'], 'event_type': 'VEHICLE_PASSAGE',
+            'state': 'APPLIED', 'request_attempted': True, 'receipt_verified': True,
+            'automatic_retry_allowed': False, 'parking_usage_id': 70}
+        with tempfile.TemporaryDirectory(dir=RESULT_DIR) as folder:
+            clock = LiveGateClock(datetime(2020,1,1,tzinfo=timezone.utc), 0)
+            gate = LiveGateSession('TEST_GATE', 'ENTRY', clock, VehicleDeliveryFlow(client), Path(folder)/'handoff.json')
+            reader = SingleVehicleHandoffReader(Path(folder)/'handoff.json', clock=lambda: stamp.captured_at)
+            for i,t in enumerate((0,.3,.6)):
+                stamp = gate.capture(i,t)
+            gate.consume(passage(),stamp)
+            self.assertEqual(reader.read()['plate_number'],'91소6408')
+            other = copy.deepcopy(passage())
+            other['track_id'] = 20
+            for s in other['samples']:
+                s['plate_number'] = '12가3456'
+            other['plate_consensus'] = summarize_plate_samples(other['samples'])
+            gate.consume(other,stamp)
+            self.assertIsNone(reader.read())
+            client.send.assert_called_once()
+            for i,t in enumerate((.9,1.2,1.5),3):
+                stamp = gate.capture(i,t)
+            exit_row = copy.deepcopy(passage())
+            exit_row.update(track_id=8, screen_direction='UP', crossing_video_seconds=1.5)
+            for s,i,t in zip(exit_row['samples'],(3,4),(.9,1.2)):
+                s.update(frame_index=i,video_seconds=t)
+            exit_row['plate_consensus'] = summarize_plate_samples(exit_row['samples'])
+            gate.consume(exit_row,stamp)
+            self.assertEqual(gate.handoff.state['status'],'EMPTY')
+            self.assertIsNone(reader.read())
+            self.assertEqual(reader.last_exit['parking_usage_id'],70)
+            self.assertEqual(client.send.call_count,2)
+            gate.close()
+
     def setUp(self):
         clock = LiveGateClock(datetime(2020, 1, 1, tzinfo=timezone.utc), 0)
         self.session = LiveGateSession("TEST_GATE", "ENTRY", clock)

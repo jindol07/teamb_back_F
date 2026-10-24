@@ -20,5 +20,6 @@ public class NotificationDto {
 	private String content; // 알림 내용
 	private String read_yn; // 읽음 여부 Y/N
 	private Date created_at; // 생성일시
-	private Date read_at; // 읽은 일시
+	private Date read_at;
+	private Long vehicle_change_request_id; // 차량 변경 신청 ID
 }

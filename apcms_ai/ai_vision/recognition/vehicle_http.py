@@ -13,13 +13,17 @@ import requests
 from requests.adapters import HTTPAdapter
 
 # 1-4. 백엔드 약속된 요청 경로와 payload 검증기를 사용합니다.
-from ai_vision.recognition.vehicle_contract import AUTH_HEADER, VEHICLE_ENDPOINT, validate_vehicle_payload
+from ai_vision.recognition.vehicle_contract import (AUTH_HEADER, VEHICLE_ENDPOINT, SPACE_MATCH_ENDPOINT,
+                                                   validate_vehicle_payload, validate_space_match_payload)
 # 1-5. HTTP 응답을 업무 처리 상태로 변환하는 함수입니다.
-from ai_vision.recognition.vehicle_response import assess_response
+from ai_vision.recognition.vehicle_response import assess_response, assess_space_match_response
 
 
 # 2. 기본 비활성 상태로 생성되는 차량 입출차 HTTP 클라이언트
 class VehicleHTTPClient:
+    _endpoint = VEHICLE_ENDPOINT
+    _validate = staticmethod(validate_vehicle_payload)
+    _assess = staticmethod(assess_response)
 # 2-1. 서버 주소, API 키, 사용 여부, 연결·읽기 타임아웃을 설정합니다.
     # 함수 설명: __init__() — 서버 URL·API 키·타임아웃·사용 여부를 검사하여 HTTP 클라이언트를 설정합니다.
     def __init__(self, context_url=None, api_key=None, enabled=False, timeout=(3, 5), session_factory=None):
@@ -47,7 +51,7 @@ class VehicleHTTPClient:
             raise ValueError("활성화에는 서버 context URL과 유효한 API 키가 필요합니다.")
 # 2-5. 전송 설정을 인스턴스에 저장하며 기본 상태는 비활성입니다.
         self._enabled = enabled
-        self._url = context_url.rstrip("/") + VEHICLE_ENDPOINT if context_url is not None else None
+        self._url = context_url.rstrip("/") + self._endpoint if context_url is not None else None
         self._api_key = api_key
         self._timeout = tuple(timeout)
         self._session_factory = requests.Session if session_factory is None else session_factory
@@ -62,8 +66,8 @@ class VehicleHTTPClient:
     # 함수 설명: send() — 중복 재시도 없이 한 번 요청하고 통신 결과를 정규화하여 반환합니다.
     def send(self, payload):
 # 4-1. 네트워크 접근 전에 요청 형식부터 검증합니다.
-        event = validate_vehicle_payload(payload)
-        base = {"event_id": event["event_id"], "event_type": "VEHICLE_PASSAGE", "http_status": None,
+        event = self._validate(payload)
+        base = {"event_id": event["event_id"], "event_type": event['event_type'], "http_status": None,
                 "automatic_retry_allowed": False, "receipt_verified": False, "request_attempted": False}
         if not self.enabled:
             # 1. 세션 생성·환경변수 로드·네트워크 접근 전에 반환합니다.
@@ -92,13 +96,13 @@ class VehicleHTTPClient:
                         break
                     raw.extend(chunk)
 # 4-6. 상태 코드와 본문을 업무 결과로 분류합니다.
-            result = assess_response(event, response.status_code, bytes(raw))
+            result = self._assess(event, response.status_code, bytes(raw))
 # 5. 네트워크 오류는 서버 처리 불명으로 기록합니다.
 # 5-1. 타임아웃만으로 재전송하면 중복 입출차가 생길 수 있어 자동 재시도하지 않습니다.
         except requests.Timeout:
-            result = assess_response(event, transport_error="TIMEOUT")
+            result = self._assess(event, transport_error="TIMEOUT")
         except requests.RequestException:
-            result = assess_response(event, transport_error="CONNECTION_ERROR")
+            result = self._assess(event, transport_error="CONNECTION_ERROR")
         except Exception:
             # 예외·URL·키를 응답에 복사하지 않고 처리 여부 불명으로 남깁니다.
             result = {**base, "state": "DELIVERY_UNKNOWN", "reason_code": "LOCAL_HTTP_PROCESSING_FAILED"}
@@ -112,3 +116,21 @@ class VehicleHTTPClient:
                         pass
 # 7. 결과와 실제 네트워크 시도 여부를 반환합니다.
         return {**result, "request_attempted": attempted}
+
+
+class SpaceMatchHTTPClient(VehicleHTTPClient):
+    """기존 Boot 구획 연결 계약용 단발성 클라이언트. 기본 비활성입니다."""
+    _endpoint = SPACE_MATCH_ENDPOINT
+    _validate = staticmethod(validate_space_match_payload)
+    _assess = staticmethod(assess_space_match_response)
+
+
+from ai_vision.recognition.vehicle_contract import SPACE_RELEASE_ENDPOINT, validate_space_release_payload
+from ai_vision.recognition.vehicle_response import assess_space_release_response
+
+
+class SpaceReleaseHTTPClient(VehicleHTTPClient):
+    """버전으로 보호된 구획 해제 전용 클라이언트. 기본 비활성입니다."""
+    _endpoint = SPACE_RELEASE_ENDPOINT
+    _validate = staticmethod(validate_space_release_payload)
+    _assess = staticmethod(assess_space_release_response)
