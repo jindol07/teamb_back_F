@@ -302,14 +302,11 @@ public class NoticeService {
 
 	/**
 	 * 공지사항 첨부파일 교체 또는 신규 등록
+	 * 교체 전 첨부파일 정보를 NOTICE_HISTORY에 저장합니다.
 	 *
 	 * @param noticeId 공지사항 번호
 	 * @param newFile  새 첨부파일 정보
 	 * @return 기존 공지사항이 존재하면 true, 없으면 false
-	 */
-
-	/**
-	 * 공지사항 첨부파일 교체 또는 신규 등록 교체 전 첨부파일 정보를 NOTICE_HISTORY에 저장
 	 */
 	@Transactional
 	public boolean replaceNoticeFile(Integer noticeId, NoticeFiles newFile, Long changedByAdminId) {
