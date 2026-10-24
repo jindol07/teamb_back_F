@@ -74,10 +74,10 @@ replay_pid*
 # 5. Spring Boot Main Application
 # ==========================================
 # 관리자 메인 클래스
-/apcms_a/src/main/java/kr/co/alpharking/ApcmsAApplication.java
+#/apcms_a/src/main/java/kr/co/alpharking/ApcmsAApplication.java
 
 # 사용자 메인 클래스
-/apcms_u/src/main/java/kr/co/alpharking/ApcmsUApplication.java
+#/apcms_u/src/main/java/kr/co/alpharking/ApcmsUApplication.java
 
 
 # ==========================================
