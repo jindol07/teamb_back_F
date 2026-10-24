@@ -19,7 +19,7 @@ public class FireSafetyIngest {
     private final boolean allowTest;
 
     public FireSafetyIngest(FireSafetyDao dao, FireSafetyAtomicWriter writer, ObjectMapper mapper,
-            @Value("${FIRE_ALERT_ALLOW_TEST:false}") boolean allowTest) {
+            @Value("${fire.alert.allow-test:false}") boolean allowTest) {
         this.dao = dao; this.writer = writer; this.mapper = mapper; this.allowTest = allowTest;
     }
 

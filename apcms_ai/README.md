@@ -14,8 +14,8 @@
 ## 로컬 실행
 Python 가상환경을 `apcms_ai`에 만들고 기존 비전 requirements와 RAG 라이브러리를 함께 설치합니다.
 ```bash
-python -m venv .venv
-# Windows: .venv\Scripts\activate
+python -m venv .venv312
+# Windows: .venv312\Scripts\activate
 # Linux: source .venv/bin/activate
 python -m pip install -r requirements.txt
 # .env.example 을 .env 로 복사하고 GOOGLE_API_KEY 설정
