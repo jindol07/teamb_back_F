@@ -44,6 +44,8 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-mail'
 	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
 	implementation 'org.springframework.boot:spring-boot-starter-aspectj:4.0.1'
+	// Jenkins 배포 후 Health Check : 서버 가용성 확인 => 10/25
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	
 	compileOnly 'org.projectlombok:lombok'
 	developmentOnly 'org.springframework.boot:spring-boot-devtools'

@@ -30,5 +30,15 @@ app.include_router(vision_router)
 
 @app.get('/')
 def root(): return {'message':'APCMS AI Server is running'}
-@app.get('/health')
-def health(): return {'status':'ok','data_mode':settings()['mode']}
+
+#@app.get('/health')
+#def health(): return {'status':'ok','data_mode':settings()['mode']}
+
+# Jenkins 배포 후 Health Check : 서버 가용성 확인 1025
+@app.get("/health", tags=["Health"])
+def health_check():
+    return {
+        "status": "UP",
+        "service": "apcms-ai",
+        "data_mode": settings()["mode"]
+    }
