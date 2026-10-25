@@ -34,17 +34,17 @@ public class ChatbotQueryController {
     }
 
     @GetMapping("/usage")
-    public List<ChatbotQueryRepository1024.UsageRow> usage(Authentication authentication) {
+    public List<ChatbotQueryRepository.UsageRow> usage(Authentication authentication) {
         return service.usage(officeId(authentication));
     }
 
     @GetMapping("/reservations")
-    public List<ChatbotQueryRepository1024.ReservationRow> reservations(Authentication authentication) {
+    public List<ChatbotQueryRepository.ReservationRow> reservations(Authentication authentication) {
         return service.reservations(officeId(authentication));
     }
 
     @GetMapping("/vehicles")
-    public List<ChatbotQueryRepository1024.VehicleRow> vehicles(Authentication authentication) {
+    public List<ChatbotQueryRepository.VehicleRow> vehicles(Authentication authentication) {
         return service.vehicles(officeId(authentication));
     }
 
