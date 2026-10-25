@@ -83,7 +83,8 @@ public class SecurityConfig {
                         // AI 주차 추천은 로그인한 사용자만 요청할 수 있다.
                         .requestMatchers(HttpMethod.POST, "/api/recmn/recommend").authenticated()
                         //.requestMatchers("/api/chatbot/**").permitAll()
-                        
+                        // Jenkins 배포 후 Health Check : 서버 가용성 확인 => 10/25
+                        .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                         
                         // 관리자 및 사용자 권한
                         .requestMatchers("/admin/**").hasAuthority("ADMIN")

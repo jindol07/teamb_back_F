@@ -40,6 +40,8 @@ dependencies {
 	
 	// 엑셀 파일 업로드를 위한 Apache POI 라이브러리 => 10/17 추가
 	implementation 'org.apache.poi:poi-ooxml:5.4.1'
+	// Jenkins 배포 후 Health Check : 서버 가용성 확인 => 10/25
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	
 	compileOnly 'org.projectlombok:lombok'
 	runtimeOnly 'com.oracle.database.jdbc:ojdbc8:19.3.0.0'

@@ -93,6 +93,8 @@ public class SecurityConfig {
                                 "/api/parking/ai/space-match-events",
                                 "/api/parking/ai/space-release-events",
                                 "/api/parking/ai/occupancy-events").permitAll()
+                        // Jenkins 배포 후 Health Check : 서버 가용성 확인 => 10/25
+                        .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                         // 민감 정보를 제외한 현황도 로그인은 필요하다.
                         .requestMatchers(HttpMethod.GET, "/api/parking/spaces/public").authenticated()
                         // 관리자용 구획 및 입출차 관리는 ADMIN 권한으로 제한한다.
