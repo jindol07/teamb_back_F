@@ -3,8 +3,8 @@
 param(
     [string]$ProfileDir = (Join-Path $PSScriptRoot 'results\parking_demo\local'),
     [string]$PythonExe = "",
-    [ValidateSet('msmf','dshow')]
-    [string]$CameraBackend = 'msmf',
+    [ValidateSet('profile','msmf','dshow')]
+    [string]$CameraBackend = 'profile',
     [switch]$VerifyHandoffPlate,
     [switch]$Prepare,
     [switch]$CheckOnly
@@ -40,13 +40,21 @@ try {
     if (-not $ownsMutex) { throw 'Another demo is running. Close it before retrying.' }
     $env:PYTHONPATH = $aiRoot
     $env:PARKING_DEMO_PROFILE_DIR = $baseDir
-    $env:PARKING_DEMO_CAMERA_BACKEND = $CameraBackend
     $env:PARKING_DEMO_VERIFY_HANDOFF_PLATE = if ($VerifyHandoffPlate) { '1' } else { '0' }
     $preflight = & $pythonExe -m ai_vision.parking.demo_session --status $baseDir --check-profile
     if ($LASTEXITCODE -ne 0) {
         Write-Host $preflight
         throw 'Profile validation failed or an earlier fixture needs recovery. No cameras were opened.'
     }
+    # 1. 프로필의 선택을 기본으로 사용하며 명령행의 명시적 선택을 우선합니다.
+    $profile = Get-Content -LiteralPath (Join-Path $baseDir 'demo.local.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $profileBackend = if ($profile.PSObject.Properties.Name -contains 'camera_backend') { $profile.camera_backend } else { 'msmf' }
+    $selectedBackend = if ($CameraBackend -eq 'profile') { $profileBackend } else { $CameraBackend }
+    $env:PARKING_DEMO_CAMERA_BACKEND = $selectedBackend
+    Write-Host "CAMERA_CONFIG: A_GATE=$($profile.gate_camera) B_PARKING=$($profile.parking_camera) BACKEND=$selectedBackend"
+    $scenario = if ($profile.PSObject.Properties.Name -contains 'scenario') { $profile.scenario } else { 'normal' }
+    $cycles = if ($profile.PSObject.Properties.Name -contains 'cycles') { $profile.cycles } else { 1 }
+    Write-Host "SCENARIO: $scenario / CYCLES=$cycles / TEMPORARY PROCESS MAPPING ONLY"
     if (-not (Get-Command java -ErrorAction SilentlyContinue)) { throw 'Java is required.' }
     if ($Prepare) {
         if (-not (Get-Command javac -ErrorAction SilentlyContinue)) { throw 'JDK javac is required for preparation.' }

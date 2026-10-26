@@ -19,6 +19,203 @@ SPACE 전에는 인식·관찰 집계·HTTP 전송을 시작하지 않습니다.
 
 ## 현재 상태와 다음 순서
 
+### 2026-10-26 기능 재점검 결론: 현재 한 대 시연의 필수 신규 기능 없음
+
+사용자가 ‘기능을 더 만들 것이 없는지, 누락이 없는지 다시 점검하고 처음부터 만든 기능을 설명’하도록 요청했습니다. 인식/OCR재시도·합의, A 방향통과, B점유·정차, 한대신원전달, Boot예약검증·입출차·연결, 관리자판정저장·5초조회표시, 현재이용표시, 출차·재입차, 운영보호·검토도구·설치배포 경로를 현재 소스와 대조했습니다. 현재 합의한 차량1대/A+B카메라/예약자리 판정 시연의 필수 신규 구현 누락은 찾지 못했습니다. 기존 시험을 계속 확대하거나 새 기능을 임의로 추가하는 것을 다음 기본 작업으로 삼지 않습니다.
+
+구분해야 할 미완료: 복수차량 카메라간Re-ID, 무기한 신원유지·재시작복원, 영속UUID중복처리·장애자동복구, 오주차 자동알림·제재업무, 정상연결 후 자리이동 자동해제(보류), B독립재인식 옵션의 실카메라 검증, 최종배포환경·AWS DB 적용범위/Boot·Redis·로그인 연동입니다. 이 중 최신팀코드 실제동기화/실행환경확인·배포인계는 마무리 작업이며 새 AI인식 기능 구현과 구분합니다. Kubernetes는 팀장님담당, AWS는 지금필요한검증이있을때만 요청합니다.
+
+핵심 실검증은 이용92의 다른자리→예약자리(14조건), 이용94/95의 동일실행 두회차(13조건), 시험잔여0/기존이용4보존입니다. 최신 격리통합 결과 Vision955/관리자주차86/두Boot컴파일 통과를 유지합니다. 기능표의 과거 ‘연속재입차미검증’ 및 새ID계약 이전이라는 우선순위 문구를 현재 상태로 수정했습니다. 이번 점검에서는 운영 코드·서버·DB·Git 업로드를 변경하지 않았습니다.
+
+### 2026-10-26 최신: 최신 develop과 격리된 소스 통합 검사 통과
+
+origin/develop 076a897d1의 Git 추적 소스를 별도 results/integration_9cf62311/back에 추출하고 현재 AI 변경을 덮어 합친 뒤 검사했습니다. 현재 브랜치/인덱스/실행 서버를 바꾸거나 실제 병합하지 않았습니다. Vision 전체955개/36.279초, 관리자 주차86개(5개 검사 클래스), 관리자 Boot compileJava/compileTestJava, 사용자 Boot compileJava 모두 통과했습니다. Gradle은 기존 캐시만 사용하는 offline 모드였습니다. 검사 중 카메라/모델추론/실제HTTP/공용DB/Redis 연동은 하지 않았습니다.
+
+첫 Vision 검사는 모의 YOLO 검사1개가 Git 제외 yolo11n.pt의 존재에 의존해 실패했습니다. test_deployment_runtime.py의 해당 검사에 임시 모형 파일을 만들고, 실제 파일이 없을 때 모델 로더/카메라를 호출하지 않는 검사도 추가했습니다. 운영 모델 파일 검증은 완화하지 않았으며 다운로드하거나 실제 가중치를 복사하지 않았습니다. 모델 없는 격리 복사본에서 전체955개가 통과했습니다. 당시 기존954개 통과는 로컬 모델이 이미 있는 환경 결과였으므로 새 기록과 구분합니다.
+
+이번 누적 변경은20개(Python16/Java시험도구1/PowerShell1/문서2)입니다. 새 Boot 운영·프런트·화재 변경은 없습니다. 최신 팀 로그인 코드는 JWT_SECRET_BASE64와 Redis 실행 설정을 사용하므로 실제 동기화 후 서버 기동/로그인 검증은 별도로 남습니다. 비밀값은 읽어 출력하지 않았습니다. 결과 admin_parking_checks.log/user_compile.log/vision_checks_final.log 및 INTEGRATION_REPORT.md를 같은 격리 폴더에 보관합니다. PR은 보류, 스테이징/커밋/푸시/브랜치변경/서버재시작 없음.
+
+### 2026-10-26 최신: 한글 안내 포함 동일 실행 두 차례 입출차 실제 성공
+
+사용자 준비 확인 후 reentry/e2e_manual_357687c7을 실행했습니다. 원본 TEST_SUCCESS=True, 완료조건13개 전부 통과, incomplete_reasons 없음. ENTRY94→MATCHED94→EXIT94→ENTRY95→MATCHED95→EXIT95를 동일 A/B 프로세스에서 확인했습니다. 각 요청 expected_parking_usage_id와 검증된 응답 이용ID 일치, 서로 다른 이용94/95 사용, 실제DB LINKED_ROWS=2/OPEN_ROWS=0/총6건모두출차, B신원EMPTY·retained없음, 두프로세스 종료0/0입니다. A의 실제 방향 관찰은 DOWN/UP/DOWN/UP, HTTP4회입니다.
+
+소유 시험17행 삭제·잔여0·기존 이용4건 보존을 확인했습니다. 한글 회차별 행동 안내가 포함된 실행이며, 이전 ‘두 회차 실제 검증 미수행’ 기록은 이 결과로 갱신합니다. 실제 재입차 시연 검증을 위해 같은 시험을 더 반복하거나 도구를 확대할 필요는 현재 없습니다. 기본 입차/예약 판정/구획 연결/출차와 잘못된 자리→예약자리 이동·재입차의 현재 한 대 시연 범위가 실제 확인됐습니다. 다중차량/Re-ID·일반 환경 정확도·무기한 복구·정상연결 후 자리이동 자동해제까지 완성됐다는 뜻은 아닙니다.
+
+전체954개 회귀 통과 근거 유지, 이번 종료 후 운영 소스 변경 없음. 새 Boot/프런트/화재/DB구조 변경과 스테이징·커밋·푸시·PR생성 없음. PR은 사용자 지시대로 보류하며, 이후 필수 작업은 최신 팀 코드 동기화 시 통합 실행 확인과 변경 정리입니다. 카메라는 두 창 종료로 해제됐고 임시 매핑은 프로세스와 함께 소멸했습니다.
+
+### 2026-10-26 최신: 재입차 시험의 회차별 행동 안내 보완
+
+사용자는 2회차 안내가 없어 헷갈렸다고 지적했습니다. 기존 코드는 CYCLE 2/2 - 1 ENTRY 등 짧은 영문 한 줄만 표시했고 행동·방향·종료 여부를 명시하지 않았습니다. reentry/e2e_manual_1b84eeeb에서는 이용93의 첫 입차/MATCHED/출차만 확인되었고 두 번째 ENTRY는 없습니다. 최종 단계는 CYCLE 2/2 - 1 ENTRY, 원본 TEST_SUCCESS=False가 맞습니다. 소유 시험15행 정리·잔여0·기존 이용4건 보존, B신원EMPTY 및 두 프로세스 종료0/0 확인. 원인 전체를 사용자 동작으로 단정하지 않습니다.
+
+두 미리보기에 같은 회차/현재 행동/종료 여부의 한글 안내판을 추가했습니다. 2회차 입차는 사진을 화면 밖으로 뺐다가 A 위쪽2초→아래쪽2초, 주차는 B A-01에서 대기, 출차는 아래쪽2초→위쪽2초를 표시합니다. 첫 출차 안내는 Q 금지·2회차 대기를 명시하고 최종DONE만 종료를 안내합니다. 준비 중에는 아직 시작하지 않은 창에서만 SPACE·두 화면 비우기를 안내합니다. 화면 폭 줄바꿈/한글 글꼴 없는 환경의 영문 대체/원본 보존을 적용했습니다. 같은 단계 안내판을 캐시해 매 프레임 글꼴 측정·렌더링을 반복하지 않습니다.
+
+Python 5개: demo_session.py, parking_preview.py, gate_runner.py, parking_runner.py, 기존 test_parking_deployment.py. 공식954개/40.417초 통과(cycle_guidance_final_cached.log), 원본보존/회차별지시/글꼴대체/줄바꿈/캐시 검사 포함. 정지 이미지 second_entry/second_park/second_exit.png 생성 및 입차 안내 한글 표시 확인. 실카메라는 다시 켜지 않았으며 안내 보완 후 실제 두 회차 성공은 아직 남았습니다. 새 실제HTTP/공용DB 작업 및 Boot/화재/Git업로드 변경 없음.
+
+### 2026-10-26 중간점검: 현재 시연 범위와 남은 검증
+
+현재 파일·결과를 재확인했습니다. 실제 두 카메라 e2e_manual_090d1c21은 이용92의 입차→WRONG_SPACE/미연결→MATCHED→출차/B신원EMPTY, 완료14조건 통과, 시험18행 정리·잔여0·기존이용4보존입니다. 최신 회귀952개 통과이며 local/correction/reentry 전 영역의 미정리 매니페스트는0입니다. 같은 실행의 두 차례 입출차는 코드·모의 검사·별도 프로필 준비까지이며 실카메라/실제DB 검증은 아직 남았습니다. 카메라 화면 문구 별도 촬영, 다중차량 재식별, 다양한 실제차량 환경 정확도까지 검증한 것은 아닙니다.
+
+Git 재확인: 백엔드 feature/ai-vision-demo-validation의 AI 변경18개(Python14/Java시험도구1/PS1/문서2), +1370/-82 기준입니다. 스테이징0, 미커밋 상태 유지. 최신 origin/develop 076a897d1을 다시 가져와 수정 파일 교집합0 확인. 실제 병합·최신 로그인/신고 코드와 결합 실행은 아직 안 했습니다. 프런트 develop은 작업 파일 변경 없이 최신 원격보다8커밋 뒤입니다. 별도 화재 미추적 파일1개는 수정·편입하지 않았습니다. 이번 변경의 Boot운영/프런트/화재/DB구조 변경0입니다.
+
+우선순위: (1) 준비 확인 후 한 실행의 정상 입차→주차→출차를 두 회차 실제 확인하고 소유 시험 이용2건 정리 검증, (2) 최신 팀 코드 동기화 시 기존 Git 규칙에 따라 승인 범위 내에서 통합 실행 확인, (3) 문서·변경 범위 정리 후 사용자가 정한 시점에 PR 준비/진행. 추가 테스트 도구나 새 기능을 계속 늘리는 것을 기본 다음 작업으로 삼지 않습니다. 정상 연결 후 구획 이동 자동 해제는 보류하며 필요해질 때 다시 문의합니다. AWS는 즉시 필요한 검증이 있을 때만 요청하고 Kubernetes는 팀장님 담당으로 유지합니다.
+
+### 2026-10-26 최신: PR 보류·같은 실행의 두 차례 입출차 검증 준비
+
+사용자가 PR은 나중에 작업물이 더 쌓이면 진행하도록 지시했습니다. 자동 구획 이동 해제 확장은 계속 보류합니다. 현재 미검증인 동일 실행의 연속 재입차를 확인하기 위해 기존 시연 도구를 cycles=2 선택 실행으로 확장했습니다. 기본은 cycles=1이며 normal 시나리오에서만 2회를 허용합니다. 별도 Git 제외 프로필 results/parking_demo/reentry 사용, 기존 local/correction 프로필 설정은 그대로 유지했습니다.
+
+각 회차는 ENTRY→동일 이용의 MATCHED→EXIT 순서여야 하며, 새 회차는 다른 이용 ID로 확인합니다. 첫 출차 후에는 B 신원 정리가 확인될 때까지 기다리고 CYCLE 2/2 안내를 표시합니다. 두 회차의 연결·출차·B 신원 해제와 DB의 시험 연결 2건을 모두 확인해야 DONE/최종 성공입니다. 미확정 응답·겹친 입차·이용 ID 재사용·다른 이용 출차·부분 완료는 성공으로 처리하지 않습니다.
+
+정리 매니페스트는 cycles=2에서 검증된 usage_ids 목록만 기록하며, 단일 usage_id와 혼합하거나 중복/외부 ID를 포함하면 정리하지 않습니다. Java 시험 도구는 두 소유 이용을 개별 검증·삭제하고 외부 이용/예약 참조가 있으면 중단합니다. 기존 업무 행이나 DB 구조를 변경하는 기능이 아닙니다. 중단된 1회차의 소유 기록만 확정된 경우에도 확정된 ID만 정리하고 전체 성공은 거절합니다.
+
+이번 묶음 Python 5개: demo_session.py, controller.py, 기존 검사 test_parking_deployment.py/test_live_gate_context.py/test_vehicle_delivery_flow.py. Java 시험 도구/PowerShell 안내/문서도 수정했습니다. 공식952개/42.125초, 관련229개, 실제controller+모의장치·DB 3경로, Java 소유ID 검사11개, 기존 제어기 모의10경로 및 normal/correction/reentry CheckOnly 모두 통과. 근거 repeat_trial_final.log/repeat_controller_b61563bf/result.json. 실제 카메라·HTTP·공용 DB는 이번에 사용하지 않았으므로 실제 두 차례 입출차 성공으로 표기하면 안 됩니다. 실제 시험 전에는 카메라 준비와 시험 이용2건 생성·정리 범위를 안내합니다. Boot 운영 소스/프런트/화재/스테이징/커밋/푸시/PR 생성 없음.
+
+### 2026-10-26 최신: 최근 수정 포함 두 카메라 최종 시험 성공
+
+사용자 준비 확인 후 correction/e2e_manual_090d1c21을 실행했습니다. 원본 http_e2e_result.json 자체가 TEST_SUCCESS=True이며 완료 조건 14개 전부 통과, incomplete_reasons 없음입니다. 이용92번 ENTRY → Z02 WRONG_SPACE/DB TEST_USAGE_UNLINKED=1·연결버전0 → Z01 MATCHED/같은 기대이용92·correction_of_event_id 일치 → EXIT92·OPEN_ROWS=0·연결버전2를 확인했습니다. B 신원 EMPTY/retained 없음, A/B 정상 종료0/0, 시험18행 정리·잔여0·기존 이용4건 보존입니다. 최초 이용91 시험과 달리 집계 후 재평가가 필요하지 않았습니다.
+
+최근 현재 이용 표시 코드가 포함된 실제 실행의 정상 종료와 전송/DB 결과를 확인했습니다. 화면 문구를 별도 촬영·육안 검증한 증거와는 구분하며, 한 실행에서 두 차례 연속 재입차를 한 시험은 아닙니다. 연속 재입차 보완은 기존 모의 통합 검사 결과를 유지합니다. 임시 매핑은 두 자식 프로세스 종료로 소멸했고 기존 normal 프로필은 유지했습니다. 자동 구획 해제 확장은 보류, Boot 설정·DB 구조·화재·스테이징·커밋·푸시 변경 없음. 현재 코드 전체 회귀945개 통과 근거 유지. 다음은 사용자 요청에 따른 변경 정리/Git 반영 준비이며 새 기능 확장을 우선하지 않습니다.
+
+### 2026-10-26 현재 우선순위 확정·누적 변경 호환성 점검
+
+사용자는 정상 연결 후 구획 이동 자동 해제보다 현재 한 대 시연의 필수 작업을 먼저 진행하도록 지시했습니다. 이 확장은 보류이며 필요할 때 다시 설명·확인합니다. Boot 실행 옵션 space-release-enabled 활성화는 승인받지 않았고 변경하지 않았습니다. 기본 입차→예약 판정→연결→출차 흐름을 우선합니다. 아래 자동 해제 미완료 설명은 현재 필수 구현 지시가 아닙니다.
+
+최신 origin/develop 076a897d1을 fetch 후 비교했습니다. 로그인·신고 원격 변경 21개 파일과 현재 AI 미커밋 18개 파일의 교집합 0, 공통 조상 기준 merge-tree 텍스트 충돌 없음. 실제 병합/체크아웃은 하지 않았습니다. 원격 관리자 SecurityConfig의 occupancy/vehicle/space-match/space-release AI 허용 경로 4개 유지 확인. 실행 결합 검증을 완료했다는 뜻은 아니며 원격 변경 후 재확인이 필요합니다. 로컬 HEAD 9959891a8, 브랜치 feature/ai-vision-demo-validation 유지.
+
+누적 18개는 Python 14/Java 시험 도구 1/PowerShell 1/문서 2입니다. AST 14개 및 diff 형식 검사 통과. 운영 코드 추가 수정 없이 기존 성공 기록 재평가/실제 controller 모의 6경로+두 구획 모의 4경로/normal·correction CheckOnly를 다시 확인했습니다. 가장 최근 전체 회귀는 945개/38.592초 통과이며 이후 운영 소스 변경 없음. 두 구획 실제 시험 성공과 재입차·현재 이용 표시의 모의 검증을 구분합니다. 실제 연속 재입차·최신 표시의 카메라 확인은 아직 미검증입니다.
+
+다음 순서: 현재 기능 검토·인계 정리 → 필요 시 최근 수정에 한정한 사용자 준비 확인 후 실검증 → 사용자가 요청할 때 Git 동기화·PR 진행. 문서/패치 백업은 Git 제외 결과 폴더의 기존 followup_delivery에 갱신합니다. 스테이징은 사용자 명시 요청 때만 하며 이번에는 스테이징/커밋/푸시/PR 생성하지 않았습니다. 별도 화재 미추적 파일은 열거나 변경하지 않았습니다.
+
+### 2026-10-26 최신: 현재 이용에 맞는 주차 판정 표시
+
+이전 표시 함수는 차량 번호/추적 ID/구획만 비교해, 같은 차량이 같은 구획에 재입차하면 이전 이용의 MATCHED를 표시할 수 있었습니다. B 관찰 progress에 현재 parking_usage_id를 포함하고 현재 관찰/기록/요청/응답의 이용 ID가 일치할 때만 판정합니다. 요청·응답 이벤트 ID/유형/상태/실제 요청 여부도 대조합니다. 현재 이용의 미전송 억제는 이전 실제 판정을 가리지 않으며, 현재 이용의 미확정 요청은 UNDETERMINED로 표시해 이전 성공으로 돌아가지 않습니다. 독립 OCR 경로의 이용 ID 없는 관찰은 유지하되 handoff 이용이 붙은 과거 기록을 재사용하지 않습니다.
+
+Python 5개: run_parking_camera.py, vehicle_space_tracker.py, 기존 검사 test_parking_deployment.py/test_vehicle_space_tracker.py/test_vehicle_live_candidate.py. 공식 945개/38.592초 통과(current_decision_final.log), 변경 형식 검사 통과. 실제 저장 응답 3개와 모의 현재 관찰을 조합해 WRONG_SPACE 유지/MATCHED 표시/이전 이용 숨김/새 요청 대기 시 성공 숨김 4경로도 확인(current_decision_saved_records.json). 새 카메라 촬영·실제 HTTP·DB 작업은 하지 않았으며 실제 UI 재촬영 검증과 구분합니다. Boot/프런트/화재/스테이징/커밋/푸시 변경 없음.
+
+### 2026-10-26 최신: 출차 후 다음 입차를 막는 잔여 상태 보완
+
+최종 공식 회귀 944개/39.908초 통과(reentry_final_regression.log), 변경 형식 검사 통과.
+
+두 구획 실시험 다음 우선순위로 반복 사용 경로를 점검했습니다. 마지막 실제 연결/보류 응답 뒤 HELD_RELEASE_REQUIRED 미전송 기록이 있으면 acknowledge_gate_exit가 그 기록만 보고 출차 억제 해제를 거절하는 문제를 수정했습니다. 미전송·응답 없음·차단 사유 없음인 억제만 건너뛰고, 동일 이용의 검증된 실제 응답을 확인합니다. WRONG_SPACE 등 검증된 미연결 보류도 같은 이용의 출차 확인 후 새 입차를 받을 수 있습니다. 미검증/다른 이용/전송 중/전송 불명확은 해제 근거가 아닙니다.
+
+B가 EMPTY 파일을 읽기 전에 다음 ACTIVE가 저장된 경우도, 이전 보관 신원과 일치하는 last_exit, 출차 이후의 새 관찰 시각, 다른 이용 ID와 새 입차 이벤트 ID가 모두 있어야 신원을 전환합니다. 단순 신원 교체·이전 이용 재사용·시간 역전·다른 이용 출차·BLOCKED 전환은 계속 차단합니다. 무기한 복구나 다중 차량 기능을 추가한 것은 아닙니다.
+
+Python 5개: vehicle_delivery_flow.py, single_vehicle_handoff.py, 기존 검사 test_vehicle_delivery_flow.py/test_live_gate_context.py/test_vehicle_space_tracker.py. 관련 173개 통과. 실제 writer→reader→B observer→전송 흐름을 모의 연결해 중간 EMPTY 미관찰, 미전송 억제 이후 출차, 새 이용의 새 정차 후 전송, 오래된 출차의 새 이용 해제 거절까지 검사했습니다. 실카메라/실제 HTTP/공용 DB는 사용하지 않았으며 반복 입차 실시험 성공으로 표기하지 않습니다. Boot/프런트/화재 및 스테이징·커밋·푸시 변경 없음.
+
+### 2026-10-26 최신: 두 구획 실제 이동 확인 및 최종 집계 오류 수정
+
+최종 공식 회귀 939개/40.825초 통과(two_space_receipt_final.log), git diff --check 통과. 화재 영역의 별도 미추적 파일은 열거나 수정하지 않았습니다.
+
+사용자 준비 확인 후 correction/e2e_manual_70d47333 실행. 실제 입차/WRONG_SPACE/예약 구획 MATCHED/출차 모두 이용 91번입니다. Z02 판정 후 DB TEST_USAGE_UNLINKED=1, WRONG_SPACE_LINKED_ROWS=0, LINK_VERSION=0 확인 후 이동 안내. Z01 정상 연결 후 출차 OPEN_ROWS=0, LINK_VERSION=2, B 신원 EMPTY, 자식 종료 0/0 확인. 소유 시험 18행 삭제·잔여 0·기존 이용 4건 보존 확인. 테이블/컬럼 변경 없음.
+
+최초 TEST_SUCCESS=False의 원인은 _parking_summary가 정상 HELD_RELEASE_REQUIRED 기록의 receipt=null을 손상으로 취급한 집계 오류입니다. 실제 기록은 WRONG_SPACE → 같은 자리 미전송 억제 → correction_of_event_id가 원래 요청과 같은 MATCHED였습니다. null을 허용하는 상태를 명시하고, 미완료/전송 불명확/비활성 요청은 최종 성공을 막는 space_requests_resolved 검사를 추가했습니다. 실제 전송 성공의 null 응답이나 잘못된 자료형은 계속 거절합니다. controller의 스냅샷은 엄격한 기존 JSON 읽기 함수를 사용합니다.
+
+Python 5개 묶음: demo_session.py/controller.py와 기존 검사 test_parking_deployment.py/test_vehicle_delivery_flow.py/test_vehicle_live_candidate.py. 저장 자료만 재평가한 http_e2e_review.json에서 성공 조건 14개 전부 통과. 원본 http_e2e_result.json은 당시 실패 결과 그대로 보존하고 SHA256을 재검토 보고서에 기록했습니다. 재촬영·실제 DB 재호출 없이 재검토했으며, 실제 controller 모의 4경로와 CheckOnly도 다시 통과했습니다. 실제 기능 성공과 최초 보고서 집계 실패를 구분해야 합니다. 두 카메라 종료로 프로세스 전용 매핑은 소멸했고 기존 normal 프로필을 변경하지 않았습니다. 스테이징/커밋/푸시 없음.
+
+### 2026-10-26 최신: 임시 두 구획 이동 시험 준비 완료
+
+사용자가 두 구획 시험을 승인했고 매핑의 임시 적용·복원을 요구했습니다. 기존 normal 프로필은 유지하고 선택 scenario=wrong_space_correction을 추가했습니다. 별도 Git 제외 프로필 results/parking_demo/correction에서 A-02→999F-Z02(비예약), A-01→999F-Z01(예약)만 시험 프로세스에 매핑합니다. 종료 시 매핑을 복원하며 운영 구획 파일은 변경하지 않습니다. SPACE 전 DB 생성 없음, 두 창 시작·빈자리 검사 뒤 시험 층/구역/두 구획/예약 5행을 생성합니다.
+
+순서: 입차 → 2A A-02 WRONG_SPACE → 같은 이용의 DB 미연결 확인 → 2B A-01 이동 → 이전 요청과 연결된 MATCHED → 출차 → DONE 후 5초 → 각 창 Q. DB 조회 실패·이미 연결·필수 단계 생략은 성공 처리하지 않습니다. 정리 도구는 두 구획의 소유·외부 참조를 검사하고 각각 이력/판정/구획을 삭제합니다. 기존 업무 행은 삭제 대상이 아닙니다. 테이블/컬럼/Boot 운영 소스 변경 없음.
+
+이번 묶음 Python 5개: demo_session.py, controller.py, parking_runner.py, test_parking_deployment.py, test_vehicle_live_candidate.py. Java 시험 정리 도구와 PowerShell 안내, 문서도 수정했습니다. 공식 938개/40.500초 통과, 실제 controller를 모의 자식·DB로 실행한 4경로 통과(완료/조기 연결/미검증 응답/단계 생략), javac 및 별도 프로필 CheckOnly 통과. 근거 two_space_final_regression.log, two_space_controller_f25f4dd3/result.json. 실제 카메라/HTTP/공용 DB는 아직 사용하지 않았으며 실이동 성공을 뜻하지 않습니다. 다음은 사용자 배치 준비 확인 후 실제 1회 시험입니다. 스테이징/커밋/푸시 없음.
+
+### 2026-10-26 최신: 신원·관찰 시각 검증까지 Python 5개 묶음 완료
+
+이번 묶음은 vehicle_live_candidate.py, vehicle_delivery_flow.py와 기존 검사 test_vehicle_live_candidate.py, test_vehicle_delivery_flow.py, test_parking_deployment.py의 Python 5개입니다. 문서는 개수에 포함하지 않습니다. 후보 생성부터 expected_parking_usage_id를 요청에 포함하고 양의 Java Long 범위를 검사합니다. WRONG_SPACE 이후 다른 구획의 새 후보는 이전 요청보다 실제 관찰 시각이 나중이어야 하며, 같은 시각·과거 시각·시간대 표기만 다른 동일 시각은 차단합니다. 허용한 재판정의 로컬 기록에 correction_of_event_id로 원래 요청을 연결합니다.
+
+전체 933개 검사 통과(40.736초), 근거 results/requirements_audit/correction_identity_time_final.log. 이번 검증은 모의 관찰·통신이며 실카메라/실제 HTTP/공용 DB를 사용하지 않았습니다. 이미 연결된 차량의 이동·재연결 기능은 미완료입니다. Boot·프런트·화재 변경 및 스테이징·커밋·푸시 없음. 다음 우선순위는 두 구획에서 다른 자리→예약 자리 재판정의 실제 통합 검증이며, 고정 A-01 시연을 그대로 재사용하지 않고 시험 구획과 DB 범위를 먼저 안내해야 합니다. 아래 이전 단계의 파일 수와 검사 수는 당시 기록입니다.
+
+### 2026-10-26 다른 자리 보류 후 새 구획 판정 보완
+
+사용자가 PR업로드는아직이르므로다음작업을요청했습니다. 핵심 이동경로 점검에서 서버WRONG_SPACE/HELD로DB미연결인차량도 _plates에남아올바른자리의새후보까지HELD_RELEASE_REQUIRED로막히는것을확인했습니다. 기존연결을해제해야하는경우와연결되지않은다른자리보류를구분하도록AI전송흐름을수정했습니다.
+
+조건: 이전 실제전송의HELD/receipt_verified/request_attempted/parking_decision=WRONG_SPACE, 이전·현재·서버응답의동일입차ID, 다른space_code인새후보일때만새전송허용. 이미APPLIED/UNCHANGED인차량,같은자리반복,이용변경,예약없음/판정불가,미검증응답,통신불명확/차단은기존대로억제. 전송하지않은HELD_RELEASE_REQUIRED기록은최근실제응답을가리지않습니다. 새UUID/새관찰후보의다른자리판정이며동일요청자동retry아닙니다. 실제서버가재검증하고AI가기존DB연결을임의해제하지않습니다.
+
+기존전송검사에WRONG_SPACE→같은자리억제→다른자리MATCHED→성공후다른자리억제와ID/응답불일치조건을추가. 기존주차통합검사에실제후보변환/전송흐름/표시함수로WRONG_SPACE→이동중과거판정제거→새자리MATCHED까지연결검사. 해제클라이언트호출0확인. 기존hand-off와자동해제동시불가제한은유지하며이미연결된차량의구획이동기능완성이아닙니다.
+
+수정5파일: vehicle_delivery_flow.py/기존test_vehicle_delivery_flow.py/기존test_parking_deployment.py/기존문서2. 새모듈없음. 최종공식931개/39.157초통과(wrong_space_correction_final.log). 중간930공식/통합63검사는최종통합검사추가전결과. 모의AI전송/표시시험이며새실카메라/실제HTTP/공용DB를사용하지않았습니다. 실제다른자리→올바른자리주행성공으로표기하지않습니다. Boot/프런트/화재/AWS변경없음/스테이징·커밋·푸시없음. 고정demo는A01단일시험구획만허용하므로이이동시험에그대로사용할수없으며실시험은구획2개준비·허용목록범위를안내후진행해야합니다.
+
+
+### 2026-10-26 controller 묶음 모의 실행 검증 완료
+
+단위함수검사 이후 실제 controller.py를 runpy로 실행하고 자식카메라 프로세스/DB java호출만 mock으로 대체해6경로를 확인했습니다. 준비취소/자식실패는 mock DB호출0, 손상journal은controller중단/정지flag/최종실패, 쓰는중journal은WAIT, 구획전송실패는STOP/소유검증후mock정리, 응답대기는WAIT를 확인했습니다. 저장된 실제정상시연 c1308f85도 현재 evaluate_success로 전체통과를 재확인했습니다. 원본성공보고서는수정하지않았습니다.
+
+결과 results/requirements_audit/controller_failure_harness_fdb07d50/result.json. 6건PASS. 이 검증은 실제카메라/HTTP/DB가아닙니다. 손상/미완성/미확정입출차기록은 이용소유를추측할수없어정리보류이며, 실제DB에시험잔여를만든것이아닙니다. 시험코드는Git제외results의기존후속검증묶음에보관했습니다. 운영소스추가수정없이이전928검사결과유효. 이단계에서파일수를맞추기위한운영코드수정은하지않았습니다.
+
+최신누적후속은10파일이며 PR초안/패치백업갱신. 스테이징/커밋/푸시/브랜치변경없음. 다음은추가기능확대보다후속Git반영준비입니다. 기존프런트6오류는담당전달범위로유지합니다.
+
+
+### 2026-10-26 장애 처리 묶음 후속 완료(Python7개)
+
+사용자가 파일5개미만에서끊지말고연관된다음작업을묶도록지시했습니다. 기존 실패STOP보완에 이어 Python7개를 함께 보완했습니다: demo_session/controller/gate_runner/parking_runner/vehicle_delivery_flow/기존test_parking_deployment/기존test_vehicle_delivery_flow. 파일수만 늘리는 새모듈은 만들지 않았습니다.
+
+실제 변경: 실시간 journal은4MiB제한/엄격한중복키·비정상숫자·객체검증을사용하고 완결된손상줄을무시하지않습니다. 쓰는중마지막줄은None으로반환해 WAIT HTTP JOURNAL UPDATE이며완료근거를재사용하지않습니다. 새입출차/구획요청이응답대기면이전DONE대신WAIT를표시합니다. A/B 모두read_demo_phase를사용해정지flag우선,읽기실패/빈/깨진/과도한안내를WAIT로표시하고과거문구유지안함. controller는정지사유를기록하며신규최종조건session_not_aborted가성공을차단합니다. blocking_reason있는연결기록도성공근거에서제외합니다. 전송executor.submit자체실패시DELIVERY_UNKNOWN과blocked를설정해다음후보재전송을막습니다(연결/해제공통).
+
+서버/카메라를실제로고장내지않고실행중기록·응답·저장안내·executor실패를모의했습니다. 오래된B스냅샷의시간기반TTL을새로추가한것은아닙니다. B읽기실패는정상주차근거없음으로진행하지않으며장치실패는기존STOP입니다. JSONL은미완성줄이있으면대기하고확정손상시controller실패/관찰중단·소유권확인정리경로로갑니다. 불명확한실제DB결과를추정삭제하지않습니다.
+
+검증: 최종공식928개/39.083초통과(failure_chain_final_regression.log), Python7개AST/실제런처CheckOnly/diff--check통과. 기존6개모의사례가불명확출차응답에서3REMOVE를기대하던것은새WAIT동작으로수정했습니다. 기존정상시연DONE은유지검사통과. 앞선923검사는이번추가이전결과입니다. 카메라/실제HTTP/공용DB/AWS/Boot/프런트사용·변경없음. 스테이징/커밋/푸시없음. 현재누적후속은Python7+PS1+문서2=10파일이며기존원격피처반영과구분합니다.
+
+
+### 2026-10-26 실패 상황의 화면 단계 보완
+
+사용자가 추가 작업 후 PR 진행을 요청했고 실제 원격 피처 푸시는 사용자가 수행했다고 알렸습니다. 현재 feature/ai-vision-demo-validation의 미커밋 후속을 유지하며 커밋/푸시하지 않았습니다. 실패 처리 검토에서 demo_phase가 실패 응답을 건너뛰고 과거 성공만으로 DONE을 유지할 수 있는 안내 불일치를 확인했습니다.
+
+이제 같은 인쇄 차량의 전송기록에서 DELIVERY_UNKNOWN/AUTH_REQUIRED/REJECTED가 있으면 STOP DELIVERY FAILED, B 보고서 FAILED/error_type이면 STOP B CAMERA FAILED, 구획 전달 실패/차단사유가 있으면 STOP SPACE DELIVERY FAILED로 중단합니다. 이전 MATCH/입출차 성공이 이를 가리지 않습니다. 입차 전 B실패도 1 ENTRY 안내보다 우선합니다. 자동 재시도나 DB 상태 추측은 추가하지 않았습니다. controller는 기존 STOP분기로 관찰 중단 요청을 생성하며 시험행 정리는 기존 소유권 검증을 유지합니다.
+
+수정 demo_session.py/기존test_parking_deployment.py와 기존문서. 공식923개/40.988초 통과, 최종 실패검사순서 보완 후 DemoSessionRecoveryTests32개/0.482초 재검증. 근거 failure_phase_regression.log/failure_phase_final_targeted.log. 서버 지연 자체를 새로 재현한 실험이 아니라 응답실패·장치실패의 모의 보고/기록 검증입니다. 새 카메라/HTTP/DB/AWS/Boot/프런트 사용·변경 없음. diff검사정상/스테이징·커밋·푸시없음.
+
+
+### 2026-10-26 최신 통합 실제 두 카메라 시연 성공
+
+사용자 준비 승인 후 프로필 기본 실행(dshow/A1/B0/.venv312/SPACE 시작)으로 e2e_manual_c1308f85를 수행했습니다. http_e2e_result.json TEST_SUCCESS=True, match_contract_version=2, 완료조건9개 전부참/미완료없음. 입차·MATCH요청 expected_parking_usage_id·전송기록 기대ID·서버응답·출차 모두 이용90번. 실제 서버 판정 MATCHED/APPLIED/receipt_verified=true를 확인했습니다. B독립OCR꺼진 ENTRY_HANDOFF 한대시연입니다.
+
+DB종료검사 OPEN_ROWS=0/동일이용연결확인/LINK_VERSION=2, B신원 EMPTY/retained없음, 두프로세스 종료코드0. 소유시험행11개정리/잔여0/기존이용4보존. 최신 ID계약/정상주차 완료조건을 적용한 실제전체시연 미검증이라는 이전기록은 이 결과로 갱신합니다. 웹 화면을 이번 회차 중 직접 확인한 것은 아니며 이전 웹표시7건 실검증과 구분합니다. 이번 회차판정 이력은 소유시험데이터 정리대상에 포함돼 종료후 남지 않습니다.
+
+근거 results/parking_demo/local/e2e_manual_c1308f85/http_e2e_result.json. 카메라 재촬영·재시험을 이어서 요청하지 않습니다. DB스키마/기존업무기록/Boot/프런트/화재/AWS변경없음. 후속8파일은 미커밋 상태로 유지, 스테이징/커밋/푸시없음.
+
+
+### 2026-10-26 통합 완료 스태시 삭제 / 실제 실행기 사전 차단 검증
+
+사용자가 이미 적용한 스태시 삭제를 지시했습니다. 백업 manifest의 stash_sha와 stash@{0}의 b6c757ae7d1768ee7e2a0ce25dc7bd7376278779 일치를 재확인한 후 해당 항목만 drop했습니다. 현재 stash목록0개. 통합 작업8파일과 backup_132357는 그대로 유지합니다. 아래 스태시 보존 기록은 삭제 이전입니다. 스테이징/커밋/푸시/브랜치변경 없음.
+
+다음 작업으로 실제 pwsh -File run_parking_demo.ps1 -CheckOnly를 분리된 임시 프로필에서8회 호출했습니다. 저장 dshow/명시적msmf우선/구형프로필msmf는 정상통과. invalid backend/같은 A-B 장치번호/손상 reference/해상도불일치/이전 미정리 fixture는 모두 비정상종료·PREFLIGHT_OK없음 확인. 실제 pwsh 프로세스의 종료코드/출력으로 확인했으며 카메라·HTTP·DB 경로는 호출하지 않았습니다. 기존 공식921검사 이후 운영 소스 변경 없음.
+
+근거 results/requirements_audit/launcher_contract_e5a62e48/result.json(8건PASS) 및 각 실행로그. 임시 프로필의 pending 표식은 오류경로 검증용 파일이며 실제 DB시험행이 아닙니다. 원래 local 프로필과 기준사진/좌표는 변경하지 않았습니다. Boot/프런트/화재/AWS변경없음. 현장 시연 자체의 재검증은 별도 준비 필요. 현재 후속 기능은 통합·검증됐고 추가 기능 확대 전에 PR병합 상태/팀 작업을 확인합니다.
+
+
+### 2026-10-26 사용자 승인 후 두 후속 작업 통합 완료
+
+사용자가 충돌을 피하는 방식으로 통합을 승인했습니다. stash pop/apply 없이 검증된 임시 통합본의8파일을 실제 작업 파일에 반영했습니다. 반영 직전 원본은 results/requirements_audit/followup_integration/backup_132357에 보존했고 stash@{0} 원본도 유지했습니다. 이후 같은 stash를 다시 통째로 적용하면 중복되므로 별도 승인 없이 pop/apply하지 않습니다.
+
+반영 내용: 프로필 backend 기본선택/CLI우선/runner연결/설정 결과기록/기준사진 읽기·해상도 사전검사 + MATCHED 및 요청·입차 이용ID 일치 완료판정/과거성공기록 보존. 중복 backend 검사는 더 포괄적인 기존검사로 통합했습니다. 문서의 과거 별도보관/미반영 기록보다 이 최신 상태를 우선합니다.
+
+실제 작업 경로 공식921개/39.294초 전부통과. 근거 followup_integration/applied_regression.log. -CheckOnly의프로필기본dshow/A1/B0 및 명시적msmf선택 통과. diff--check/충돌표식없음, 프런트변경없음. 스태시삭제/브랜치변경/스테이징/커밋/푸시/PR추가반영없음. Boot/DB/카메라/AWS사용없음. PR#100/#83과 별개인 로컬 후속8파일입니다.
+
+
+### 2026-10-26 AI 범위 후속: 정상 주차 완료 조건 강화
+
+사용자가 팀원 영역의 기존 프런트 오류는 전달용으로 남기고 본인 범위 작업을 진행하도록 요청했습니다. 프런트/Boot 파일을 수정하지 않고 AI 시연 완료 판정을 새 주차 계약에 맞췄습니다. 이전 verified_demo_match는 APPLIED/UNCHANGED 및 응답 이용ID만 확인해 명시적 MATCHED나 요청 기대ID가 없어도 다음단계/DONE 근거로 인정할 수 있었습니다.
+
+새 실행은 receipt.parking_decision=MATCHED, 요청 payload.expected_parking_usage_id와 전송기록 expected_parking_usage_id가 검증된 입차 이용ID와 같은 정수일 때만 연결 완료로 인정합니다. 누락/다른ID/bool/정상판정아님은 2 PARK에 머물고 최종 성공에서 제외합니다. controller와 새 최종보고에 match_contract_version=2/expected_plate_number를 기록하고 normal_parking_verified 완료 조건을 추가했습니다. 검사 실패가 소유 확인된 시험 기록 정리를 막지 않습니다.
+
+과거 이미 정리된 성공보고서는 당시 계약으로 유지하며 새 기준의 성공으로 재해석하지 않습니다. 해당 경로는 DB를 호출하지 않는 검사를 포함합니다. 현재 local demo.local.json에는 이전 후속의 camera_backend=dshow가 남아 있으나 PR코드의 엄격한 필드 검사와 맞지 않아 사전검사 차단 조건이 있었습니다. 선택 필드로 검증해 호환되게 보완했습니다. 현 실행 런처는 여전히 명시적 -CameraBackend dshow를 사용합니다. 스태시에 보관된 자동 backend 선택/기준사진 검사 전체를 임의 복원한 것은 아닙니다.
+
+중요 Git 상태: 기존 승인대기 후속8파일(이전919검사)은 사용자 로컬 stash@{0}('임시')에 보관돼 있음을 읽기 확인했습니다. 꺼내기/삭제/스테이징을 하지 않았습니다. 현재 새 작업은 PR커밋9b126a44f의 기존915검사를 기준으로3개 검사를 추가한918개이며40.374초 통과. 이전919개와 현재918개는 서로 다른 미커밋/스태시 작업 구성이므로 단순 감소로 해석하지 않습니다. 향후 stash 적용 시 demo_session/controller/기존검사/문서가 겹치므로 승인 없이 pop/apply하지 않고 선별 통합이 필요합니다.
+
+검증: normal_parking_completion_regression.log 공식918통과. 저장된 실제HTTP7사례를 오프라인 adapter로 새 판정함수에 연결해 MATCHED/MATCHED_REPEAT만 수락, 이전ID/누락/다른자리/예약없음/연결후이전ID의5건 거부. 원본 직접HTTP 도우미의 receipt에는 request_attempted가 없어 저장된 HTTP200 근거로 transport표시를 연결했으며, 이 변환을 결과에 명시했습니다. 실제 새 카메라/HTTP/DB 시험은 아닙니다. 근거 normal_parking_completion_saved_receipts.json. -CameraBackend dshow -CheckOnly 통과. PR/스테이징/커밋/푸시/브랜치 변경 없음.
+### 2026-10-26 PR 승인 대기 중 후속 작업
+
+사용자가 back/front PR을 올린 후 승인 대기 중 할 수 있는 작업을 요청했습니다. GitHub 연결에서 back PR#100(feature/ai-vision), front PR#83(feature/parking-decision-ui)의 열린 요청을 확인하고 채팅에 연결했습니다. 이 PR들에 댓글/커밋/푸시/병합을 하지 않았습니다. 현재 back HEAD9b126a44f/front HEADb6ec733 이후의 로컬 미커밋 후속 작업입니다. 새로운 브랜치로 분리한 것은 아니므로 향후 커밋 전에 사용자의 브랜치 지시를 확인합니다. 프런트와 Boot는 변경하지 않았습니다.
+
+선택한 우선순위는 재현성 보완입니다. 기존 성공 방식 dshow 옵션을 빠뜨리면 MSMF로 실행되던 경로를 보완했습니다. demo.local.json에 선택 camera_backend(msmf|dshow)를 허용하고 현재 로컬 프로필에는 dshow를 저장했습니다. 런처 기본은 profile이며 명시적 CLI선택 우선, 필드 없는 구형 프로필은 msmf 유지. 각 runner는 프로필을 기본값으로 사용하며 controller 최종 결과에 backend/A번호/B번호 기록. 장치번호가 재연결로 바뀌는 문제를 자동 해결한 것은 아닙니다.
+
+같은 사전검사에서 reference 사진이 실제로 읽히고 spaces 좌표 해상도와 같은지 확인해 손상/크기불일치를 카메라·DB 실행 전에 거부합니다. 사진이 존재한다는 조건만으로 통과시키지 않습니다. 좌표와 실제 종이 구도가 맞는지까지 자동 판정하는 기능은 아닙니다. 새 테스트 파일은 만들지 않고 기존 test_parking_deployment.py를 보완했습니다.
+
+실제 -CheckOnly: 현재 프로필 기본 dshow/A1/B0와 명시적 msmf 우선 선택 통과, 호출 후 기존 환경변수 복원 확인. Git 작업 후 도우미 소스의 수정시각이 바뀌어 기존 캐시만으로 -Prepare 재컴파일 후 검사했습니다. 이는 카메라/HTTP/DB 없는 준비 작업입니다. 원본 기준 사진·기존 구획 좌표는 유지했습니다.
+
+공식 검사919개/41.028초 통과, 근거 results/requirements_audit/profile_preflight_regression.log. 문법/diff-check 정상. 이번 후속의 Python5개(demo_session,controller,gate_runner,parking_runner,기존검사)+PS1+기존문서2개=8파일입니다. 모델설치/실카메라/DB/AWS/Boot/프런트 수정 없음. 스테이징·커밋·푸시 없음.
+
+
 ### 2026-10-26 Git 업로드 전 검토 / PR 준비
 
 사용자 다음 진행 승인 후 front/APCMS에서 feature/parking-decision-ui 브랜치를 생성·체크아웃했습니다. 기존 TSX2개 변경 유지/스테이징0/diff--check 통과. back은 feature/ai-vision 그대로입니다. 아래 프런트 develop/브랜치 미생성 기록은 생성 이전입니다. 커밋·푸시·PR 생성은 하지 않았습니다.

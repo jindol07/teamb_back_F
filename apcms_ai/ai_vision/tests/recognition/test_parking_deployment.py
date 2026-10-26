@@ -960,10 +960,10 @@ class ParkingCameraTests(ParkingSceneFixture, unittest.TestCase):
 
     def test_live_parking_decision_is_withdrawn_when_current_evidence_changes(self):
         from ai_vision.parking.run_parking_camera import apply_parking_decisions
-        original={'track_id':1,'space_id':'A-01','plate_number':'91소6408','status':'LOCAL_MATCH'}
+        original={'track_id':1,'space_id':'A-01','plate_number':'91소6408','status':'LOCAL_MATCH','parking_usage_id':70}
         record={'track_id':1,'status':'APPLIED','expected_parking_usage_id':70,
-                'payload':{'event_type':'VEHICLE_SPACE_MATCH','plate_number':'91소6408','space_code':'1F-A01'},
-                'receipt':{'receipt_verified':True,'parking_usage_id':70,'parking_decision':'MATCHED'}}
+                'payload':{'event_id':'match','event_type':'VEHICLE_SPACE_MATCH','plate_number':'91소6408','space_code':'1F-A01','expected_parking_usage_id':70},
+                'receipt':{'event_id':'match','event_type':'VEHICLE_SPACE_MATCH','state':'APPLIED','request_attempted':True,'receipt_verified':True,'parking_usage_id':70,'parking_decision':'MATCHED'}}
         row=original.copy();apply_parking_decisions([row],[record])
         self.assertEqual(row['parking_decision'],'MATCHED')
         for change in ({'status':'WAIT_DWELL'},{'status':'WAIT_OCCUPANCY'}, {'space_id':'A-02'},
@@ -978,8 +978,66 @@ class ParkingCameraTests(ParkingSceneFixture, unittest.TestCase):
             self.assertEqual(row['parking_decision'],'UNDETERMINED')
         for decision in ('WRONG_SPACE','NO_VALID_RESERVATION','UNDETERMINED'):
             row=original.copy()
-            apply_parking_decisions([row],[record|{'status':'HELD','receipt':record['receipt']|{'parking_decision':decision}}])
+            apply_parking_decisions([row],[record|{'status':'HELD','receipt':record['receipt']|{'state':'HELD','parking_decision':decision}}])
             self.assertEqual(row['parking_decision'],decision)
+
+    def test_preview_never_reuses_previous_entry_or_mismatched_response(self):
+        from ai_vision.parking.run_parking_camera import apply_parking_decisions
+        observation={'track_id':1,'status':'LOCAL_MATCH','space_id':'A-01','plate_number':'91소6408','parking_usage_id':71}
+        old={'track_id':1,'status':'APPLIED','expected_parking_usage_id':70,
+             'payload':{'event_id':'old','event_type':'VEHICLE_SPACE_MATCH','plate_number':'91소6408','space_code':'1F-A01','expected_parking_usage_id':70},
+             'receipt':{'event_id':'old','event_type':'VEHICLE_SPACE_MATCH','state':'APPLIED','request_attempted':True,
+                        'receipt_verified':True,'parking_usage_id':70,'parking_decision':'MATCHED'}}
+        self.assertNotIn('parking_decision',apply_parking_decisions([observation.copy()],[old])[0])
+        current=copy.deepcopy(old)
+        current['expected_parking_usage_id']=71
+        current['payload'].update(event_id='new',expected_parking_usage_id=71)
+        current['receipt'].update(event_id='new',parking_usage_id=71)
+        self.assertEqual(apply_parking_decisions([observation.copy()],[old,current])[0]['parking_decision'],'MATCHED')
+        suppressed=current|{'status':'HELD_RELEASE_REQUIRED','receipt':None}
+        self.assertEqual(apply_parking_decisions([observation.copy()],[current,suppressed])[0]['parking_decision'],'MATCHED')
+        for change in ({'event_id':'other'},{'event_type':'OTHER'},{'request_attempted':False},{'state':'HELD'},{'parking_decision':'OTHER'}):
+            bad=current|{'receipt':current['receipt']|change}
+            with self.subTest(change=change):
+                self.assertEqual(apply_parking_decisions([observation.copy()],[current,bad])[0]['parking_decision'],'UNDETERMINED')
+        pending=current|{'status':'IN_FLIGHT','receipt':None}
+        self.assertEqual(apply_parking_decisions([observation.copy()],[current,pending])[0]['parking_decision'],'UNDETERMINED')
+
+    def test_both_cycle_instructions_include_action_and_exit_rule(self):
+        from ai_vision.parking.demo_session import demo_guidance
+        for cycle in (1,2):
+            for phase in ('1 ENTRY: NUMBER PLATE DOWN','2 PARK IN B A-01 / HAND OFF','3 REMOVE PHOTO / EXIT UP IN A'):
+                text=demo_guidance(f'CYCLE {cycle}/2 - '+phase)
+                self.assertIn(f'{cycle}회차',text[0][0])
+                self.assertTrue(all(korean and english.isascii() for korean,english in text))
+        self.assertIn('첫 출차 뒤 종료하지',demo_guidance('CYCLE 1/2 - 3 REMOVE')[2][0])
+        self.assertIn('위쪽',demo_guidance('CYCLE 2/2 - 1 ENTRY')[1][0])
+        self.assertIn('A-01',demo_guidance('CYCLE 2/2 - 2 PARK')[1][0])
+        self.assertIn('각각 Q',demo_guidance('4 DONE')[1][0])
+        self.assertIn('기다리',demo_guidance('WAIT: B EXIT IDENTITY CLEAR')[1][0])
+        self.assertIn('아직 시작하지 않은 창',demo_guidance('WAIT: KEEP EMPTY')[1][0])
+
+    def test_guidance_fits_camera_width_without_altering_original_and_has_ascii_fallback(self):
+        from ai_vision.parking import parking_preview as preview
+        from ai_vision.parking.demo_session import demo_guidance
+        for width,height in ((640,480),(1280,720)):
+            frame=np.zeros((height,width,3),dtype=np.uint8)
+            for font in (None,):
+                preview._guidance_panel.cache_clear()
+                with patch.object(preview,'_guidance_font',return_value=font),patch.object(preview.cv2,'putText',wraps=cv2.putText) as text:
+                    image=preview.draw_demo_guidance(frame,demo_guidance('CYCLE 2/2 - 1 ENTRY'))
+                self.assertFalse(frame.any());self.assertTrue(image.any())
+                cached_calls=text.call_count
+                with patch.object(preview.cv2,'putText',wraps=cv2.putText) as repeated:
+                    again=preview.draw_demo_guidance(frame,demo_guidance('CYCLE 2/2 - 1 ENTRY'))
+                repeated.assert_not_called()
+                self.assertTrue(np.array_equal(image,again))
+                self.assertGreater(cached_calls,0)
+                self.assertTrue(all(call.args[1].isascii() for call in text.call_args_list))
+                for call in text.call_args_list:
+                    size=cv2.getTextSize(call.args[1],call.args[3],call.args[4],1)[0]
+                    self.assertLessEqual(call.args[2][0]+size[0],width)
+                    self.assertLess(call.args[2][1],height)
 
     def test_parking_decision_label_is_distinct_from_local_tracking_match(self):
         from ai_vision.parking.parking_preview import ParkingPreview
@@ -1820,7 +1878,7 @@ class DemoSessionRecoveryTests(unittest.TestCase):
         folder=self.root/'parking';folder.mkdir()
         (folder/'parking_camera_check.json').write_text(json.dumps({'status':'STOPPED','vehicle_space':{
             'statistics':{'ocr_submitted':0},'entry_handoff':{'status':'EMPTY','retained_identity':None},
-            'deliveries':[{'status':'APPLIED','payload':{'event_id':'match','event_type':'VEHICLE_SPACE_MATCH','plate_number':'91소6408','space_code':'999F-Z01'},'receipt':{'event_id':'match','event_type':'VEHICLE_SPACE_MATCH','state':'APPLIED','request_attempted':True,'receipt_verified':True,'parking_usage_id':9}}]}}),encoding='utf-8')
+            'deliveries':[{'status':'APPLIED','expected_parking_usage_id':9,'payload':{'event_id':'match','event_type':'VEHICLE_SPACE_MATCH','plate_number':'91소6408','space_code':'999F-Z01','expected_parking_usage_id':9},'receipt':{'event_id':'match','event_type':'VEHICLE_SPACE_MATCH','state':'APPLIED','request_attempted':True,'receipt_verified':True,'parking_usage_id':9,'parking_decision':'MATCHED'}}]}}),encoding='utf-8')
 
     def finish(self, stopped=True, prepared=True):
         from ai_vision.parking.demo_session import finalize_trial
@@ -1834,6 +1892,171 @@ class DemoSessionRecoveryTests(unittest.TestCase):
         self.assertTrue(result['success']);self.assertEqual(result['incomplete_reasons'],[])
         self.assertIn('usage_id=9',self.manifest.read_text())
         self.assertEqual(self.db.call_args_list, [unittest.mock.call('inspect'),unittest.mock.call('cleanup')])
+
+    def repeat_fixture(self):
+        self.fixture();self.journal();self.parking()
+        with self.manifest.open('a') as stream:stream.write('cycles=2\n')
+        path=self.root/'gate_http_journal.jsonl'
+        rows=[json.loads(line) for line in path.read_text().splitlines()]
+        second=copy.deepcopy(rows)
+        for row in second:
+            row['payload']['event_id']='second-'+row['payload']['event_id']
+            if 'receipt' in row:
+                row['receipt']['event_id']=row['payload']['event_id']
+                row['receipt']['parking_usage_id']=10
+        rows+=second
+        path.write_text('\n'.join(json.dumps(row) for row in rows),encoding='utf-8')
+        parking=read_json(self.root/'parking/parking_camera_check.json')
+        match=copy.deepcopy(parking['vehicle_space']['deliveries'][0])
+        match['expected_parking_usage_id']=10
+        match['payload'].update(event_id='second-match',expected_parking_usage_id=10)
+        match['receipt'].update(event_id='second-match',parking_usage_id=10)
+        parking['vehicle_space']['deliveries'].append(match)
+        (self.root/'parking/parking_camera_check.json').write_text(json.dumps(parking),encoding='utf-8')
+        self.db.side_effect=lambda mode: ('USAGE_ROWS=6\nEXITED_ROWS=6\nOPEN_ROWS=0\nLINKED_ROWS=2'
+                                         if mode=='inspect' else 'REMAINING_SYNTHETIC_ROWS=0')
+        return rows,parking
+
+    def test_repeat_two_usages_are_verified_and_written_as_owned_list(self):
+        self.repeat_fixture()
+        result=self.finish()
+        self.assertTrue(result['success'])
+        self.assertEqual(result['verified_entry_usage_ids'],[9,10])
+        self.assertEqual(result['verified_exit_usage_ids'],[9,10])
+        self.assertIn('usage_ids=9,10',self.manifest.read_text())
+        self.assertNotIn('\nusage_id=',self.manifest.read_text())
+
+    def test_repeat_phase_does_not_finish_after_first_exit_or_reuse_first_match(self):
+        from ai_vision.parking.demo_session import demo_phase
+        rows,parking=self.repeat_fixture()
+        self.assertTrue(demo_phase([],None,'91소6408',cycles=2).startswith('CYCLE 1/2'))
+        self.assertTrue(demo_phase(rows[:2],parking,'91소6408',cycles=2).startswith('CYCLE 1/2 - 3 REMOVE'))
+        self.assertTrue(demo_phase(rows[:4],parking,'91소6408',cycles=2).startswith('CYCLE 2/2 - 1 ENTRY'))
+        first_only=copy.deepcopy(parking)
+        first_only['vehicle_space']['deliveries']=first_only['vehicle_space']['deliveries'][:1]
+        self.assertTrue(demo_phase(rows[:6],first_only,'91소6408',cycles=2).startswith('CYCLE 2/2 - 2 PARK'))
+        self.assertTrue(demo_phase(rows,parking,'91소6408',cycles=2).startswith('4 DONE'))
+        parking['vehicle_space']['entry_handoff']={'status':'ACTIVE'}
+        self.assertTrue(demo_phase(rows,parking,'91소6408',cycles=2).startswith('WAIT: B EXIT'))
+
+    def test_repeat_order_reused_usage_and_unresolved_receipt_block_cleanup(self):
+        rows,parking=self.repeat_fixture()
+        original=copy.deepcopy(rows)
+        path=self.root/'gate_http_journal.jsonl'
+        for kind in ('reuse','overlap','missing_receipt','foreign_owned'):
+            changed=copy.deepcopy(original)
+            if kind=='reuse':
+                for row in changed[4:]:
+                    if 'receipt' in row:row['receipt']['parking_usage_id']=9
+            if kind=='overlap':changed=changed[:2]+changed[4:6]+changed[2:4]+changed[6:]
+            if kind=='missing_receipt':changed=changed[:-1]
+            path.write_text('\n'.join(json.dumps(row) for row in changed),encoding='utf-8')
+            manifest=self.manifest.read_text().split('usage_ids=')[0]
+            if kind=='foreign_owned':manifest+='usage_ids=9,999\n'
+            self.manifest.write_text(manifest)
+            self.db.reset_mock()
+            with self.subTest(kind=kind):
+                self.assertFalse(self.finish()['success'])
+                self.db.assert_not_called()
+
+    def test_repeat_success_requires_both_matches_and_database_link_counts(self):
+        from ai_vision.parking.demo_session import evaluate_success
+        self.repeat_fixture();report=self.finish()
+        self.assertTrue(report['success'])
+        for change in ({'space_deliveries':report['space_deliveries'][:1]},
+                       {'verified_exit_usage_ids':[9]}, {'baseline_usage_count':3},
+                       {'database_before_cleanup':'USAGE_ROWS=6\nEXITED_ROWS=6\nOPEN_ROWS=0\nLINKED_ROWS=1'}):
+            with self.subTest(change=change):self.assertFalse(all(evaluate_success(report|change).values()))
+
+    def correction_parking(self):
+        self.parking()
+        parking=read_json(self.root/'parking/parking_camera_check.json')
+        matched=parking['vehicle_space']['deliveries'][0]
+        matched['payload']['detected_at']='2020-01-01T00:00:02Z'
+        matched['correction_of_event_id']='wrong'
+        wrong=copy.deepcopy(matched)
+        wrong.pop('correction_of_event_id')
+        wrong['status']='HELD'
+        wrong['payload'].update(event_id='wrong',space_code='999F-Z02',detected_at='2020-01-01T00:00:01Z')
+        wrong['receipt'].update(event_id='wrong',state='HELD',parking_decision='WRONG_SPACE')
+        parking['vehicle_space']['deliveries']=[wrong,matched]
+        return parking
+
+    def test_suppressed_null_receipt_is_preserved_without_hiding_unknown_requests(self):
+        from ai_vision.parking.demo_session import _parking_summary,evaluate_success
+        self.fixture();self.journal()
+        parking=self.correction_parking()
+        suppressed=copy.deepcopy(parking['vehicle_space']['deliveries'][0])
+        suppressed.update(status='HELD_RELEASE_REQUIRED',receipt=None)
+        parking['vehicle_space']['deliveries'].insert(1,suppressed)
+        path=self.root/'parking/parking_camera_check.json'
+        path.write_text(json.dumps(parking),encoding='utf-8')
+        summary=_parking_summary(path)
+        self.assertIsNone(summary['space_deliveries'][1]['receipt'])
+        self.report.update(scenario='wrong_space_correction',wrong_space_unlinked_verified=True,
+                           wrong_space_checked_event_id='wrong')
+        self.db.side_effect=lambda mode: ('USAGE_ROWS=5\nEXITED_ROWS=5\nOPEN_ROWS=0\nWRONG_SPACE_LINKED_ROWS=0'
+                                         if mode=='inspect' else 'REMAINING_SYNTHETIC_ROWS=0')
+        result=self.finish()
+        self.assertTrue(result['success'])
+        for status in ('IN_FLIGHT','DELIVERY_UNKNOWN','DISABLED'):
+            changed=copy.deepcopy(result)
+            changed['space_deliveries'][1]['status']=status
+            with self.subTest(status=status):
+                self.assertFalse(evaluate_success(changed)['space_requests_resolved'])
+        for receipt in ([], 'wrong', 1):
+            parking['vehicle_space']['deliveries'][1]['receipt']=receipt
+            path.write_text(json.dumps(parking),encoding='utf-8')
+            with self.subTest(receipt=receipt),self.assertRaises(ValueError):_parking_summary(path)
+        parking['vehicle_space']['deliveries'][1].update(status='APPLIED',receipt=None)
+        path.write_text(json.dumps(parking),encoding='utf-8')
+        with self.assertRaises(ValueError):_parking_summary(path)
+
+    def test_correction_phase_requires_wrong_space_receipt_then_db_inspection(self):
+        from ai_vision.parking.demo_session import demo_phase
+        self.journal()
+        rows=[json.loads(line) for line in (self.root/'gate_http_journal.jsonl').read_text().splitlines()]
+        parking=self.correction_parking()
+        wrong_only=copy.deepcopy(parking)
+        wrong_only['vehicle_space']['deliveries']=wrong_only['vehicle_space']['deliveries'][:1]
+        args={'correction_required':True}
+        self.assertTrue(demo_phase(rows[:2],None,'91소6408',**args).startswith('2A'))
+        self.assertTrue(demo_phase(rows[:2],wrong_only,'91소6408',**args).startswith('WAIT: VERIFY'))
+        args['wrong_space_unlinked']=True
+        self.assertTrue(demo_phase(rows[:2],wrong_only,'91소6408',**args).startswith('2B'))
+        self.assertTrue(demo_phase(rows[:2],parking,'91소6408',**args).startswith('3 REMOVE'))
+        self.assertTrue(demo_phase(rows,parking,'91소6408',**args).startswith('4 DONE'))
+        parking['vehicle_space']['deliveries']=parking['vehicle_space']['deliveries'][1:]
+        self.assertTrue(demo_phase(rows,parking,'91소6408',**args).startswith('STOP:'))
+
+    def test_correction_success_needs_checked_event_and_unlinked_db_evidence(self):
+        from ai_vision.parking.demo_session import evaluate_success
+        parking=self.correction_parking()
+        report={'scenario':'wrong_space_correction','verified_entry_usage_ids':[9],
+            'space_deliveries':parking['vehicle_space']['deliveries'],
+            'expected_plate_number':'91소6408','wrong_space_unlinked_verified':True,
+            'wrong_space_checked_event_id':'wrong',
+            'database_before_cleanup':'WRONG_SPACE_LINKED_ROWS=0'}
+        checks=evaluate_success(report)
+        self.assertTrue(checks['wrong_space_then_matched'])
+        self.assertTrue(checks['wrong_space_db_unlinked'])
+        self.assertTrue(checks['wrong_space_unlinked_at_exit'])
+        for change in ({'wrong_space_unlinked_verified':False}, {'wrong_space_checked_event_id':'other'}):
+            self.assertFalse(evaluate_success(report|change)['wrong_space_db_unlinked'])
+        for edit in ('identity','time','trace','receipt'):
+            changed=copy.deepcopy(report)
+            wrong,matched=changed['space_deliveries']
+            if edit=='identity':wrong['receipt']['parking_usage_id']=10
+            if edit=='time':matched['payload']['detected_at']=wrong['payload']['detected_at']
+            if edit=='trace':matched['correction_of_event_id']='other'
+            if edit=='receipt':wrong['receipt']['receipt_verified']=False
+            with self.subTest(edit=edit):self.assertFalse(evaluate_success(changed)['wrong_space_then_matched'])
+
+    def test_correction_manifest_rejects_duplicate_space_before_db_cleanup(self):
+        self.fixture();self.journal()
+        with self.manifest.open('a') as stream:stream.write('wrong_space=3\n')
+        self.assertFalse(self.finish()['success'])
+        self.db.assert_not_called()
 
     def test_phase_requires_same_usage_match_before_done(self):
         from ai_vision.parking.demo_session import demo_phase
@@ -1865,7 +2088,7 @@ class DemoSessionRecoveryTests(unittest.TestCase):
                           ('event_type','OTHER'),('state','UNCHANGED'),('parking_usage_id',True)]:
             changed=copy.deepcopy(rows);changed[-1]['receipt'][key]=value
             with self.subTest(key=key):
-                self.assertTrue(demo_phase(changed,parking,'91소6408').startswith('3 REMOVE'))
+                self.assertTrue(demo_phase(changed,parking,'91소6408').startswith('WAIT: HTTP RESPONSE PENDING'))
         self.assertTrue(demo_phase(rows[:2]+rows[-1:],parking,'91소6408').startswith('3 REMOVE'))
 
     def test_match_identity_mismatch_blocks_phase_and_final_success(self):
@@ -1884,6 +2107,168 @@ class DemoSessionRecoveryTests(unittest.TestCase):
                 path.write_text(json.dumps(changed),encoding='utf-8')
                 result=self.finish();self.assertFalse(result['success'])
                 self.assertIn('match_same_usage',result['incomplete_reasons'])
+
+    def test_normal_parking_and_entry_id_are_required_for_phase_and_success(self):
+        from ai_vision.parking.demo_session import demo_phase
+        self.fixture(); self.journal(); self.parking()
+        path=self.root/'parking/parking_camera_check.json'
+        original=read_json(path)
+        journal=[json.loads(line) for line in (self.root/'gate_http_journal.jsonl').read_text().splitlines()]
+        changes=[('receipt','parking_decision',value) for value in
+                 (None,'WRONG_SPACE','NO_VALID_RESERVATION','UNDETERMINED')]
+        changes += [('payload','expected_parking_usage_id',value) for value in (None,True,8,10)]
+        changes += [('record','expected_parking_usage_id',value) for value in (None,True,8,10)]
+        for section,key,value in changes:
+            changed=copy.deepcopy(original)
+            record=changed['vehicle_space']['deliveries'][0]
+            target=record if section=='record' else record[section]
+            if value is None: target.pop(key,None)
+            else: target[key]=value
+            with self.subTest(section=section,value=value):
+                self.assertTrue(demo_phase(journal,changed,'91소6408').startswith('2 PARK'))
+                path.write_text(json.dumps(changed),encoding='utf-8')
+                result=self.finish()
+                self.assertFalse(result['success'])
+                self.assertFalse(result['completion_checks']['normal_parking_verified'])
+                self.assertEqual(result['match_contract_version'],2)
+                self.db.assert_called_with('cleanup')
+        path.write_text(json.dumps(original),encoding='utf-8')
+        self.assertTrue(demo_phase(journal,original,'91소6408').startswith('4 DONE'))
+        self.assertTrue(self.finish()['completion_checks']['normal_parking_verified'])
+
+    def test_legacy_success_record_keeps_its_original_contract(self):
+        from ai_vision.parking.demo_session import evaluate_success
+        legacy={'success':True,'process_exit_codes':[0,0], 'entry_exit_same_usage':True,
+                'actual_match_same_usage':True,'b_status':'STOPPED','b_ocr_submitted':0,
+                'b_identity':{'status':'EMPTY','retained_identity':None},
+                'verified_entry_usage_ids':[9],
+                'database_before_cleanup':'USAGE_ROWS=5\nOPEN_ROWS=0\nEXITED_ROWS=5',
+                'cleanup':'REMAINING_SYNTHETIC_ROWS=0'}
+        self.assertTrue(all(evaluate_success(legacy).values()))
+        self.assertNotIn('normal_parking_verified',evaluate_success(legacy))
+        self.manifest.write_text('cleaned=true\n',encoding='ascii')
+        (self.root/'http_e2e_result.json').write_text(json.dumps(legacy),encoding='utf-8')
+        result=self.finish()
+        self.assertTrue(result['success'])
+        self.assertTrue(result['recovery_no_database_action'])
+        self.assertNotIn('match_contract_version',result)
+        self.db.assert_not_called()
+
+    def test_delivery_failure_cannot_be_hidden_by_previous_success(self):
+        from ai_vision.parking.demo_session import demo_phase
+        self.journal(); self.parking()
+        journal=[json.loads(line) for line in (self.root/'gate_http_journal.jsonl').read_text().splitlines()]
+        parking=read_json(self.root/'parking/parking_camera_check.json')
+        for state in ('DELIVERY_UNKNOWN','AUTH_REQUIRED','REJECTED'):
+            event={'event_id':'failed-exit','event_type':'VEHICLE_PASSAGE','plate_number':'91소6408','direction':'EXIT'}
+            changed=journal+[{'stage':'BEFORE_SEND','payload':event},
+                {'stage':'RECEIPT','payload':event,'receipt':{'state':state}}]
+            with self.subTest(state=state):
+                self.assertTrue(demo_phase(changed,parking,'91소6408').startswith('STOP:'))
+
+    def test_b_failure_or_blocked_match_stops_even_after_success(self):
+        from ai_vision.parking.demo_session import demo_phase
+        self.journal(); self.parking()
+        journal=[json.loads(line) for line in (self.root/'gate_http_journal.jsonl').read_text().splitlines()]
+        original=read_json(self.root/'parking/parking_camera_check.json')
+        for status in ('DELIVERY_UNKNOWN','AUTH_REQUIRED','REJECTED'):
+            changed=copy.deepcopy(original)
+            changed['vehicle_space']['deliveries'].append({'status':status})
+            with self.subTest(status=status):
+                self.assertTrue(demo_phase(journal,changed,'91소6408').startswith('STOP:'))
+        for patch_value in ({'status':'FAILED'},{'error_type':'OSError'}):
+            self.assertTrue(demo_phase(journal,original|patch_value,'91소6408').startswith('STOP:'))
+        changed=copy.deepcopy(original)
+        changed['vehicle_space']['deliveries'][0]['blocking_reason']='ENTRY_USAGE_CHANGED'
+        self.assertTrue(demo_phase(journal,changed,'91소6408').startswith('STOP:'))
+        self.assertTrue(demo_phase(journal,original,'91소6408').startswith('4 DONE'))
+        self.assertTrue(demo_phase([],original|{'status':'FAILED'},'91소6408').startswith('STOP:'))
+
+    def test_pending_new_requests_do_not_reuse_previous_done(self):
+        from ai_vision.parking.demo_session import demo_phase
+        self.journal();self.parking()
+        journal=[json.loads(line) for line in (self.root/'gate_http_journal.jsonl').read_text().splitlines()]
+        parking=read_json(self.root/'parking/parking_camera_check.json')
+        pending={'event_id':'late-request','event_type':'VEHICLE_PASSAGE','plate_number':'91소6408','direction':'EXIT'}
+        self.assertTrue(demo_phase(journal+[{'stage':'BEFORE_SEND','payload':pending}],parking,'91소6408').startswith('WAIT:'))
+        parking['vehicle_space']['deliveries'].append({'status':'IN_FLIGHT'})
+        self.assertTrue(demo_phase(journal,parking,'91소6408').startswith('WAIT:'))
+
+    def test_live_journal_partial_write_waits_and_corruption_fails(self):
+        from ai_vision.parking.demo_session import read_live_journal
+        path=self.root/'live.jsonl'
+        self.assertEqual(read_live_journal(path),[])
+        path.write_bytes(b'{"stage":"BEFORE_SEND"}\n{"stage":')
+        self.assertIsNone(read_live_journal(path))
+        path.write_bytes(b'{"stage":"BEFORE_SEND"}\n')
+        self.assertEqual(read_live_journal(path),[{'stage':'BEFORE_SEND'}])
+        for data in (b'bad-json\n',b'[]\n',b'{"x":1,"x":2}\n',b'{"x":NaN}\n',b'\xff\n',b'x'*(4*1024*1024+1)):
+            path.write_bytes(data)
+            with self.subTest(size=len(data)),self.assertRaises((ValueError,UnicodeError)):
+                read_live_journal(path)
+
+    def test_both_previews_prefer_stop_and_do_not_keep_invalid_done_text(self):
+        from ai_vision.parking.demo_session import read_demo_phase
+        path=self.root/'phase.txt'
+        self.assertTrue(read_demo_phase(self.root).startswith('WAIT:'))
+        path.write_text('4 DONE / WAIT 5s THEN Q BOTH',encoding='utf-8')
+        self.assertTrue(read_demo_phase(self.root).startswith('4 DONE'))
+        for data in (b'',b'\xff',b'x'*1025,b'4 DONE\nSTOP'):
+            path.write_bytes(data)
+            self.assertTrue(read_demo_phase(self.root).startswith('WAIT:'))
+        path.write_text('4 DONE',encoding='utf-8')
+        (self.root/'stop_requested.flag').write_text('failure',encoding='utf-8')
+        self.assertTrue(read_demo_phase(self.root).startswith('STOP:'))
+
+    def test_stop_reason_and_blocked_success_are_never_final_success(self):
+        self.fixture();self.journal();self.parking()
+        self.report['stop_reason']='STOP: DELIVERY FAILED / NO RETRY'
+        result=self.finish()
+        self.assertFalse(result['success'])
+        self.assertFalse(result['completion_checks']['session_not_aborted'])
+        self.report.pop('stop_reason')
+        path=self.root/'parking/parking_camera_check.json'
+        parking=read_json(path)
+        parking['vehicle_space']['deliveries'][0]['blocking_reason']='ENTRY_USAGE_CHANGED'
+        path.write_text(json.dumps(parking),encoding='utf-8')
+        self.assertFalse(self.finish()['success'])
+
+    def test_wrong_space_correction_updates_preview_without_releasing_a_link(self):
+        from concurrent.futures import wait
+        from ai_vision.recognition.vehicle_delivery_flow import SpaceMatchDeliveryFlow
+        from ai_vision.recognition.vehicle_live_candidate import create_space_match_candidate
+        from ai_vision.parking.run_parking_camera import apply_parking_decisions
+        client=Mock(enabled=True)
+        def send(event):
+            wrong=event['space_code']=='1F-A01'
+            return {'event_id':event['event_id'],'event_type':event['event_type'],
+                    'state':'HELD' if wrong else 'APPLIED','receipt_verified':True,
+                    'request_attempted':True,'parking_usage_id':83,
+                    'parking_decision':'WRONG_SPACE' if wrong else 'MATCHED'}
+        client.send.side_effect=send
+        release=Mock(enabled=False)
+        flow=SpaceMatchDeliveryFlow(client,release)
+        self.addCleanup(flow.close,lambda:None)
+        def candidate():
+            row={'track_id':3,'space_id':'A-01','plate_number':'91소6408'}
+            return create_space_match_candidate(row|{'kind':'LIVE_SPACE_MATCH','plate_detection_confidence':.9},
+                [row],'PARKING_1','2020-01-01T00:00:00Z')|{'expected_parking_usage_id':83}
+        first=candidate()
+        first['payload']['expected_parking_usage_id']=83
+        flow.submit(first,'first-stop',lambda:None);wait([flow._future]);flow.poll(lambda:None)
+        observation={'track_id':3,'status':'LOCAL_MATCH','plate_number':'91소6408','space_id':'A-01','parking_usage_id':83}
+        with patch('ai_vision.parking.parking_event_sender.convert_space_code',side_effect=lambda value:'1F-'+value.replace('-','')):
+            self.assertEqual(apply_parking_decisions([observation],flow.records)[0]['parking_decision'],'WRONG_SPACE')
+            moved=observation|{'status':'MOVING'}
+            self.assertNotIn('parking_decision',apply_parking_decisions([moved],flow.records)[0])
+            second=candidate()
+            second['payload'].update(space_code='1F-A02',detected_at='2020-01-01T00:00:01Z',expected_parking_usage_id=83)
+            self.assertEqual(flow.submit(second,'second-stop',lambda:None),'IN_FLIGHT')
+            wait([flow._future]);flow.poll(lambda:None)
+            corrected=observation|{'space_id':'A-02'}
+            self.assertEqual(apply_parking_decisions([corrected],flow.records)[0]['parking_decision'],'MATCHED')
+        self.assertEqual(client.send.call_count,2)
+        release.send.assert_not_called()
 
     def test_verified_mode_requires_b_ocr_and_recorded_identity_proof(self):
         from ai_vision.parking.demo_session import demo_phase
@@ -2047,18 +2432,66 @@ class DemoProfileTests(unittest.TestCase):
             {'id':'A-01','points':[[100,100],[300,100],[300,300],[100,300]]}]}
         (self.root/'gate.json').write_text(json.dumps(self.gate))
         (self.root/'spaces.json').write_text(json.dumps(self.spaces))
-        (self.root/'reference.png').write_bytes(b'local-image-placeholder')
+        from PIL import Image
+        Image.new('RGB', (1280, 1024)).save(self.root/'reference.png')
 
     def load(self):
         from ai_vision.parking.demo_session import load_demo_profile
         (self.root/'demo.local.json').write_text(json.dumps(self.profile),encoding='utf-8')
         return load_demo_profile(self.root)
 
+    def test_correction_profile_requires_two_spaces_and_preserves_normal_mapping(self):
+        from ai_vision.parking.demo_session import demo_space_mapping
+        self.assertEqual(demo_space_mapping(self.load()),{'A-01':'999F-Z01'})
+        self.profile['scenario']='wrong_space_correction'
+        with self.assertRaises(ValueError):self.load()
+        self.spaces['spaces'].append({'id':'A-02','points':[[400,100],[600,100],[600,300],[400,300]]})
+        (self.root/'spaces.json').write_text(json.dumps(self.spaces))
+        self.assertEqual(demo_space_mapping(self.load()),{'A-01':'999F-Z01','A-02':'999F-Z02'})
+        for scenario in (None,True,'other',[]):
+            self.profile['scenario']=scenario
+            with self.subTest(scenario=scenario),self.assertRaises(ValueError):self.load()
+
+    def test_repeat_profile_is_opt_in_and_rejects_unsupported_combinations(self):
+        self.assertEqual(self.load()['cycles'],1)
+        self.profile['cycles']=2
+        self.assertEqual(self.load()['cycles'],2)
+        for count in (True,0,3,'2',None):
+            self.profile['cycles']=count
+            with self.subTest(count=count),self.assertRaises(ValueError):self.load()
+        self.profile.update(cycles=2,scenario='wrong_space_correction')
+        with self.assertRaises(ValueError):self.load()
+
     def test_profile_is_independent_of_working_directory(self):
         result=self.load()
         self.assertEqual(result['reference'],(self.root/'reference.png').resolve())
         self.assertEqual(result['root'],self.root.resolve())
         self.assertEqual(result['gate_camera'],0)
+
+    def test_legacy_profile_keeps_msmf_and_explicit_backend_is_loaded(self):
+        self.assertEqual(self.load()['camera_backend'], 'msmf')
+        for backend in ('dshow', 'msmf'):
+            self.profile['camera_backend'] = backend
+            self.assertEqual(self.load()['camera_backend'], backend)
+
+    def test_invalid_backend_is_rejected_before_any_device_is_opened(self):
+        for backend in (None, True, 0, '', 'auto', 'profile', 'DSHOW', ['dshow']):
+            self.profile['camera_backend'] = backend
+            with self.subTest(backend=backend), self.assertRaises(ValueError):
+                self.load()
+
+    def test_wrong_reference_resolution_is_rejected(self):
+        from PIL import Image
+        Image.new('RGB', (640, 480)).save(self.root/'reference.png')
+        with self.assertRaisesRegex(ValueError, 'dimensions'):
+            self.load()
+
+    def test_unreadable_or_truncated_reference_is_rejected(self):
+        original = (self.root/'reference.png').read_bytes()
+        for data in (b'not-an-image', original[:len(original)//2]):
+            (self.root/'reference.png').write_bytes(data)
+            with self.subTest(size=len(data)), self.assertRaises(ValueError):
+                self.load()
 
     def test_same_or_invalid_camera_is_rejected(self):
         for value in (0,True,-1,33,'1'):

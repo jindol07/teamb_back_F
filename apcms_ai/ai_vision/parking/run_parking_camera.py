@@ -33,20 +33,43 @@ def apply_parking_decisions(observations, records):
         except (ValueError, TypeError, KeyError):
             continue
         for record in reversed(records):
-            payload, receipt = record.get('payload', {}), record.get('receipt') or {}
+            if not isinstance(record, dict) or not isinstance(record.get('payload'), dict):
+                continue
+            payload, receipt = record['payload'], record.get('receipt') or {}
+            if not isinstance(receipt, dict):
+                receipt = {}
             if (record.get('track_id') != observation['track_id']
                     or payload.get('event_type') != 'VEHICLE_SPACE_MATCH'
                     or payload.get('plate_number') != observation.get('plate_number')
                     or payload.get('space_code') != code):
                 continue
+            # 1. 같은 번호·추적 ID여도 이전 입차 이용의 응답은 재사용하지 않습니다.
+            current_usage = observation.get('parking_usage_id')
+            expected = record.get('expected_parking_usage_id')
+            if current_usage is not None or expected is not None:
+                if (type(current_usage) is not int or type(expected) is not int
+                        or current_usage < 1 or current_usage != expected
+                        or payload.get('expected_parking_usage_id') != current_usage):
+                    continue
+            # 미전송 억제는 현재 이용의 마지막 실제 응답을 가리지 않습니다.
+            if (record.get('status') == 'HELD_RELEASE_REQUIRED' and record.get('receipt') is None
+                    and not record.get('blocking_reason')):
+                continue
             # 새 요청이 미확정이면 이전 성공 응답으로 돌아가지 않습니다.
             decision = 'UNDETERMINED'
-            expected = record.get('expected_parking_usage_id')
-            if (receipt.get('receipt_verified') is True and not record.get('blocking_reason')
+            if (receipt.get('receipt_verified') is True
+                    and receipt.get('request_attempted') is True
+                    and isinstance(payload.get('event_id'), str) and bool(payload['event_id'])
+                    and receipt.get('event_id') == payload['event_id']
+                    and receipt.get('event_type') == payload['event_type']
+                    and receipt.get('state') == record.get('status') and not record.get('blocking_reason')
                     and record.get('status') in ('APPLIED', 'UNCHANGED', 'HELD')
                     and (expected is None or (type(receipt.get('parking_usage_id')) is int
                                              and receipt['parking_usage_id'] == expected))):
-                decision = receipt.get('parking_decision', 'UNDETERMINED')
+                received = receipt.get('parking_decision')
+                if ((received == 'MATCHED' and record['status'] in ('APPLIED', 'UNCHANGED'))
+                        or (received in ('WRONG_SPACE', 'NO_VALID_RESERVATION') and record['status'] == 'HELD')):
+                    decision = received
             observation['parking_decision'] = decision
             break
     return observations
