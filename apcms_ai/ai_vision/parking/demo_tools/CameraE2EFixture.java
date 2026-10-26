@@ -42,7 +42,7 @@ public class CameraE2EFixture {
      require(!p.isEmpty(),"No manifest; do not delete");
      long usage=p.getProperty("usage_id")==null?0:id(p,"usage_id");
      if(usage>0)require(scalar(c,"SELECT COUNT(*) FROM PARKING_USAGE WHERE PARKING_USAGE_ID=? AND VEHICLE_NUMBER=? AND (PARKING_SPACE_ID IS NULL OR PARKING_SPACE_ID=?) AND (PARKING_RESERVATION_ID IS NULL OR PARKING_RESERVATION_ID=?)",usage,PLATE,id(p,"space"),id(p,"reservation"))==1,"Verified usage ownership mismatch; stop cleanup");
-     require(scalar(c,"SELECT COUNT(*) FROM AI_DETECTION_EVENT WHERE PARKING_SPACE_ID=? AND (RAW_PAYLOAD IS NULL OR DBMS_LOB.INSTR(RAW_PAYLOAD,'\"event_type\":\"PARKING_OCCUPANCY\"')=0)",id(p,"space"))==0,"Unexpected detection event on fixture; stop cleanup");
+     require(scalar(c,"SELECT COUNT(*) FROM AI_DETECTION_EVENT WHERE PARKING_SPACE_ID=? AND (RAW_PAYLOAD IS NULL OR (DBMS_LOB.INSTR(RAW_PAYLOAD,'\"event_type\":\"PARKING_OCCUPANCY\"')=0 AND DBMS_LOB.INSTR(RAW_PAYLOAD,'\"event_type\":\"PARKING_DECISION\"')=0))",id(p,"space"))==0,"Unexpected detection event on fixture; stop cleanup");
      require(scalar(c,"SELECT COUNT(*) FROM NOTIFICATION WHERE AI_DETECTION_EVENT_ID IN (SELECT AI_DETECTION_EVENT_ID FROM AI_DETECTION_EVENT WHERE PARKING_SPACE_ID=?)",id(p,"space"))==0,"Notification references fixture event; stop cleanup");
      require(scalar(c,"SELECT COUNT(*) FROM SAFETY_INCIDENT WHERE FIRST_AI_DETECTION_EVENT_ID IN (SELECT AI_DETECTION_EVENT_ID FROM AI_DETECTION_EVENT WHERE PARKING_SPACE_ID=?) OR LATEST_AI_DETECTION_EVENT_ID IN (SELECT AI_DETECTION_EVENT_ID FROM AI_DETECTION_EVENT WHERE PARKING_SPACE_ID=?)",id(p,"space"),id(p,"space"))==0,"Safety references fixture event; stop cleanup");
      require(scalar(c,"SELECT COUNT(*) FROM PARKING_SPACE_HISTORY WHERE PARKING_SPACE_ID=? AND CHANGE_SOURCE_CODE<>'AI'",id(p,"space"))==0,"Unexpected history on fixture; stop cleanup");
@@ -53,7 +53,7 @@ public class CameraE2EFixture {
      int n=0;
      if(usage>0)n+=update(c,"DELETE FROM PARKING_USAGE WHERE PARKING_USAGE_ID=? AND VEHICLE_NUMBER=?",usage,PLATE);
      n+=update(c,"DELETE FROM PARKING_SPACE_HISTORY WHERE PARKING_SPACE_ID=? AND CHANGE_SOURCE_CODE='AI'",id(p,"space"));
-     n+=update(c,"DELETE FROM AI_DETECTION_EVENT WHERE PARKING_SPACE_ID=? AND DBMS_LOB.INSTR(RAW_PAYLOAD,'\"event_type\":\"PARKING_OCCUPANCY\"')>0",id(p,"space"));
+     n+=update(c,"DELETE FROM AI_DETECTION_EVENT WHERE PARKING_SPACE_ID=? AND (DBMS_LOB.INSTR(RAW_PAYLOAD,'\"event_type\":\"PARKING_OCCUPANCY\"')>0 OR DBMS_LOB.INSTR(RAW_PAYLOAD,'\"event_type\":\"PARKING_DECISION\"')>0)",id(p,"space"));
      n+=update(c,"DELETE FROM PARKING_RESERVATION WHERE PARKING_RESERVATION_ID=? AND VEHICLE_NUMBER=? AND PARKING_SPACE_ID=?",id(p,"reservation"),PLATE,id(p,"space"));
      n+=update(c,"DELETE FROM PARKING_SPACE WHERE PARKING_SPACE_ID=? AND PARKING_ZONE_ID=? AND MEMO=?",id(p,"space"),id(p,"zone"),p.getProperty("marker"));
      n+=update(c,"DELETE FROM PARKING_ZONE WHERE PARKING_ZONE_ID=? AND PARKING_FLOOR_ID=? AND ZONE_NAME=?",id(p,"zone"),id(p,"floor"),p.getProperty("marker"));

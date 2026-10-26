@@ -89,6 +89,15 @@ def _assess_response(payload, status_code, response_body, transport_error, now, 
         outcome = body["outcome"]
         if not isinstance(outcome, str) or outcome not in outcomes:
             return decision("DELIVERY_UNKNOWN", "UNKNOWN_OUTCOME")
+        if event['event_type'] == 'VEHICLE_SPACE_MATCH':
+            parking_decision = body.get('parkingDecision')
+            if parking_decision is None:
+                parking_decision = 'UNDETERMINED'  # 구형 서버 응답을 오주차로 추측하지 않습니다.
+            elif (parking_decision not in ('MATCHED', 'WRONG_SPACE', 'NO_VALID_RESERVATION', 'UNDETERMINED')
+                  or (outcome != 'PENDING' and parking_decision != 'MATCHED')
+                  or (outcome == 'PENDING' and parking_decision == 'MATCHED')):
+                raise ValueError('주차 판정과 처리 결과가 일치하지 않습니다.')
+            result['parking_decision'] = parking_decision
         if event['event_type'] == 'VEHICLE_PASSAGE':
             result['parking_usage_id'] = usage
         if event['event_type'] == 'VEHICLE_SPACE_MATCH' and outcome != 'PENDING' and usage is None:

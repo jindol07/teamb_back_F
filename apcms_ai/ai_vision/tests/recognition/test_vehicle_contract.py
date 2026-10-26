@@ -11,6 +11,14 @@ class VehicleContractTests(unittest.TestCase):
         return {k: v for k, v in self.payload.items() if k != 'direction'} | {
             'event_type': 'VEHICLE_SPACE_MATCH', 'space_code': '1F-A01', 'method': 'TRACKING'}
 
+    def test_expected_usage_survives_match_validation_and_rejects_invalid_ids(self):
+        for usage in (1, 83, 9223372036854775807):
+            result = validate_space_match_payload(self.space_payload() | {'expected_parking_usage_id': usage}, self.now)
+            self.assertEqual(result['expected_parking_usage_id'], usage)
+        for usage in (None, True, 0, -1, 1.0, '83', 9223372036854775808):
+            with self.subTest(usage=usage), self.assertRaises(ValueError):
+                validate_space_match_payload(self.space_payload() | {'expected_parking_usage_id': usage}, self.now)
+
     def test_space_match_normalizes_common_fields_without_turning_into_passage(self):
         payload = self.space_payload() | {'plate_number': '91 소 6408', 'direction': None}
         result = validate_space_match_payload(payload, self.now)

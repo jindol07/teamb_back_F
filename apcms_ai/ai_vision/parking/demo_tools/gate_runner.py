@@ -4,6 +4,8 @@ import json,cv2,time,os
 def main():
     from ai_vision.parking.demo_session import load_demo_profile
     profile=load_demo_profile(os.environ['PARKING_DEMO_PROFILE_DIR'])
+    backend=os.environ.get('PARKING_DEMO_CAMERA_BACKEND','msmf')
+    if backend not in ('msmf','dshow'):raise ValueError('Unsupported camera backend')
     from ai_vision.recognition.run_live_gate import main as execute
     from ai_vision.recognition.preview_gate_config import LiveGatePreview
     from ai_vision.recognition.vehicle_http import VehicleHTTPClient
@@ -66,7 +68,7 @@ def main():
     class Capture:
         def __init__(self,index):
             if index!=profile['gate_camera']:raise ValueError('Unexpected gate camera index')
-            self.native=native(index,cv2.CAP_MSMF);self.native.set(cv2.CAP_PROP_FRAME_WIDTH,1280);self.native.set(cv2.CAP_PROP_FRAME_HEIGHT,1024);state['cap']=self
+            self.native=native(index,cv2.CAP_DSHOW if backend=='dshow' else cv2.CAP_MSMF);self.native.set(cv2.CAP_PROP_FRAME_WIDTH,1280);self.native.set(cv2.CAP_PROP_FRAME_HEIGHT,1024);state['cap']=self
         def read(self):
             if (root/'stop_requested.flag').exists():raise RuntimeError('SAFETY_ABORT_REQUESTED')
             ok,frame=self.native.read()

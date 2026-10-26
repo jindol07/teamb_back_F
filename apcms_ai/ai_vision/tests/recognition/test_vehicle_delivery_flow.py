@@ -91,6 +91,26 @@ class SpaceMatchDeliveryTests(unittest.TestCase):
         self.addCleanup(flow.close, lambda: None)
         return flow
 
+    def test_handoff_usage_is_in_actual_sent_payload(self):
+        client = Mock(enabled=True)
+        client.send.return_value = {'state': 'HELD', 'request_attempted': True}
+        flow = self.flow(client)
+        candidate = self.candidate() | {'expected_parking_usage_id': 83}
+        flow.submit(candidate, 'expected-id', lambda: None)
+        flow.close(lambda: None)
+        self.assertEqual(client.send.call_args.args[0]['expected_parking_usage_id'], 83)
+        self.assertNotIn('expected_parking_usage_id', candidate['payload'])
+
+    def test_conflicting_payload_usage_prevents_network(self):
+        client = Mock(enabled=True)
+        flow = self.flow(client)
+        candidate = self.candidate() | {'expected_parking_usage_id': 83}
+        candidate['payload']['expected_parking_usage_id'] = 84
+        with self.assertRaises(ValueError):
+            flow.submit(candidate, 'conflict', lambda: None)
+        client.send.assert_not_called()
+        self.assertEqual(flow.records, [])
+
     def test_disabled_records_once_without_network(self):
         flow = self.flow()
         self.assertEqual(flow.submit(self.candidate(), 'stop1', lambda: None), 'DISABLED')

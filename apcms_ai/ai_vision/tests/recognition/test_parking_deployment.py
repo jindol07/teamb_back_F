@@ -958,6 +958,42 @@ class ParkingCameraTests(ParkingSceneFixture, unittest.TestCase):
         self.assertFalse(frame.any())
         self.assertTrue(np.all(reference == 200))
 
+    def test_live_parking_decision_is_withdrawn_when_current_evidence_changes(self):
+        from ai_vision.parking.run_parking_camera import apply_parking_decisions
+        original={'track_id':1,'space_id':'A-01','plate_number':'91소6408','status':'LOCAL_MATCH'}
+        record={'track_id':1,'status':'APPLIED','expected_parking_usage_id':70,
+                'payload':{'event_type':'VEHICLE_SPACE_MATCH','plate_number':'91소6408','space_code':'1F-A01'},
+                'receipt':{'receipt_verified':True,'parking_usage_id':70,'parking_decision':'MATCHED'}}
+        row=original.copy();apply_parking_decisions([row],[record])
+        self.assertEqual(row['parking_decision'],'MATCHED')
+        for change in ({'status':'WAIT_DWELL'},{'status':'WAIT_OCCUPANCY'}, {'space_id':'A-02'},
+                       {'plate_number':'12가3456'},{'track_id':2}):
+            row=original|{'parking_decision':'MATCHED'}|change
+            apply_parking_decisions([row],[record])
+            self.assertNotIn('parking_decision',row)
+        for change in ({'blocking_reason':'ENTRY_USAGE_CHANGED'},
+                       {'receipt':{'receipt_verified':True,'parking_usage_id':71,'parking_decision':'MATCHED'}},
+                       {'status':'IN_FLIGHT','receipt':None}):
+            row=original.copy();apply_parking_decisions([row],[record,record|change])
+            self.assertEqual(row['parking_decision'],'UNDETERMINED')
+        for decision in ('WRONG_SPACE','NO_VALID_RESERVATION','UNDETERMINED'):
+            row=original.copy()
+            apply_parking_decisions([row],[record|{'status':'HELD','receipt':record['receipt']|{'parking_decision':decision}}])
+            self.assertEqual(row['parking_decision'],decision)
+
+    def test_parking_decision_label_is_distinct_from_local_tracking_match(self):
+        from ai_vision.parking.parking_preview import ParkingPreview
+        view=ParkingPreview.__new__(ParkingPreview)
+        view._font_checked=True;view._font=None
+        frame=np.zeros((120,240,3),dtype=np.uint8)
+        for decision in ('MATCHED','WRONG_SPACE','NO_VALID_RESERVATION','UNDETERMINED'):
+            view.vehicle_progress=[{'track_id':1,'box':[10,60,90,110],'space_id':'A-01',
+                                    'status':'LOCAL_MATCH','plate_number':'','parking_decision':decision}]
+            with patch('cv2.putText') as text,patch('cv2.rectangle') as rectangle:
+                view._draw_vehicles(frame.copy())
+            self.assertIn(decision,text.call_args.args[1])
+            self.assertEqual(rectangle.call_args.args[3],(0,220,0) if decision=='MATCHED' else (0,180,255))
+
     def test_vehicle_preview_renders_box_and_korean_plate_without_changing_input(self):
         from ai_vision.parking import parking_preview as preview
         frame = np.zeros((160, 600, 3), dtype=np.uint8)

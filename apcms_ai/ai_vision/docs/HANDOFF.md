@@ -19,6 +19,124 @@ SPACE 전에는 인식·관찰 집계·HTTP 전송을 시작하지 않습니다.
 
 ## 현재 상태와 다음 순서
 
+### 2026-10-26 Git 업로드 전 검토 / PR 준비
+
+사용자 다음 진행 승인 후 front/APCMS에서 feature/parking-decision-ui 브랜치를 생성·체크아웃했습니다. 기존 TSX2개 변경 유지/스테이징0/diff--check 통과. back은 feature/ai-vision 그대로입니다. 아래 프런트 develop/브랜치 미생성 기록은 생성 이전입니다. 커밋·푸시·PR 생성은 하지 않았습니다.
+
+두 저장소 git ls-remote로 원격develop 해시를 읽어 확인했습니다. back HEAD/원격develop=513010a49, front HEAD/원격develop=3287771. 현재 새원격커밋과 겹침은 없으며 업로드 직전 다시 확인해야 합니다. fetch/merge/checkout/stage/commit/push/PR 생성은 하지 않았습니다. back feature/ai-vision 변경26개(신규4포함;Java12/Python11/PS1/문서2), front develop 변경2개(TSX)입니다. 프런트는 커밋 전에 피처브랜치가 필요하며 생성하지 않았습니다.
+
+리뷰에서 공용 ObjectMapper의 INDENT_OUTPUT 설정이 유형 문자열검색과 어긋날 수 있음을 확인해 저장 writer만 compact형식으로 고정했습니다. 기존 검사 파일에 전역 pretty 설정 사례를 추가했고 Boot 주차86개/실패0으로 재검증했습니다. SQL·API계약·스키마는 바꾸지 않았으며 DB/카메라 재시험은 하지 않았습니다. 사용자 추가 PS1 주석 문구를 보존하고 끝공백만 제거, 양쪽 diff--check 통과. API키/로컬사진/시험결과는 Git제외 확인. 화재 변경 없음.
+
+기존 전체TS6오류는 이번파일 변경전과 동일하고 이번파일 오류0이며 Vite/프런트계약25건 성공 근거를 PR에 명시합니다. 백엔드API 먼저/프런트 다음 적용하도록 두 저장소의 PR 초안을 results/requirements_audit/pr_preparation_20261026.md에 준비했습니다(Git제외). 자동 스테이징하지 않았습니다. 마지막 compact writer 변경은 실행중STS의 기존기본compact출력과 결과동일하며 전역pretty설정 보호를 추가한 것으로 다음 빌드/배포시 반영됩니다.
+
+
+### 2026-10-26 관리자 웹 주차 판정 표시 완료
+
+사용자가 Boot5개 운영 파일/프런트2개 변경안과 기존 이벤트 테이블 사용을 승인했습니다. 기존 AI_DETECTION_EVENT의 RAW_PAYLOAD에 event_type=PARKING_DECISION/decision 스냅샷을 저장합니다. 새 테이블·컬럼·트리거는 없습니다. 기록 저장은 기존 MATCH 트랜잭션에 참여하며 실패하면 연결도 롤백합니다. 등록되지 않은 구획은 저장하지 않습니다. 입출차 UUID 영속 중복 처리 기능으로 해석하지 않습니다.
+
+운영 Boot: AiVehicleEventService.java/ParkingUsageController.java 변경, AiParkingDecisionService.java/AiParkingDecisionDao.java/AiParkingDecisionRow.java 신규. 관리자 JWT/ADMIN principal 확인 후 GET /api/parking/usages/ai-decisions로 최근 저장200건 조회. Oracle11g 호환 ROWNUM/DBMS_LOB.INSTR 사용, 화재 DAO·사건·알림·점유 상태 처리 변경 없음. 기존 CameraE2EFixture.java는 소유 시험 구획의 점유/판정 이벤트 정리만 허용하도록 보완했고 모르는 이벤트/알림/사건 참조는 계속 차단합니다.
+
+프런트: front/APCMS/src/pages/admin/parking/parkingUsage/{ParkingUsageAdmin,parkingUsageApi}.tsx. 기존 화면 상단에 최근 AI 주차 판정 목록 추가, 차량·관찰 구획·네 판정·연결 처리·한국 시각 표시/5초 조회/갱신 실패 시 이전 결과 경고/빈 목록·초기실패 구분/좁은 화면 가로 스크롤. 과거 판정을 현재 점유/위반 확정으로 표시하지 않습니다. 적용 이전 판정은 소급 생성하지 않습니다.
+
+검증: Boot 주차85개/실패0, AI공식915개/38.220초, 실제TS 모듈·React 서버렌더 검사25건 통과. npm run build는 기존 가입/사용자주차/예약 타입오류6건으로 실패. 변경전 HEAD의 두 파일을 메모리상으로 대체해 대조한 오류6건과 동일, 신규/변경파일 오류0. Vite build:deploy 통과. 기존6건을 이번 범위에서 무단 수정하지 않았습니다. 근거 web_decision_{boot,ai,front_build,front_vite}.log 및 web_decision_front_{types,contract}.json.
+
+사용자 STS Clean/81 재시작 후 실제 HTTP7건/DB 저장·운영 DAO/서비스 조회7건 확인. 첫 회차 run_0fa227ff는 자동 정리까지 성공. 화면 확인 회차 results/requirements_audit/parking_decision_live_cases/run_b12c5139는 사용자 직접 로그인한 앱 브라우저에서 관리자 웹의7행·정상/다른자리/예약없음/판정불가·연결상태 표시를 직접 확인했습니다. 실제 DOM텍스트와 admin_decisions.png 저장. 확인 후 정리, 최종 잔여0/기존이용4 보존, 웹 빈목록 재확인. 카메라 사용 없음. 운영 코드를 넣기 전의 웹미연결/새HTTP미검증 표기는 이 결과로 갱신됩니다.
+
+서로 다른 두 Git 저장소(back/front)에 미커밋 작업이 있습니다. 자동 스테이징/커밋/푸시 없음. 작업 중 run_parking_demo.ps1 첫줄에 외부 추가 주석이 생긴 것을 확인했고 보존했습니다(끝공백1곳 diff-check 경고). 프런트 전체 빌드 때 생성된 vite.config.js/.d.ts 변경은 원래 내용/줄바꿈으로 복원했습니다. 다음은 추가 기능 확장보다 변경 검토·팀 변경과 충돌 확인·PR 준비가 우선입니다. 스테이징은 사용자 명시 요청 시에만 수행합니다.
+
+
+### 2026-10-26 최신 이용 ID 계약 실제 검증 완료
+
+사용자 진행 승인과 공용 DB 시험 범위 안내 후 기존 소유 시험 도우미를 재사용했습니다. 결과: `results/requirements_audit/parking_decision_live_cases/run_bb5d5dc9/result.json`, STATUS=PASS. 카메라·DDL·운영 코드 추가 변경 없음.
+
+별도 합성 이용84번을 출차 처리하고 새 이용85번을 생성한 조건에서 실제 HTTP7건을 확인했습니다. 이전84번/누락 ID는 PENDING/UNDETERMINED이고 현재85번의 구획·예약 NULL 유지. 정상85번으로 다른자리 WRONG_SPACE/예약취소 NO_VALID_RESERVATION도 PENDING/미연결 유지. 정상85번은 PROCESSED/MATCHED와 DB연결 성공, 반복 요청은 UNCHANGED/MATCHED. 연결 후 이전84번 재요청도 PENDING/UNDETERMINED이며85번의 정상 연결 유지. 전 응답 AI receipt 검증 통과.
+
+시험 도우미는 소유84번 종료행과 추가구획을 정리한 뒤 기본 소유5행을 정리했습니다. 최종 잔여0/기존이용4 보존. 실제 카메라 통과 대신 합성 시험행의 출차·재입차 조건으로 검증했으며 최신 계약으로 두 카메라 전체 시험을 다시 한 것은 아닙니다. 기존 전체 카메라 성공과 이번 새 HTTP계약 검증을 함께 근거로 사용합니다. 정상/이전ID의 실제DB 미검증이라는 아래 과거 기록은 이 결과로 갱신됩니다.
+
+다음 우선순위는 실행·인계 정리입니다. 현장 명령은 `run_parking_demo.ps1 -CameraBackend dshow`(A1/B0, .venv312, SPACE 시작)를 명시합니다. 현재8000/8001 모두 통합main:app이며 단독 Vision app:app과 혼동하지 않습니다. 통합API가 필요하면 main:app 하나를 선택, 전용Vision이 필요하면 ai_vision.app:app을 선택하되 지금 실행 중 프로세스를 임의 종료하지 않습니다. 웹 판정 표시나 구획 이동이 현재 시연 범위로 필요해지면 먼저 변경안을 설명합니다. 새 카메라/AWS 반복 시험은 우선하지 않습니다. 스테이징/커밋/푸시 없음.
+
+
+### 2026-10-26 중간 자가점검 결론
+
+우선순위1: 새 expected_parking_usage_id 계약 적용 후 실제 정상 ID 연결·이전 ID 보류 및 기존 예약 판정 유지 확인. 구현/AI915개/Boot77개/실제 누락 요청 차단은 확인됐으나 새 계약으로 정상 DB 연결을 다시 확인한 것은 아닙니다. 시험 DB 범위를 먼저 안내하고 기존 업무 데이터는 보존합니다. 카메라 전체 반복보다 HTTP 계약 검증을 먼저 합니다.
+
+현재 확인: feature/ai-vision, HEAD513010a49 및 git ls-remote의 develop 동일. 미커밋20파일(Java6/Python11/PS1/문서2), 스테이징0. 최신 상태 재확인은 업로드 직전 다시 필요합니다. 별도 fire/frontend 변경 없음. 공식 검사915개와 Boot77개는 현재 변경 뒤 보관 결과, 이번 점검에서 불필요하게 재실행하지 않았습니다. 두 Python 환경 pip check는 이번에 재실행해 정상, 로컬 프로필 pending manifest 0개입니다. 이는 실제 DB 전체 잔여 행을 새로 조회한 결과가 아니라 소유 표식 확인이며, 최근 회차 DB 정리 잔여0 근거와 구분합니다.
+
+80/81/8000/8001 TCP 응답 확인. 8000과8001의 OpenAPI는 모두 통합 AI 앱(main:app), recognize 존재/ready 없음. Vision 전용 app:app의 ready 검증 결과를 이 두 프로세스에 그대로 적용하지 않습니다. 8000외부접속/8001로컬바인딩은 의도에 따라 가능하나 중복 실행의 역할 정리는 남았습니다. 자동 종료/재시작하지 않았습니다.
+
+구획 이동은 handoff와 중간 해제 동시 활성 불가로 미완료입니다. 한대 입차→예약 주차→출차만 시연한다면 필수 확장 아님. 프런트에서 parkingDecision/WRONG_SPACE/NO_VALID_RESERVATION 참조 검색 결과 없음, 웹 판정 표시는 미연결입니다. B 프리뷰 코드와 웹 UI 완료를 구분합니다.
+
+의존성: 통합 requirements를 재사용하는 개발용 Vision requirements와 CPU서버용 runtime 분리를 유지합니다. 새 Windows 환경 설치/원본 실제 인식·AWS Ubuntu Docker 인식/재시작의 과거 근거는 문서 경로에 존재합니다. 최신 Boot 변경과 AWS11g/전체통합/Kubernetes가 검증됐다는 뜻은 아닙니다. 모델·로컬 좌표/기준/비밀설정은 이미지·Git에서 제외되므로 배포 때 별도 모델/설정/결과 저장소를 전달해야 합니다. Kubernetes는 팀장님 담당, 현재 AWS를 켤 필요 없음.
+
+후순위: 런처 명령은 현 장치에서 -CameraBackend dshow 명시(A1/B0; 재연결시 다시 확인), 기본 msmf는 유지. 구도 원본/좌표는 로컬 프로필이고 Git만으로 동일 시연을 복원할 수 없음. 영속 UUID 중복방지·프로세스 재시작 신원 복원·다중차량 ReID·야간/반사 실제차량 정확도는 미완료로 유지합니다. 별도 리커버리 워커는 사용자 결정으로 제외, 구현 대기 항목으로 다시 추가하지 않습니다. 화재는 별도 범위/이번 점검은 소스 변경 없음을 확인한 것이며 새 실제 성능 검증 아님.
+
+문서 기능 표의 구현 완료 항목을 미완료로 표시하던 두 행을 갱신했습니다. 다음 작업은 위 우선순위1이며 새 기능을 임의 확장하지 않습니다.
+
+
+### 2026-10-26 MATCH 이용 ID 사전 검증 구현
+
+최신 반영 확인 완료: 사용자 STS Clean/재시작 후 bin/main 및 Gradle build/classes 모두 새 가드 문구 존재. 실제81 HTTP에서 expected_parking_usage_id 누락 MATCH 1건이 새 문구와 200/PENDING/UNDETERMINED를 반환하여 실행 서버 반영을 확인했습니다. expected_usage_live_contract.json의 success=true가 이전 반영 실패 기록보다 우선합니다. 갱신 서비스 호출 전 보류 분기이며 카메라/업무 데이터 변경 없음. 정상 ID·불일치 ID의 모의 검증과 이번 실제 누락 요청을 구분합니다. 새 가드 적용 후 전체 카메라 시연을 다시 완료한 것은 아닙니다.
+
+후속 우선순위 검토: 현재 단일 차량 handoff와 enable_space_release_http는 run_parking_camera의 조합 검증에서 동시 사용이 금지돼 있습니다. 따라서 구획 이동 해제·재연결은 옵션만 켜면 되는 상태가 아니며, 현재 시연의 자동 출차 해제와 구획 이동 해제를 구분해야 합니다. 기존 입차→예약 주차→출차 범위에는 이동 확장을 필수로 넣지 않습니다. 다음 실제 검증은 필요 시 정상 ID 일치/불일치의 별도 시험 데이터로 한정하며, 추가 카메라 반복이나 자동 해제 활성화를 임의 수행하지 않습니다.
+
+
+서버 반영 후속 점검: 사용자 재시작 후 JWT 서명 오류는 재로그인으로 해결됐습니다. 실제 HTTP에서 ID 누락 MATCH는 200/PENDING/UNDETERMINED였으나 detail이 이전 코드 문구라 새 가드 반영은 확인되지 않았습니다. 대상은 이전에 부재 확인한 999999F-Z99이며 실제 응답도 구획/활성 이용 부재로 연결 보류입니다. 무갱신 확인 1건, 카메라 사용 없음. 근거 expected_usage_live_contract.json(success=false는 새 코드 반영 확인 실패를 뜻함).
+
+class 직접 대조: Gradle build/classes/java/main의 AiVehicleEventService.class에는 새 가드 문구가 있고 STS bin/main에는 없습니다. STS apcms_a F5 → Project Clean/재빌드 → 관리자81 재시작 후 같은 무갱신 요청으로 재확인해야 합니다. 컴파일 통과와 실행 서버 적용을 구분합니다. bin 파일을 수동 덮어쓰거나 서버를 자동 재시작하지 않았습니다.
+
+
+사용자 승인 후 요청 DTO에 `expected_parking_usage_id`를 추가했습니다. MATCH에서 ID가 누락되거나 현재 유일한 활성 이용 ID와 다르면 연결 서비스 호출 전에 PENDING/UNDETERMINED로 보류합니다. 0/음수 ID 및 입출차 요청에 연결 ID 혼용은 400입니다. 기존 입출차 생성자는 유지합니다. 기존 MATCH 클라이언트는 필드를 보내도록 함께 갱신해야 하며, 누락 요청을 과거 방식으로 자동 연결하지 않습니다.
+
+AI는 입차 handoff의 expected_parking_usage_id를 실제 HTTP payload에 넣고, 로컬 근거와 요청값 충돌·bool/문자열/정수 범위 오류를 차단합니다. 응답 이후 ID 대조도 유지합니다. 조회된 동일 ID를 기존 잠금·갱신 경로에 전달하므로 출차·재입차로 새 이용이 생겨도 새 ID로 대체 연결하지 않습니다. DAO/매퍼/DDL 변경은 없습니다.
+
+Boot 운영 변경: AiVehicleEventRequest.java, AiVehicleEventService.java. 기존 AiVehicleReservationContractTest.java에 사전 차단 검사를 추가하고, AiSpaceReleaseTest.java의 기존 MATCH 예제 1곳에 ID를 보정했습니다. AI 기존 vehicle_contract.py/vehicle_delivery_flow.py와 기존 검사 두 파일을 수정했습니다. 새 검사 파일은 만들지 않았습니다.
+
+검증: AI 공식 915개/38.369초, Boot 컴파일·주차 검사 통과. 근거 results/requirements_audit/expected_usage_{ai,boot}.log. 카메라·실제 HTTP·공용 DB 사용 없음. 실행 중 Boot의 반영은 미확인으로 다음 실제 연동 전 관리자81 재시작 필요. 바로 전 카메라 성공은 이 사전 검증 변경 이전입니다. 스테이징/커밋/푸시 없음.
+
+다음은 관리자81 새 코드 반영 후 실제 요청 계약 확인입니다. 새 카메라 전체 시험은 우선 반복하지 않습니다. 공용 DB 시험이 필요하면 범위를 먼저 안내합니다. 이후 시연에서 구획 이동이 필요한지 결정한 뒤 자동 해제·재연결 활성화를 검토합니다.
+
+
+### 2026-10-26 두 카메라 실제 연동 성공
+
+`results/parking_demo/local/e2e_manual_830a2474/http_e2e_result.json`에서 TEST_SUCCESS=True, 완료 조건 8개 전부 참을 확인했습니다. DirectShow/A=1/B=0, 기존 .venv312, 갱신된 로컬 빈 기준·좌표로 실행했습니다. 입차→구획 연결→출차가 동일 이용 ID 83이며, B MATCH 실제 HTTP 응답은 APPLIED/receipt_verified=true/parking_decision=MATCHED입니다. B 독립 OCR은 사용하지 않은 한 대 통제 ENTRY_HANDOFF 모드입니다. 화면의 정상 주차 문구를 사람이 확인했는지는 별도이며, 실제 응답 판정 전달은 확인됐습니다.
+
+종료 전 DB 출차/미출차 0건·B 신원 EMPTY를 확인했고 두 프로세스 정상 종료했습니다. 소유 시험 행 10개 정리, 잔여 0개, 기존 이용 4개 보존. DB 구조·기존 업무 기록 변경 없음. 이 성공 기록이 아래의 준비 중/실카메라 미완료 기록보다 우선합니다.
+
+앞선 e2e_manual_f8d1f1c6은 A CLI에 미지원 camera-backend 인자를 전달해 준비 중 실패했고 DB 시험행은 생성되지 않았습니다. 해당 인자를 제거하고 기존 capture wrapper에서 DirectShow를 선택하도록 수정한 뒤 위 재실행에 성공했습니다. 수정 전 공식 회귀 912개 통과(41.145초), 수정 후 구문·diff 검사와 실제 전체 시연 성공을 확인했습니다. 자동 스테이징/커밋/푸시는 하지 않았습니다.
+
+다음 필수 우선순위는 MATCH 기대 이용 ID를 Boot 갱신 전에 검증하는 보호입니다. 현재 성공은 응답 이후 동일 이용 검증을 포함하며, 사전 검증이 구현됐다는 뜻은 아닙니다. Boot 추가 수정은 파일·변경안을 먼저 제시하고 승인받습니다. 독립 B OCR/추가 AWS/카메라 반복 시험은 우선하지 않습니다.
+
+
+### 2026-10-26 카메라 복구 확인
+
+DirectShow로 A 입출차=1, B 주차면=0을 동시에 1280×1024로 확인했습니다. A 627프레임, B 633프레임에서 수신 실패 0회이며 두 장치 모두 Q 종료·해제를 확인했습니다. 근거는 `results/requirements_audit/dual_dshow_20261026_111716/camera_{0,1}.json`과 저장 원본입니다. 최초 MSMF 실패 원인은 확정하지 않았습니다.
+
+저장된 B 빈 원본으로 로컬 `reference.png`를 교체하고 네 구획 좌표를 소폭 조정했습니다. 기존 좌표도 대체로 칸 내부에 있었으며 크게 어긋났다는 의미는 아닙니다. 겹쳐 그린 `parking_spaces_overlay.png`에서 네 칸 내부 정합을 확인했습니다. 이전 기준/좌표는 같은 결과 폴더의 `profile_before_recalibration`에 보관했습니다. 인식·HTTP·DB 시험은 하지 않았습니다.
+
+다음 실제 시험은 `run_parking_demo.ps1 -CameraBackend dshow`를 사용합니다. 전체 시연 준비 확인 후 SPACE 시작으로 정상 주차 표시와 입차→연결→출차를 확인합니다. 현재 결과는 영상 수신/구도 확인이며 실제 인식 성공을 의미하지 않습니다.
+
+
+카메라재연결점검(2026-10-26): 초기MSMF영상깨짐/수신실패로전체시험이준비단계중단,DB시험행생성없음. 기존.venv312에서도B단독실패했고USB재연결후DirectShow기본640x480단독영상확인. 재연결후현재A입출차=1/B주차면=0(저장영상직접대조),로컬demo.local.json만갱신. 장치번호는고정식별자가아니므로다음재연결후역할재확인필요. 런처에 -CameraBackend msmf|dshow 추가(기존msmf기본유지),양쪽runner에전달. dshow CheckOnly/구문점검통과. 현재기존좌표1280x1024에서DirectShow동시미리보기만진행중이며아직성공판정전. 인식/HTTP/DB없음. 초기실패원인을번호변경만으로확정하지않습니다.
+
+### 2026-10-26 예약 주차 판정 후속
+
+실제3판정HTTP/DB검증완료: 사용자에게범위를안내한뒤별도999층Z01/Z02·예약·이용만생성. WRONG_SPACE/PENDING과NO_VALID_RESERVATION/PENDING에서동일시험이용의구획/예약NULL유지, MATCHED/PROCESSED에서해당예약·구획연결확인. 세응답의이용ID동일/AI receipt검증·판정파싱통과. 취소된시험예약으로NO_VALID_RESERVATION확인후시험예약만복원. 임의업무행수정없음.
+시험extra구획1행+기존도우미소유5행정리/잔여0/기존이용4보존. 카메라/AWS없음/스키마변경없음. 근거 results/requirements_audit/parking_decision_live_cases/run_d487f365/result.json. 없는구획UNDETERMINED까지포함해네종류실제HTTP확인완료. 시각입력은합성시험이며실카메라움직임·B화면의실제관찰검증은별도입니다. 아래3판정실제DB미완료표기는이검증이전입니다. 새시험도우미/결과는Git제외results에만존재하며제품Boot/AI소스를추가수정하지않았습니다.
+
+실제HTTP후속완료: 구획조회403은관리자인증경로라보안설정유지. 기존설정의공용DB에SET TRANSACTION READ ONLY/SELECT COUNT로999999F-Z99부재확인후ROLLBACK. 그구획MATCH1회로HTTP200/PENDING/parkingDecision=UNDETERMINED 확인, AI receipt_verified=true/parking_decision=UNDETERMINED. 실제응답+합성관찰로표시함수전달확인. 새코드의Boot실행반영확인완료이나나머지3판정의실제업무DB/실카메라검증아님. 소스상구획없음분기로갱신없으며업무데이터생성/변경/삭제없음. 근거 results/requirements_audit/parking_decision_live_contract.json. 재시작반영미확인/무갱신HTTP미완료라는아래기록은이검증이전입니다.
+
+실행서버점검: 사용자관리자Boot재시작후STS DTO class갱신확인. actuator/health는404이며이는주차API전체실패의증거가아닙니다. 공개구획목록GET /api/parking/spaces/public이403으로차단돼없는구획사전확인불가, 예정했던무갱신MATCH POST는전송하지않았습니다. 새parkingDecision의실제HTTP확인은미완료입니다. 임의인증우회/DB데이터변경/카메라사용없음. 다음은허가된조회경로확인후무갱신응답검증또는범위를안내한별도시험데이터검증으로진행합니다.
+
+후속자가점검: B의현재상태가LOCAL_MATCH인경우만예약판정을표시합니다. 움직임/점유근거상실/번호·추적·구획변경시과거판정제거, 최신응답대기·차단·이용ID불일치시UNDETERMINED. 최신미확정응답이있을때이전성공으로돌아가지않습니다. 기존검사에현재근거변경사례를추가했습니다. 실제카메라/업무전송없음.
+
+사용자가 Boot4개파일/AI연결수정을승인했습니다. latest develop513010a49의Oracle11g·상태확인변경을기준으로진행했고매퍼/DB구조/데이터/화재/프런트는변경하지않았습니다.
+Boot응답 parkingDecision 추가: MATCHED/WRONG_SPACE/NO_VALID_RESERVATION/UNDETERMINED. 기존생성자·outcome(PROCESSED/UNCHANGED/PENDING)호환유지. 기존잠금/유효예약쿼리로현재차량예약과대상구획의다른차량예약을구분하며, 중복/상태충돌은판정불가입니다. 유효예약없음은취소·기간외세부사유를구분하지않습니다. 다른자리/예약없음/판정불가는DB연결하지않습니다.
+AI는응답신원과판정/outcome일관성을검사하고기록하며, 현재관찰의차량·추적·구획과맞는검증응답만B미리보기에표시합니다. 구형서버판정없음은UNDETERMINED. LOCAL_MATCH는로컬연결표시이고정상예약판정과구분됩니다.
+Boot수정파일: dto/parking/AiVehicleEventResponse.java, service/parking/{ParkingUsageService,AiVehicleEventService}.java, 기존검사AiVehicleReservationContractTest.java (모두apcms_a). 사전제안4개범위입니다.
+Boot컴파일/주차모의검사75개·AI공식회귀911개(36.989초)통과. 근거 results/requirements_audit/{parking_decision_boot_online.log,parking_decision_final.log}. develop추가Actuator미캐시로최초offline검사차단후선언된의존성을받아검증. 실제카메라/HTTP업무전송/DB/AWS시험없음. 실행중서버를자동재시작하지않았습니다. 실제연동시관리자Boot81의새코드반영을확인해야합니다.
+스테이징/커밋/푸시없음. Git업로드직전최신develop fetch/겹침·충돌과팀변경보존을반드시다시확인합니다. 다음우선순위는업무판정의실제연동필요성판단후필요한시험1회이며선택B재인식·AWS확장은하지않습니다.
+
+
 최신 Git 요청: 사용자가 마지막 PR#88 이후 작업을 정리해 직접 커밋·푸시·PR 생성까지 요청했습니다. 이번 요청에 한해 수행합니다. 기본 규칙(명시 요청 없는 스테이징 금지)은 유지합니다. 대상은 시연 단계/최종판정 보완, 기본꺼진 선택적B번호판대조, 기존검사/기능점검문서입니다. 예약 주차 판정용 Boot4개파일 변경은 여전히 미승인·미수정입니다. 다음 재개 때 필요한 실행환경 안내와 Boot 변경 여부 재질문 지시는 유지합니다.
 
 ### 다음 출근 시 재개 지시 — 사용자 PC 완전 종료 예정

@@ -155,8 +155,14 @@ class SpaceMatchDeliveryFlow:
             raise ValueError('후보 상태를 확인하세요.')
         event = validate_space_match_payload(candidate['payload'])
         expected_usage = candidate.get('expected_parking_usage_id')
-        if expected_usage is not None and (type(expected_usage) is not int or expected_usage < 1):
+        if expected_usage is not None and (type(expected_usage) is not int or not 0 < expected_usage <= 9223372036854775807):
             raise ValueError('입차 근거의 이용 ID를 확인하세요.')
+        # 1. 로컬 입차 근거와 요청 필드가 충돌하면 전송하지 않습니다.
+        payload_usage = event.get('expected_parking_usage_id')
+        if payload_usage is not None and expected_usage != payload_usage:
+            raise ValueError('요청과 입차 근거의 이용 ID가 일치하지 않습니다.')
+        if expected_usage is not None:
+            event['expected_parking_usage_id'] = expected_usage
         if self.blocked:
             return 'BLOCKED'
         if observation_key in self._seen:

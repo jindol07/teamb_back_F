@@ -13,12 +13,23 @@ import org.springframework.web.server.ResponseStatusException;
 import kr.co.alpharking.dto.parking.*;
 import kr.co.alpharking.security.Admin;
 import kr.co.alpharking.service.parking.ParkingUsageService;
+import kr.co.alpharking.service.parking.AiParkingDecisionService;
 
 @RestController
 @RequestMapping("/api/parking/usages")
 public class ParkingUsageController {
     private final ParkingUsageService service;
-    public ParkingUsageController(ParkingUsageService service) { this.service = service; }
+    private final AiParkingDecisionService decisions;
+    public ParkingUsageController(ParkingUsageService service, AiParkingDecisionService decisions) {
+        this.service = service; this.decisions = decisions;
+    }
+
+    // 1. 판정 시점의 관리자 전용 이력입니다. 현재 점유 상태를 대체하지 않습니다.
+    @GetMapping("/ai-decisions")
+    public List<AiParkingDecisionRow> aiDecisions(Authentication authentication) {
+        requireAdmin(authentication);
+        return decisions.recent();
+    }
 
     // [1023_1010] 모든 입출차 조회·수동 변경 경로에서 실제 관리자 인증을 확인한다.
     private void requireAdmin(Authentication authentication) {

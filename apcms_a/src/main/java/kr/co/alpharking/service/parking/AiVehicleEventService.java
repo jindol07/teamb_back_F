@@ -1,7 +1,7 @@
 /** [1023_1010] 파일 안내
  * 용도: AI 통과·매칭 이벤트 검증 및 PROCESSED/UNCHANGED/PENDING 결과 결정.
  * 사용처·연결: AiVehicleEventController → ParkingUsageDao와 ParkingUsageService.
- * 이벤트 UUID는 형식만 검사한다. 차량 이벤트 ID를 저장하지 않으므로 점유 이벤트와 같은 UUID 기반 중복 보장은 하지 않는다.
+ * 이벤트 UUID는 형식만 검사한다. 구획 판정 이력은 저장하지만 입출차 UUID 기반 중복 보장은 하지 않는다.
  */
 package kr.co.alpharking.service.parking;
 
@@ -26,7 +26,7 @@ import kr.co.alpharking.dto.parking.AiVehicleEventResponse;
 import kr.co.alpharking.dto.parking.ParkingUsageRow;
 
 /** No schema changes: matching validates existing reservations before updating PARKING_USAGE.
- * UUID is checked for format but NOT persisted and thus cannot guarantee replay deduplication.
+ * 판정 이력 저장은 입출차 이벤트의 영속 중복 처리 보장을 뜻하지 않습니다.
  */
 @Service
 public class AiVehicleEventService {
@@ -37,10 +37,12 @@ public class AiVehicleEventService {
     private boolean spaceReleaseEnabled;
     private final ParkingUsageDao usages;
     private final ParkingUsageService usageService;
+    private final AiParkingDecisionService decisions;
 
-    public AiVehicleEventService(ParkingUsageDao usages, ParkingUsageService usageService) {
+    public AiVehicleEventService(ParkingUsageDao usages, ParkingUsageService usageService, AiParkingDecisionService decisions) {
         this.usages = usages;
         this.usageService = usageService;
+        this.decisions = decisions;
     }
 
     @Transactional
@@ -48,11 +50,15 @@ public class AiVehicleEventService {
     public AiVehicleEventResponse receive(AiVehicleEventRequest req, String expectedType) {
         if (req == null || !expectedType.equals(req.eventType())) bad("이벤트 유형이 맞지 않습니다.");
         if (req.eventId() == null) bad("event_id가 필요합니다.");
-        // [1023_1010] UUID 형식 검사다. UUID 저장·재전송 중복 기록 보장으로 해석하면 안 된다.
+        // [1023_1010] UUID 형식 검사다. 판정 이력에 ID를 남겨도 재전송 중복 처리를 보장하는 것은 아니다.
         try { UUID.fromString(req.eventId()); } catch (IllegalArgumentException ex) { bad("event_id는 UUID여야 합니다."); }
         String plate = req.plateNumber() == null ? "" : req.plateNumber().replaceAll("\\s+", "");
         if (!PLATE.matcher(plate).matches()) bad("차량번호 형식을 확인하세요.");
         if (req.cameraId() == null || req.cameraId().isBlank() || req.cameraId().length() > 60) bad("camera_id가 필요합니다.");
+        // 1. 입차 근거 ID의 범위를 검증하고 통과 이벤트와 혼용하지 않습니다.
+        if (req.expectedParkingUsageId() != null &&
+            (req.expectedParkingUsageId() < 1 || "VEHICLE_PASSAGE".equals(expectedType)))
+            bad("구획 연결의 예상 이용 ID를 확인하세요.");
         if (req.confidence() == null || req.confidence().compareTo(BigDecimal.ZERO) < 0 || req.confidence().compareTo(BigDecimal.ONE) > 0) bad("confidence는 0~1이어야 합니다.");
         if ("VEHICLE_PASSAGE".equals(expectedType)) {
             if (!("ENTRY".equals(req.direction()) || "EXIT".equals(req.direction())) || req.spaceCode() != null)
@@ -68,12 +74,14 @@ public class AiVehicleEventService {
         catch (DateTimeParseException | NullPointerException ex) { throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "detected_at은 타임존 포함 ISO-8601이어야 합니다."); }
         if (detectedAt.toInstant().isAfter(Instant.now().plusSeconds(60))) bad("미래 감지 시각은 허용되지 않습니다.");
         final Timestamp at = Timestamp.valueOf(detectedAt.atZoneSameInstant(KST).toLocalDateTime());
+        String parkingDecision = "VEHICLE_SPACE_MATCH".equals(expectedType) ? "UNDETERMINED" : null;
         String outcome = "PROCESSED";
         String detail = "정상 처리";
         // [1023_1010] 현재 열린 이용 기록으로 입차·출차·매칭의 적용 가능성을 판단한다.
         // 구획 연결에서는 중복 입차를 임의 선택하거나 조회 예외로 처리하지 않는다.
         Long usageId = "VEHICLE_SPACE_MATCH".equals(expectedType)
             ? usages.findUniqueOpenUsageByPlate(plate) : usages.findOpenUsageByPlate(plate);
+        Long decisionSpaceId = null;
         if ("VEHICLE_PASSAGE".equals(expectedType)) {
             if ("ENTRY".equals(req.direction())) {
                 if (usageId != null) { outcome = "UNCHANGED"; detail = "현재 입차 기록이 이미 존재합니다."; }
@@ -95,11 +103,17 @@ public class AiVehicleEventService {
             }
         } else {
             Long spaceId = usages.findSpaceIdByCode(req.spaceCode());
-            if (spaceId == null || usageId == null) {
+            decisionSpaceId = spaceId;
+            // 2. 조회된 ID가 입차 근거와 같을 때만 해당 ID를 잠금·갱신 경로에 전달합니다.
+            // 출차 후 재입차했어도 새로운 이용 ID로 요청을 바꿔 적용하지 않습니다.
+            if (req.expectedParkingUsageId() == null || !req.expectedParkingUsageId().equals(usageId)) {
+                outcome = "PENDING"; detail = "입차 근거의 이용 ID가 현재 활성 이용과 일치하지 않습니다.";
+            } else if (spaceId == null || usageId == null) {
                 outcome = "PENDING"; detail = "주차구획 또는 활성 입차 기록을 찾지 못했습니다.";
             } else {
                     // [1023_1010] 예상 배정 충돌을 예외로 던지지 않고 PENDING으로 반환한다. 이 경계를 유지해야 롤백 전용 상태를 피할 수 있다.
                 var result = usageService.assignReservedForAi(usageId, spaceId, plate, at);
+                parkingDecision = result.parkingDecision();
                 if (result.conflictReason() != null) {
                     outcome = "PENDING"; detail = result.conflictReason();
                 } else if (result.unchanged()) {
@@ -113,7 +127,9 @@ public class AiVehicleEventService {
             version = usages.lockLinkVersion(usageId);
             if (version == null || version < 0) throw new IllegalStateException("연결 버전을 조회할 수 없습니다.");
         }
-        return new AiVehicleEventResponse(req.eventId(), expectedType, outcome, plate, req.spaceCode(), usageId, detail, version);
+        var response = new AiVehicleEventResponse(req.eventId(), expectedType, outcome, plate, req.spaceCode(), usageId, detail, version, parkingDecision);
+        if ("VEHICLE_SPACE_MATCH".equals(expectedType)) decisions.record(decisionSpaceId, at, req, response);
+        return response;
     }
     @Transactional
     public AiVehicleEventResponse release(AiSpaceReleaseRequest req) {
