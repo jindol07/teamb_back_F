@@ -24,7 +24,7 @@ import kr.co.alpharking.security.jwt.AuthRequest;
 import kr.co.alpharking.security.jwt.AuthResponse;
 import lombok.extern.slf4j.Slf4j;
 
-//@RestController
+@RestController
 @CrossOrigin
 @RequestMapping("/api/auth")
 @Slf4j
