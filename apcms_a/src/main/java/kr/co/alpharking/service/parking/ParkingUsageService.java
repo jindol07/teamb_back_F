@@ -90,7 +90,11 @@ public class ParkingUsageService {
     public record AssignmentResult(ParkingUsageRow usage, String conflictReason) {}
 
     // [1023_1010] 구획 잠금 → 점유 확인 → 이용 기록 잠금 → 기존 연결·중복 점유 확인 → 연결 갱신 순서다.
-    public record ReservedAssignmentResult(ParkingUsageRow usage, String conflictReason, boolean unchanged) {}
+    public record ReservedAssignmentResult(ParkingUsageRow usage, String conflictReason, boolean unchanged, String parkingDecision) {
+        public ReservedAssignmentResult(ParkingUsageRow usage, String conflictReason, boolean unchanged) {
+            this(usage, conflictReason, unchanged, conflictReason == null ? "MATCHED" : "UNDETERMINED");
+        }
+    }
 
     /** AI 연결만 예약을 검증한다. 관리자 수동 연결의 기존 정책은 유지한다. */
     @Transactional
@@ -115,7 +119,19 @@ public class ParkingUsageService {
         }
         if (dao.countOtherActiveOnSpace(spaceId, usageId) > 0) return held("이미 다른 차량이 연결된 구획입니다.");
         var reservations = dao.lockReservationCandidates(number, spaceId, eventTime);
-        if (reservations == null || reservations.size() != 1) return held("일치하는 유효 예약을 유일하게 확인할 수 없습니다.");
+        if (reservations == null) return held("예약 조회 결과를 확인할 수 없습니다.");
+        // 대상 구획의 다른 차량 예약과 이 차량의 예약을 구분합니다.
+        var ownReservations = reservations.stream().filter(r -> r != null && number.equals(r.getVehicleNumber())).toList();
+        if (reservations.stream().anyMatch(r -> r == null || r.getParkingReservationId() == null
+                || r.getParkingSpaceId() == null || !"CONFIRMED".equals(r.getStatusCode()))) {
+            return held("예약 상태를 확인할 수 없습니다.");
+        }
+        if (ownReservations.isEmpty()) return new ReservedAssignmentResult(null, "현재 유효한 차량 예약이 없습니다.", false, "NO_VALID_RESERVATION");
+        if (ownReservations.size() != 1) return held("차량의 유효 예약이 중복되어 판정할 수 없습니다.");
+        if (!spaceId.equals(ownReservations.getFirst().getParkingSpaceId())) {
+            return new ReservedAssignmentResult(null, "예약한 구획과 실제 정차 구획이 다릅니다.", false, "WRONG_SPACE");
+        }
+        if (reservations.size() != 1) return held("일치하는 유효 예약을 유일하게 확인할 수 없습니다.");
         var reservation = reservations.getFirst();
         if (!spaceId.equals(reservation.getParkingSpaceId()) || !number.equals(reservation.getVehicleNumber())
                 || !"CONFIRMED".equals(reservation.getStatusCode()) || reservation.getParkingReservationId() == null) {

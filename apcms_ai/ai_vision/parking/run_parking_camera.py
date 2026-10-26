@@ -21,6 +21,37 @@ from ai_vision.parking.parking_calibration import load_reference, configure_reso
 from ai_vision.recognition.latest_frame_capture import LatestFrameCapture
 
 
+def apply_parking_decisions(observations, records):
+    """현재 정차 근거와 일치하는 최신 응답만 화면·기록에 사용합니다."""
+    from ai_vision.parking.parking_event_sender import convert_space_code
+    for observation in observations:
+        observation.pop('parking_decision', None)
+        if observation.get('status') != 'LOCAL_MATCH' or not observation.get('space_id'):
+            continue
+        try:
+            code = convert_space_code(observation['space_id'])
+        except (ValueError, TypeError, KeyError):
+            continue
+        for record in reversed(records):
+            payload, receipt = record.get('payload', {}), record.get('receipt') or {}
+            if (record.get('track_id') != observation['track_id']
+                    or payload.get('event_type') != 'VEHICLE_SPACE_MATCH'
+                    or payload.get('plate_number') != observation.get('plate_number')
+                    or payload.get('space_code') != code):
+                continue
+            # 새 요청이 미확정이면 이전 성공 응답으로 돌아가지 않습니다.
+            decision = 'UNDETERMINED'
+            expected = record.get('expected_parking_usage_id')
+            if (receipt.get('receipt_verified') is True and not record.get('blocking_reason')
+                    and record.get('status') in ('APPLIED', 'UNCHANGED', 'HELD')
+                    and (expected is None or (type(receipt.get('parking_usage_id')) is int
+                                             and receipt['parking_usage_id'] == expected))):
+                decision = receipt.get('parking_decision', 'UNDETERMINED')
+            observation['parking_decision'] = decision
+            break
+    return observations
+
+
 def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=60, preview=True,
                enable_http=False, allowed_codes=(), environment=None, previous_report=None,
                publish_results=False, camera_backend='default', track_vehicles=False,
@@ -198,6 +229,7 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
                             del pending_matches[key]
                     vehicle['statistics'] = vehicle_observer.summary()
                     vehicle['observations'] = tracking.get('progress', [])
+                    apply_parking_decisions(vehicle['observations'], match_flow.records)
                     if handoff is not None:
                         vehicle['entry_handoff_status'] = handoff.status
                         vehicle['entry_handoff'] = handoff.snapshot()

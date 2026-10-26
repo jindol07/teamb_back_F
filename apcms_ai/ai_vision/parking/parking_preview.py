@@ -73,9 +73,14 @@ class ParkingPreview:
                     'WAIT_IDENTITY': '입차 차량 번호 대조 중', 'IDENTITY_MISMATCH': '입차 차량 번호 불일치'}
         for row in self.vehicle_progress:
             x1, y1, x2, y2 = row['box']
-            color = (0, 220, 0) if row['status'] == 'LOCAL_MATCH' else (0, 180, 255)
+            decision = row.get('parking_decision')
+            decisions = {'MATCHED':'정상 주차', 'WRONG_SPACE':'다른 자리 주차',
+                         'NO_VALID_RESERVATION':'유효 예약 없음', 'UNDETERMINED':'주차 판정 불가'}
+            color = (0, 220, 0) if (decision == 'MATCHED' or (decision is None and row['status'] == 'LOCAL_MATCH')) else (0, 180, 255)
             cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
             status = statuses.get(row['status'], row['status']) if self._font is not None else row['status']
+            if decision in decisions:
+                status = decisions[decision] if self._font is not None else decision
             label = f"ID {row['track_id']} | {row['space_id'] or '-'} | {status}"
             if row['plate_number']:
                 label += ' | ' + row['plate_number']

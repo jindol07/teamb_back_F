@@ -4,6 +4,8 @@ import cv2,time,os
 def main():
     from ai_vision.parking.demo_session import load_demo_profile
     profile=load_demo_profile(os.environ['PARKING_DEMO_PROFILE_DIR'])
+    backend=os.environ.get('PARKING_DEMO_CAMERA_BACKEND','msmf')
+    if backend not in ('msmf','dshow'):raise ValueError('Unsupported camera backend')
     from dotenv import dotenv_values
     from ai_vision.parking import run_parking_camera as camera
     from ai_vision.parking.parking_preview import ParkingPreview
@@ -72,7 +74,7 @@ def main():
     ParkingPreview.wait_until_ready=empty_start
     try:
         report=camera.run_camera(Path(str(profile['reference'])),profile['spaces_config'],out,camera_index=profile['parking_camera'],seconds=profile['seconds'],preview=True,
-                camera_backend='msmf',track_vehicles=True,tracking_target='plate',camera_id=f"E2E_PARKING_{profile['parking_camera']}",
+                camera_backend=backend,track_vehicles=True,tracking_target='plate',camera_id=f"E2E_PARKING_{profile['parking_camera']}",
                 handoff_path=root/'gate/single_vehicle_handoff.json',
                 verify_handoff_plate=os.environ.get('PARKING_DEMO_VERIFY_HANDOFF_PLATE')=='1',
                 enable_http=True,enable_space_http=True,
