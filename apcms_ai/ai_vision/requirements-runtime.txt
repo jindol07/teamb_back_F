@@ -7,6 +7,8 @@ python-multipart==0.0.32
 httpx==0.28.1
 numpy==1.26.4
 Pillow==12.3.0
+# YOLO가 Pillow 읽기 실패 시 호출하는 HEIF 플러그인도 미리 설치합니다.
+pi-heif==1.4.0
 requests==2.34.2
 python-dotenv==1.2.4
 PyYAML>=6,<7

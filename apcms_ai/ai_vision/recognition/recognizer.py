@@ -156,6 +156,22 @@ def _join_plate_ocr(texts, polygons):
     original = normalize_plate_text("".join(texts))
     if len(texts) != len(polygons) or not texts:
         return original
+    # 7-1-1. 두 줄이 각각 한 조각이고 세로 위치가 분리된 경우만 위→아래로 연결합니다.
+    # 문자 자체를 고치거나 지역명 등 추가 조각을 버리지는 않습니다.
+    if len(texts) == 2:
+        try:
+            boxes = [np.asarray(p, dtype=float) for p in polygons]
+            if all(p.shape == (4, 2) and np.isfinite(p).all() for p in boxes):
+                upper, lower = sorted(range(2), key=lambda i: boxes[i][:, 1].mean())
+                a, b = boxes[upper], boxes[lower]
+                heights = [p[:, 1].max() - p[:, 1].min() for p in boxes]
+                separated = (min(heights) > 0 and
+                             b[:, 1].mean() - a[:, 1].mean() > max(heights) * .5)
+                overlap = min(a[:, 0].max(), b[:, 0].max()) - max(a[:, 0].min(), b[:, 0].min())
+                if separated and overlap > 0:
+                    return normalize_plate_text(texts[upper] + texts[lower])
+        except (TypeError, ValueError):
+            return original
     normalized = [normalize_plate_text(text) for text in texts]
     decorations = [i for i, text in enumerate(normalized) if re.fullmatch(r"[A-Z]{3,}", text)]
     main = [i for i in range(len(texts)) if i not in decorations]
@@ -449,7 +465,11 @@ def detect_best_plate(vehicle_crop):
 
     for result in results:
         for box in result.boxes:
-            candidates.append(box)
+            # 11-2-1. 보닛 통풍구처럼 지나치게 납작한 후보는 문자 인식으로 넘기지 않습니다.
+            # 높은 탐지 점수만으로 선택하지 않으며, 비스듬한 번호판은 추가 미탐지가 될 수 있습니다.
+            x1, y1, x2, y2 = box.xyxy[0].tolist()
+            if x2 > x1 and y2 > y1 and (x2 - x1) / (y2 - y1) <= 6:
+                candidates.append(box)
 
     # 11-3. 번호판이 탐지되지 않은 경우
     if len(candidates) == 0:
@@ -478,6 +498,16 @@ def detect_best_plate(vehicle_crop):
 
 # 12. recognize_plate() - 번호판 문자 인식
 
+def _has_yellow_plate_background(image):
+    # 12-0. 지역 번호판 전체를 지원하기 전에는 노란 배경 후보를 보수적으로 보류합니다.
+    # 색으로 지역명을 추측하지 않습니다. 조명·퇴색에 따라 놓치거나 추가 보류할 수 있습니다.
+    if image is None or image.size == 0 or image.ndim != 3 or image.shape[2] != 3:
+        return False
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+    yellow = cv2.inRange(hsv, (15, 90, 70), (40, 255, 255))
+    return float(np.count_nonzero(yellow)) / yellow.size >= .25
+
+
 def recognize_plate(plate_crop):
     """
     하나의 번호판 이미지를 OCR로 인식한다.
@@ -495,11 +525,13 @@ def recognize_plate(plate_crop):
     retry_type = ""
 
     # 우선 1차 인식 결과를 최종 후보로 설정
-    final_text = first_text
-    final_type = first_type
+    # 삭제 가능한 구분자만으로 완성되는 번호는 재시도로 덮어쓰지 않습니다.
+    # 원본 OCR 필드는 그대로 남기며, 빠진 한글을 추측해 채우지는 않습니다.
+    final_text = cleanup_plate_text(first_text)
+    final_type = classify_plate_format(final_text)
 
     # 12-3. 1차 OCR 결과가 불확실하면 이미지 전처리 후 재인식
-    if first_type in {"REVIEW", "OCR_FAILED"}:
+    if final_type in {"REVIEW", "OCR_FAILED"}:
 
         # 번호판 이미지를 확대하고 대비를 조정하여 OCR 재시도
         retry_text, retry_type = retry_ocr(plate_crop)
@@ -521,6 +553,11 @@ def recognize_plate(plate_crop):
 
     # 특수문자 제거 후 번호판 형식을 다시 검사
     final_type = classify_plate_format(final_text)
+
+    # 12-5-1. 지역명이 OCR에서 통째로 빠져도 정상 형식으로 확정되는 것을 막습니다.
+    # 원문과 1·2차 결과는 보존하고 최종 형식만 검토 대상으로 남깁니다.
+    if final_type == "KOREAN_VALID" and _has_yellow_plate_background(plate_crop):
+        final_type = "REVIEW"
 
     # 12-6. 1차·2차 OCR 정보를 모두 반환
     return {

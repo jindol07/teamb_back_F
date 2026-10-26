@@ -140,6 +140,13 @@ def run(run_dir, output_dir, max_tracks=None):
                                 if not cv2.imwrite(str(output_dir / f"id_{track_id}_frame_{row['frame_index']}_plate.jpg"), plate_crop):
                                     raise OSError("번호판 검토 사진을 저장하지 못했습니다.")
                     samples.append(sample)
+                    # 3-6. 실패 시에도 추론에 사용한 차량 영역을 무손실로 보존합니다.
+                    # 화면에 표시한 테두리·다른 차량·오른쪽 시연 OCR 결과는 추가하지 않습니다.
+                    if sample['plate_type'] != 'KOREAN_VALID' and crop.size:
+                        filename = f"id_{track_id}_frame_{row['frame_index']}_vehicle.png"
+                        if not cv2.imwrite(str(output_dir / filename), crop):
+                            raise OSError("실패 표본의 차량 검토 사진을 저장하지 못했습니다.")
+                        sample['vehicle_review_image'] = filename
 
                 # 4. 실제 통과 기록이 있는 ID에만 OCR 결과를 연결합니다.
                 # 4-1. DOWN/UP을 임의로 ENTRY/EXIT로 바꾸거나 실제 발생 날짜를 만들지 않음

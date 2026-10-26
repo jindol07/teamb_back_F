@@ -2,40 +2,56 @@ package kr.co.alpharking.controller.vehicle;
 
 import java.util.List;
 
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import kr.co.alpharking.dto.vehicle.VehicleRegistrationRequestDto;
 import kr.co.alpharking.entity.vehicle.Vehicle;
+import kr.co.alpharking.security.Office;
 import kr.co.alpharking.service.vehicle.VehicleService;
+import lombok.RequiredArgsConstructor;
 
 @RestController
 @RequestMapping("/api/vehicles")
+@RequiredArgsConstructor
 public class VehicleController {
 
-	@Autowired
-	private VehicleService vehicleService;
+    private final VehicleService vehicleService;
 
-	// http://192.168.0.23/alpharking/api/vehicles/number/12 (일부 검색 지원)
-	@GetMapping("/number/{vehicleNumber}")
-	public ResponseEntity<?> searchByVehicleNumber(@PathVariable("vehicleNumber") String vehicleNumber) {
+    @GetMapping("/mine")
+    public ResponseEntity<List<Vehicle>> getMyVehicles(@AuthenticationPrincipal Office office) {
+        return ResponseEntity.ok(vehicleService.getVehiclesByOffice(office.getOffice_id()));
+    }
 
-		System.out.println("===== VehicleController (일부 검색) =====");
-		System.out.println("검색어 : " + vehicleNumber);
+    @PostMapping("/mine/requests")
+    public ResponseEntity<Void> requestVehicleRegistration(
+            @AuthenticationPrincipal Office office,
+            @RequestBody VehicleRegistrationRequestDto request) {
+        vehicleService.submitVehicleRegistrationRequest(office.getOffice_id(), request);
+        return ResponseEntity.accepted().build();
+    }
 
-		List<Vehicle> vehicleList = vehicleService.searchByVehicleNumber(vehicleNumber);
+    @GetMapping("/number/{vehicleNumber}")
+    public ResponseEntity<?> searchByVehicleNumber(@PathVariable("vehicleNumber") String vehicleNumber) {
+        List<Vehicle> vehicleList = vehicleService.searchByVehicleNumber(vehicleNumber);
+        if (vehicleList != null && !vehicleList.isEmpty()) {
+            return ResponseEntity.ok(vehicleList);
+        }
+        return ResponseEntity.notFound().build();
+    }
 
-		System.out.println("조회된 차량 수 : " + vehicleList.size());
-
-		// 검색 결과가 존재하면 리스트 반환
-		if (vehicleList != null && !vehicleList.isEmpty()) {
-			return ResponseEntity.ok(vehicleList);
-		}
-
-		// 결과가 없으면 빈 리스트 혹은 404 처리 (여기서는 빈 리스트 또는 404)
-		return ResponseEntity.notFound().build();
-	}
+    @DeleteMapping("/{vehicleId}")
+    public ResponseEntity<Void> deleteVehicle(
+            @PathVariable("vehicleId") Long vehicleId,
+            @AuthenticationPrincipal Office office) {
+        vehicleService.deleteVehicle(vehicleId, office.getOffice_id());
+        return ResponseEntity.noContent().build();
+    }
 }

@@ -76,6 +76,50 @@ public class AuthController {
 	public ResponseEntity<AuthResponse> refresh(@RequestBody(required = false) RefreshRequest request) {
 	    String refreshToken = request == null ? null : request.refreshToken();
 	    return ResponseEntity.ok(authTokenService.refresh(refreshToken));
+		System.out.println("authenticationRequest getUsername-------------------> " + authRequest.getUsername());
+		System.out.println("authenticationRequest getPassword -------------------> " + authRequest.getPassword());
+		try {
+			// 사용자가 입력한 비밀번호와 데이터베이스에 저장된 암호화된 비밀번호를 비교하여 일치 여부를 확인하는 단계를 거쳐서 맞으면 Authentication를 생성한다. 틀리면 예외를 발생시킨다.
+			Authentication authentication = authenticationManager.authenticate(
+					new UsernamePasswordAuthenticationToken(authRequest.getUsername(), authRequest.getPassword()));
+			System.out.println("인증 성공 여부:" + authentication);
+			System.out.println("Authentication 호출 후");
+			// 인증 성공 시, SecurityContextHolder에 인증 정보를 설정한다.
+			SecurityContextHolder.getContext().setAuthentication(authentication);
+			System.out.println("SecurityContextHolder 호출 후");
+			// JwtTokenProvider를 사용하여 JWT 토큰을 생성
+			String jwt = jwtTokenProvider.createToken(authentication);
+			System.out.print("jwtLog~~~~~~~ =>" + jwt);
+			
+			return ResponseEntity.ok(new AuthResponse(jwt));
+		} //catch (Exception e) {
+			//System.out.println("인증 오류   :  " + e);
+		//}
+		
+		// 1023 : 실패 예외 처리 : 200 + null 반환 이슈
+		catch (AuthenticationException e) {
+	        // 아이디 또는 비밀번호 오류 등의 인증 실패
+	        SecurityContextHolder.clearContext();
+
+	        return ResponseEntity
+	                .status(HttpStatus.UNAUTHORIZED)
+	                .build();
+
+	    } catch (Exception e) {
+	        // JWT 생성 오류 등 예상하지 못한 서버 오류
+	        SecurityContextHolder.clearContext();
+
+	        // 실제 운영 코드에서는 Logger로 예외 기록 권장
+	        System.err.println("로그인 처리 오류: " + e.getClass().getName());
+
+	        return ResponseEntity
+	                .status(HttpStatus.INTERNAL_SERVER_ERROR)
+	                .build();
+	    }
+		
+		// AuthenticationResponse에 JWT 토큰을 담아 클라이언트에게 반환
+		// 1023 : 200 + null 반환..
+		//return ResponseEntity.ok(new AuthResponse(null));
 	}
 
 	// 사용자 로그아웃 처리

@@ -29,7 +29,7 @@ public class FavoriteVisitorVehicleController {
 
     // 특정 오피스의 방문자 차량 목록 조회 API
     @GetMapping("/office/{officeId}")
-    public ResponseEntity<List<FavoriteVisitorVehicle>> getVehiclesByOffice(@PathVariable Long officeId) {
+    public ResponseEntity<List<FavoriteVisitorVehicle>> getVehiclesByOffice(@PathVariable("officeId") Long officeId) {
         List<FavoriteVisitorVehicle> vehicles = vehicleService.getVehiclesByOffice(officeId);
         return ResponseEntity.ok(vehicles);
     }

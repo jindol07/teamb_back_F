@@ -225,8 +225,6 @@ async def answer(
     # 질문/답변은 Spring Boot의 단일 트랜잭션으로 저장한 후 응답합니다.
     if backend is None:
         saved = insert_exchange(office_id, conversation_id, question, result)
-        saved_ok = True
-        storage_notice = None
     else:
         saved = await backend.add_conversation(token, {
             'conversationId': conversation_id, 'requestId': request_id or str(uuid4()),
@@ -244,8 +242,9 @@ async def answer(
         result = saved['answer']
         cls['type'] = saved['type']
         sources = saved['sources']
-        saved_ok = True
-        storage_notice = None
+
+    saved_ok = True
+    storage_notice = None
 
     return {
         "conversation_id": conversation_id,

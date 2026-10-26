@@ -44,6 +44,45 @@ class FakeCapture:
 
 
 class RunLiveGateTests(unittest.TestCase):
+    def test_plate_tracking_cli_rejects_unsupported_modes_before_camera(self):
+        for flags in (['--demo'],['--vision-api-url','http://127.0.0.1:9999']):
+            with patch('cv2.VideoCapture') as camera,contextlib.redirect_stderr(io.StringIO()),self.assertRaises(SystemExit):
+                main(flags+['--tracking-target','plate','--output-dir','unused_plate_mode'])
+            camera.assert_not_called()
+
+    def test_plate_tracking_cli_reaches_processor_and_report(self):
+        root=self.output_folder()
+        config=root/'plate_config.json'
+        config.write_text(json.dumps(CONFIG),encoding='utf-8')
+        with patch('ai_vision.recognition.run_live_gate.LiveGateProcessor') as processor, \
+                patch('cv2.VideoCapture'), \
+                patch('ai_vision.recognition.run_live_gate.execute',return_value={
+                    'status':'STOPPED','http_enabled':False,'captured_frames':0,
+                    'processed_passages':0,'request_attempts':0}) as execute_mock, \
+                contextlib.redirect_stdout(io.StringIO()):
+            main(['--config',str(config),'--camera-id','TEST','--down-direction','ENTRY',
+                  '--tracking-target','plate','--tracking-imgsz','960','--output-dir',str(root/'plate_run')])
+        self.assertEqual(processor.call_args.kwargs['tracking_target'],'plate')
+        self.assertEqual(processor.call_args.kwargs['tracking_imgsz'],960)
+        report=json.loads((root/'plate_run/summary.json').read_text(encoding='utf-8'))
+        self.assertEqual(report['tracking_target'],'plate')
+        self.assertEqual(report['tracking_imgsz'],960)
+
+
+    def test_inference_size_invalid_modes_fail_before_camera(self):
+        with patch('cv2.VideoCapture') as opened:
+            for flags in ([], ['--demo'], ['--tracking-target','plate','--demo']):
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    main(flags+['--tracking-imgsz','960','--output-dir','unused_size'])
+            opened.assert_not_called()
+
+    def test_handoff_requires_real_explicit_http_before_opening_camera(self):
+        with patch('cv2.VideoCapture') as opened:
+            for flags in (['--single-vehicle-handoff'], ['--demo','--single-vehicle-handoff']):
+                with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                    main(flags+['--output-dir','unused_handoff'])
+            opened.assert_not_called()
+
     def test_cancelled_preparation_does_not_read_or_process_measurement_frames(self):
         capture, processor, preview = Mock(), Mock(), Mock()
         report = execute(capture, processor, self.session(), preview=preview, start_cancelled=True)

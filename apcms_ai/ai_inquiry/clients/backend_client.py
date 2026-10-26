@@ -30,22 +30,27 @@ class BackendClient:
             ) as c:
                 r = await c.request(
                     method,
-                    path.lstrip('/'),
+                    path.lstrip("/"),
                     headers={"Authorization": f"Bearer {token}"},
                     json=payload,
                 )
                 if r.status_code in (401, 403):
                     # 토큰·응답 원문 없이 실제 실패한 API 단계만 알려줍니다.
-                    reason = ''
+                    reason = ""
                     try:
                         diagnosis = r.json()
-                        if isinstance(diagnosis, dict) and diagnosis.get('code') == 'CHATBOT_IDENTITY_CHECK':
+                        if (
+                            isinstance(diagnosis, dict)
+                            and diagnosis.get("code") == "CHATBOT_IDENTITY_CHECK"
+                        ):
                             allowed = {
-                                '로그인이 필요합니다.', '인증된 사용자 객체가 Office 타입이 아닙니다.',
-                                '인증된 Office에 사용자 ID가 없습니다.', '인증된 계정에 OFFICE 권한이 없습니다.',
+                                "로그인이 필요합니다.",
+                                "인증된 사용자 객체가 Office 타입이 아닙니다.",
+                                "인증된 Office에 사용자 ID가 없습니다.",
+                                "인증된 계정에 OFFICE 권한이 없습니다.",
                             }
-                            if diagnosis.get('detail') in allowed:
-                                reason = ' ' + diagnosis['detail']
+                            if diagnosis.get("detail") in allowed:
+                                reason = " " + diagnosis["detail"]
                     except ValueError:
                         pass
                     raise PermissionError(
@@ -61,25 +66,39 @@ class BackendClient:
         except httpx.TimeoutException as e:
             raise BackendError(f"사용자 서버 응답 시간 초과: {method} {path}") from e
         except httpx.RequestError as e:
-            raise BackendError(f"사용자 서버 연결 실패: {method} {path}. 서버 실행 상태와 주소를 확인해 주세요.") from e
+            raise BackendError(
+                f"사용자 서버 연결 실패: {method} {path}. 서버 실행 상태와 주소를 확인해 주세요."
+            ) from e
         except ValueError as e:
-            raise BackendError(f"사용자 서버가 올바른 JSON을 반환하지 않았습니다: {method} {path}") from e
+            raise BackendError(
+                f"사용자 서버가 올바른 JSON을 반환하지 않았습니다: {method} {path}"
+            ) from e
 
     async def authenticate(self, token):
         data = await self.request("GET", self.cfg["auth_path"], token)
-        if not isinstance(data, dict) or 'officeId' not in data:
-            raise BackendError("본인 확인 응답에 officeId 키가 없습니다. GET /api/chatbot/me의 응답 형식을 확인해 주세요.")
-        office = data['officeId']
+        if not isinstance(data, dict) or "officeId" not in data:
+            raise BackendError(
+                "본인 확인 응답에 officeId 키가 없습니다. GET /api/chatbot/me의 응답 형식을 확인해 주세요."
+            )
+        office = data["officeId"]
         # DB ID를 JSON 숫자 또는 숫자 문자열로 반환하는 경우를 모두 지원합니다.
-        if isinstance(office, str) and re.fullmatch(r'[1-9][0-9]{0,18}', office):
+        if isinstance(office, str) and re.fullmatch(r"[1-9][0-9]{0,18}", office):
             office = int(office)
-        if isinstance(office, bool) or not isinstance(office, int) or not 0 < office <= 9223372036854775807:
-            raise BackendError("본인 확인 응답의 officeId는 양의 정수 또는 숫자 문자열이어야 합니다. ID 값과 토큰은 표시하지 않습니다.")
+        if (
+            isinstance(office, bool)
+            or not isinstance(office, int)
+            or not 0 < office <= 9223372036854775807
+        ):
+            raise BackendError(
+                "본인 확인 응답의 officeId는 양의 정수 또는 숫자 문자열이어야 합니다. ID 값과 토큰은 표시하지 않습니다."
+            )
         return str(office)
 
     async def get(self, category, token):
-        if category in ('MILEAGE', 'FEE'):
-            raise BackendError("마일리지·청구 정보의 본인 조회 API는 아직 지원하지 않습니다.")
+        if category in ("MILEAGE", "FEE"):
+            raise BackendError(
+                "마일리지·청구 정보의 본인 조회 API는 아직 지원하지 않습니다."
+            )
         if category not in self.PATH:
             raise BackendError("지원하지 않는 조회 유형")
         data = await self.request("GET", self.cfg[self.PATH[category]], token)
@@ -94,7 +113,9 @@ class BackendClient:
         )
 
     async def conversation_history(self, token, conversation_id):
-        return await self.request('GET', f'api/chatbot/conversations/{conversation_id}/messages', token)
+        return await self.request(
+            "GET", f"api/chatbot/conversations/{conversation_id}/messages", token
+        )
 
     async def get_public_parking_spaces(self, token):
         # 기존 사용자 서버 주소와 JWT 전달 방식을 그대로 재사용합니다.
@@ -103,7 +124,8 @@ class BackendClient:
             raise BackendError("사용자 주차 현황 API 응답이 목록 형식이 아닙니다.")
         return data
 
-    # ----------로그인시 삭제해야함
+    # 개발용 예약 조회: development·MOCK 모드에서 테스트 옵션을 켠 경우에만 사용
+    # 현재 API 모드에서는 실행되지 않으며, 조회 시 사용자 JWT 인증이 필요합니다.
     async def get_test_reservations(self, token=None):
         if (
             self.cfg["env"] != "development"
@@ -113,5 +135,3 @@ class BackendClient:
             raise PermissionError("개발용 예약 조회가 비활성화되어 있습니다.")
         # 개발용 호출도 고정 ID를 사용하지 않고 JWT로 인증된 본인만 조회합니다.
         return await self.request("GET", "api/chatbot/reservations", token)
-
-    # ----------------

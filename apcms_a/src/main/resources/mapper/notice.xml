@@ -54,6 +54,8 @@
 		title,
 		content,
 		view_count AS viewCount,
+		(SELECT COUNT(*) FROM NOTICE_ATTACHMENT attachment
+		 WHERE attachment.notice_id = NOTICE.notice_id) AS attachmentCount,
 		TO_CHAR(created_at, 'YYYY-MM-DD HH24:MI:SS') AS createdAt,
 		TO_CHAR(updated_at, 'YYYY-MM-DD HH24:MI:SS') AS updatedAt,
 		TO_CHAR(deleted_at, 'YYYY-MM-DD HH24:MI:SS') AS deletedAt,
@@ -213,6 +215,13 @@
 		AND notice_id = #{noticeId}
 	</update>
 
+
+	<!-- 첨부파일의 현재 연결만 삭제하고 이력은 보존 -->
+	<delete id="deleteNoticeFile">
+		DELETE FROM NOTICE_ATTACHMENT
+		WHERE notice_id = #{noticeId}
+		AND notice_attachment_id = #{attachmentId}
+	</delete>
 
 	<!-- 현재 유효한 공지사항 버전 종료 -->
 	<update id="closeCurrentNoticeHistory">

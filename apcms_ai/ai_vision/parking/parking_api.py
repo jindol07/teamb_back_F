@@ -6,8 +6,9 @@
 
 import json
 import uvicorn
+import time
 
-from fastapi import APIRouter, FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException, Response
 
 from ai_vision.paths import RESULT_DIR
 from ai_vision.recognition.local_io import read_json
@@ -25,6 +26,7 @@ router = APIRouter(
 # 1-2. 실시간 주차면 감지 결과 JSON 파일
 # parking_realtime.py의 save_results()가 생성
 RESULT_PATH = RESULT_DIR / "parking" / "realtime_occupancy_result.json"
+MAX_RESULT_AGE_SECONDS = 30
 
 
 # 2. get_parking_occupancy() - 주차면 점유 현황 조회
@@ -32,15 +34,20 @@ RESULT_PATH = RESULT_DIR / "parking" / "realtime_occupancy_result.json"
 # 2-1. GET 요청 등록
 # /parking/occupancy
 @router.get("/occupancy")
-def get_parking_occupancy():
+def get_parking_occupancy(response: Response = None):
 
     # 2-2. 결과 파일 존재 여부 확인
     # 아직 실시간 감지를 실행하지 않았다면 JSON 파일이 없을 수 있음
 
     # 2-3. 결과 JSON 파일 읽기
     try:
+        # 파일 교체 전 시각을 사용하여 오래된 데이터에 새 파일 시각을 붙이지 않습니다.
+        modified = RESULT_PATH.stat().st_mtime
         # 크기·중복 키·NaN·인코딩 오류를 응답 직렬화 전에 검사합니다.
         data = validate_occupancy(read_json(RESULT_PATH))
+        # 수집 중단과 큰 시계 역행을 정상적인 현재 관찰로 표시하지 않습니다.
+        if not -5 <= time.time() - modified <= MAX_RESULT_AGE_SECONDS:
+            raise ValueError('주차면 관찰 결과의 유효시간이 지났습니다.')
 
     # 2-4. 파일 읽기 또는 JSON 해석 실패 처리
     # OSError : 파일 접근 또는 읽기 관련 오류
@@ -48,11 +55,14 @@ def get_parking_occupancy():
     except (OSError, ValueError) as error:
         raise HTTPException(
             status_code=503,
-            detail="주차면 점유 감지 결과를 읽을 수 없습니다."
+            detail="주차면 점유 결과가 없거나 손상되었거나 최신 상태가 아닙니다.",
+            headers={'Cache-Control': 'no-store'}
         ) from error
 
     # 2-5. 조회 결과 반환
     # FastAPI가 Python 딕셔너리를 JSON으로 변환해 응답
+    if response is not None:
+        response.headers['Cache-Control'] = 'no-store'
     return data
 
 

@@ -12,6 +12,25 @@ RECEIPTS = frozenset({'IN_FLIGHT', 'NOT_ALLOWED', 'UPDATED', 'UNCHANGED', 'DUPLI
 STATUSES = frozenset({'RUNNING', 'COMPLETED', 'INCOMPLETE', 'STOPPED', 'CANCELLED', 'FAILED', 'DELIVERY_STOPPED'})
 
 
+WITHDRAWAL_REASONS = frozenset({'OBSERVATION_GAP', 'TRACK_NOT_OBSERVED', 'OUTSIDE_SPACE',
+    'SPACE_CHANGED', 'POSITION_MOVED', 'MULTIPLE_TRACKS_IN_SPACE', 'OCCUPANCY_NOT_CONTINUOUS',
+    'PLATE_CONFLICT', 'DUPLICATE_PLATE'})
+
+
+def summarize_connection_reviews(events):
+    # 예전 보고서에 없는 원인을 현재 상황으로 추측해 채우지 않습니다.
+    if not isinstance(events, list) or any(not isinstance(event, dict) for event in events):
+        raise ValueError('연결 관찰 이벤트 목록을 확인하세요.')
+    counts = {}
+    for event in events:
+        if event.get('kind') not in ('MATCH_REVIEW', 'TRACK_LOST'):
+            continue
+        reason = event.get('reason')
+        reason = reason if isinstance(reason, str) and reason in WITHDRAWAL_REASONS else 'UNKNOWN_LEGACY'
+        counts[reason] = counts.get(reason, 0) + 1
+    return counts
+
+
 def inspect_report(path):
     # 1. 손상되거나 다른 종류인 파일을 정상 종료 보고서로 해석하지 않습니다.
     report = read_json(path, max_bytes=16 * 1024 * 1024)
@@ -54,10 +73,47 @@ def inspect_report(path):
     review = review or (not report['dry_run'] and (unrecorded > 0 or attempts > len(deliveries)))
     review = review or any(counts.get(key, 0) for key in ('REJECTED', 'SKIPPED_PROTECTED', 'SKIPPED_BEFORE_CORRECTION'))
     review = review or any(counts.get(key, 0) for key in ('QUEUED', 'CANCELLED_BEFORE_SEND', 'NOT_SENT_QUEUE_FULL'))
+    # 3. 차량 연결 요청도 같은 보고서에서 재시작 전 확인합니다.
+    vehicle = report.get('vehicle_space', {})
+    if not isinstance(vehicle, dict):
+        raise ValueError('구획 연결 기록은 객체여야 합니다.')
+    withdrawal_counts = summarize_connection_reviews(vehicle.get('events', []))
+    matches = vehicle.get('deliveries', [])
+    if not isinstance(matches, list) or type(vehicle.get('http_enabled', False)) is not bool:
+        raise ValueError('구획 연결 기록을 확인하세요.')
+    if type(vehicle.get('release_http_enabled', False)) is not bool:
+        raise ValueError('구획 해제 활성화 상태를 확인하세요.')
+    match_counts = {}
+    blocking_reasons = {}
+    for row in matches:
+        if not isinstance(row, dict) or row.get('status') not in {
+                'DISABLED', 'IN_FLIGHT', 'APPLIED', 'UNCHANGED', 'HELD', 'REJECTED',
+                'AUTH_REQUIRED', 'DELIVERY_UNKNOWN', 'HELD_RELEASE_REQUIRED'}:
+            raise ValueError('구획 연결 결과 상태를 확인하세요.')
+        payload = row.get('payload', {})
+        if isinstance(payload, dict) and payload.get('event_type') == 'VEHICLE_SPACE_RELEASE' and not vehicle.get('release_http_enabled', False):
+            raise ValueError('비활성 해제 모드에 해제 요청 기록이 있습니다.')
+        state = row['status']
+        reason = row.get('blocking_reason')
+        if reason is not None:
+            if not isinstance(reason, str) or not reason or len(reason) > 128:
+                raise ValueError('구획 전송 중단 이유를 확인하세요.')
+            blocking_reasons[reason] = blocking_reasons.get(reason, 0) + 1
+            review = True
+        if not vehicle.get('http_enabled', False) and state != 'DISABLED':
+            raise ValueError('비활성 연결 기록에 전송 결과가 있습니다.')
+        match_counts[state] = match_counts.get(state, 0) + 1
+        if state not in ('DISABLED', 'APPLIED', 'UNCHANGED'):
+            review = True
+        if state in ('IN_FLIGHT', 'DELIVERY_UNKNOWN'):
+            uncertain += 1
     action = '서버 반영 여부·구획 보호·오류 원인을 확인한 뒤 새 세션을 시작하세요.' if review else '자동 재전송은 없습니다. 현재 구도와 구획 상태를 확인한 뒤 새 세션을 시작하세요.'
+    if 'SPACE_RELEASE_VERSION_UNAVAILABLE' in blocking_reasons:
+        action = '구획 연결 성공 기록은 보존하세요. Boot 해제 활성화·연결 버전 DB 준비 상태를 확인하기 전에는 재전송하지 마세요.'
     return {'status': report['status'], 'dry_run': report['dry_run'], 'event_count': len(events),
-            'receipt_counts': counts, 'uncertain_count': uncertain, 'unrecorded_count': unrecorded,
-            'requires_review': bool(review),
+            'receipt_counts': counts, 'space_match_receipt_counts': match_counts, 'uncertain_count': uncertain, 'unrecorded_count': unrecorded,
+            'requires_review': bool(review), 'connection_withdrawal_counts': withdrawal_counts,
+            'space_delivery_blocking_reasons': blocking_reasons,
             'next_action': action}
 
 
@@ -75,6 +131,10 @@ def main(argv=None):
         print(f"전송 기록 누락 이벤트: {summary['unrecorded_count']}")
     for status, count in sorted(summary['receipt_counts'].items()):
         print(f'{status}: {count}')
+    for reason, count in sorted(summary['connection_withdrawal_counts'].items()):
+        print(f'연결 철회·소실: {reason} {count}건')
+    for reason, count in sorted(summary['space_delivery_blocking_reasons'].items()):
+        print(f'구획 전송 중단: {reason} {count}건')
     print(summary['next_action'])
     return 2 if summary['requires_review'] else 0
 

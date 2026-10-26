@@ -23,6 +23,10 @@ import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import jakarta.annotation.PostConstruct;
 
+//1023: 배포 CORS 이슈
+import java.util.Arrays;
+import org.springframework.beans.factory.annotation.Value;
+
 @EnableWebSecurity
 @Configuration
 public class SecurityConfig {
@@ -36,6 +40,7 @@ public class SecurityConfig {
 	@Autowired
 	private JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint;
 
+	//1023: 배포 CORS 이슈
 	@Value("${app.cors.origins}")
 	private String corsOrigins;
 	
@@ -83,8 +88,12 @@ public class SecurityConfig {
                         .requestMatchers(HttpMethod.GET, "/ws/parking/spaces").permitAll()
                         // 사용자 주차현황은 기존과 동일하게 로그인한 사용자만 조회한다.
                         .requestMatchers(HttpMethod.GET, "/api/parking/spaces").authenticated()
+                        // AI 주차 추천은 로그인한 사용자만 요청할 수 있다.
+                        .requestMatchers(HttpMethod.POST, "/api/recmn/recommend").authenticated()
                         //.requestMatchers("/api/chatbot/**").permitAll()
                         
+                        // Jenkins 배포 후 Health Check : 서버 가용성 확인 => 10/25
+                        .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                         
                         // 관리자 및 사용자 권한
                         .requestMatchers("/admin/**").hasAuthority("ADMIN")
@@ -106,23 +115,67 @@ public class SecurityConfig {
         		
         return http.build();
     }
+    
+//1023: 배포 CORS 이슈   
+//    @Bean
+//    public CorsConfigurationSource corsConfigurationSource() {
+//        CorsConfiguration corsConfiguration = new CorsConfiguration();
+//        corsConfiguration.setAllowCredentials(true);
+//        corsConfiguration.setAllowedOrigins(// React 그러니까 개발 클라이언트 접속만 허용 
+//        		List.of("http://192.168.0.13:3000", "http://localhost:3000")
+//        		);
+//        corsConfiguration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
+//        corsConfiguration.setAllowedHeaders(List.of("*"));
+//
+//        UrlBasedCorsConfigurationSource urlBasedCorsConfigurationSource = new UrlBasedCorsConfigurationSource();
+//        urlBasedCorsConfigurationSource.registerCorsConfiguration("/**", corsConfiguration);
+//
+//        return urlBasedCorsConfigurationSource;
+//
+//    }// corsConfigurationSource
+    
+//1023: 배포 CORS 이슈
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
+
         CorsConfiguration corsConfiguration = new CorsConfiguration();
+
+        // 쿠키 등 인증 정보가 포함된 요청 허용
         corsConfiguration.setAllowCredentials(true);
         // 운영/개발 오리진은 application.properties(app.cors.origins)에서 관리한다.
         corsConfiguration.setAllowedOrigins(
                 Arrays.asList(corsOrigins.split("\\s*,\\s*"))
         );
         corsConfiguration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
+        // application.properties 또는 환경변수에서 허용 Origin 읽기
+        corsConfiguration.setAllowedOrigins(
+            Arrays.stream(corsOrigins.split(","))
+                .map(String::trim)
+                .filter(origin -> !origin.isEmpty())
+                .toList()
+        );
+
+        // 허용 HTTP 메서드
+        corsConfiguration.setAllowedMethods(
+            List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
+        );
+
+        // 요청 헤더 허용
         corsConfiguration.setAllowedHeaders(List.of("*"));
 
-        UrlBasedCorsConfigurationSource urlBasedCorsConfigurationSource = new UrlBasedCorsConfigurationSource();
-        urlBasedCorsConfigurationSource.registerCorsConfiguration("/**", corsConfiguration);
+        // 응답에서 필요한 헤더 노출
+        corsConfiguration.setExposedHeaders(
+            List.of("Authorization")
+        );
 
-        return urlBasedCorsConfigurationSource;
+        UrlBasedCorsConfigurationSource source =
+            new UrlBasedCorsConfigurationSource();
 
-    }// corsConfigurationSource
+        source.registerCorsConfiguration("/**", corsConfiguration);
+
+        return source;
+    }
+    
 
 }
 

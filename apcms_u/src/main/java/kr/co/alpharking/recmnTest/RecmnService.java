@@ -3,7 +3,9 @@ package kr.co.alpharking.recmnTest;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 
 import org.springframework.beans.factory.annotation.Autowired;
@@ -46,7 +48,9 @@ public class RecmnService {
 
     // 주차 이력이 없는 사용자는 예약 가능한 전체 공간 중 무작위 추천
     public ParkingRecommendationResponse recommendRandomParking(
-            ParkingRecommendationRequest request
+            Long officeId,
+            ParkingRecommendationRequest request,
+            Map<String, Double> aiZoneScores
     ) {
         if (request.getStartDate() == null || request.getEndDate() == null) {
             throw new IllegalArgumentException("예약 시작일과 종료일을 선택해 주세요.");
@@ -67,8 +71,29 @@ public class RecmnService {
             throw new IllegalArgumentException("선택한 기간에 예약 가능한 공간이 없습니다.");
         }
 
-        Object[] selectedSpace = availableSpaces.get(
-                ThreadLocalRandom.current().nextInt(availableSpaces.size()));
+        Map<String, List<Object[]>> spacesByZone = new LinkedHashMap<>();
+        for (Object[] space : availableSpaces) {
+            String zoneCode = String.valueOf(space[2]);
+            spacesByZone.computeIfAbsent(zoneCode, key -> new ArrayList<>()).add(space);
+        }
+
+        List<String> zoneCandidates = new ArrayList<>();
+        for (String zoneCode : spacesByZone.keySet()) {
+            if (aiZoneScores.keySet().stream()
+                    .anyMatch(aiZone -> aiZone.equalsIgnoreCase(zoneCode))) {
+                zoneCandidates.add(zoneCode);
+            }
+        }
+        if (zoneCandidates.isEmpty()) {
+            zoneCandidates.addAll(spacesByZone.keySet());
+        }
+
+        String selectedZoneCode = zoneCandidates.get(
+                ThreadLocalRandom.current().nextInt(zoneCandidates.size()));
+        List<Object[]> selectedZone = spacesByZone.get(selectedZoneCode);
+
+        Object[] selectedSpace = selectedZone.get(
+                ThreadLocalRandom.current().nextInt(selectedZone.size()));
         return new ParkingRecommendationResponse(
                 ((Number) selectedSpace[0]).longValue(),
                 ((Number) selectedSpace[1]).intValue(),
@@ -127,7 +152,7 @@ public class RecmnService {
             }
         }
 
-        List<Object[]> candidates = new ArrayList<>();
+        Map<String, List<Object[]>> candidatesByZone = new LinkedHashMap<>();
 
         // 선호 층에 빈 공간이 있으면 그 층에서 추천 후보 구성
         if (preferredFloor != null) {
@@ -137,37 +162,34 @@ public class RecmnService {
                     String availableZone = String.valueOf(row[2]);
 
                     if (floorNo.equals(preferredFloor) && availableZone.equalsIgnoreCase(zoneCode)) {
-                        candidates.add(row);
+                        candidatesByZone.computeIfAbsent(zoneCode, key -> new ArrayList<>()).add(row);
                     }
-                }
-                if (!candidates.isEmpty()) {
-                    break;
                 }
             }
         }
 
         // 과거 이력이 없거나 선호 층에 빈 공간이 없으면 전체 빈 공간에서 추천
-        if (candidates.isEmpty()) {
+        if (candidatesByZone.isEmpty()) {
             for (String zoneCode : recommendedZones) {
                 for (Object[] row : availableSpaces) {
                     String availableZone = String.valueOf(row[2]);
                     if (availableZone.equalsIgnoreCase(zoneCode)) {
-                        candidates.add(row);
+                        candidatesByZone.computeIfAbsent(zoneCode, key -> new ArrayList<>()).add(row);
                     }
-                }
-                if (!candidates.isEmpty()) {
-                    break;
                 }
             }
         }
 
-        if (candidates.isEmpty()) {
+        if (candidatesByZone.isEmpty()) {
             throw new IllegalStateException("AI 추천 구역에 예약 가능한 공간이 없습니다.");
         }
 
-        // 후보 중 하나를 무작위로 선택
-        int randomIndex = ThreadLocalRandom.current().nextInt(candidates.size());
-        Object[] selectedSpace = candidates.get(randomIndex);
+        List<String> candidateZones = new ArrayList<>(candidatesByZone.keySet());
+        String selectedZoneCode = candidateZones.get(
+                ThreadLocalRandom.current().nextInt(candidateZones.size()));
+        List<Object[]> selectedZone = candidatesByZone.get(selectedZoneCode);
+        Object[] selectedSpace = selectedZone.get(
+                ThreadLocalRandom.current().nextInt(selectedZone.size()));
 
         return new ParkingRecommendationResponse(
                 ((Number) selectedSpace[0]).longValue(),

@@ -1,9 +1,147 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
-
 <mapper namespace="kr.co.alpharking.dao.vehicle.VehicleChangeRequestDao">
 
-	<!--차량 요청 전체 조회-->
+	<!-- 차량 변경 요청 반려 감사 로그 -->
+	<insert id="addRejectAuditLog">
+		INSERT INTO audit_log (
+		audit_log_id,
+		actor_type_code,
+		actor_id,
+		action_type_code,
+		target_table,
+		target_id,
+		before_data,
+		after_data,
+		change_reason,
+		occurred_at
+		)
+		VALUES (
+		seq_audit_log.NEXTVAL,
+		'ADMIN',
+		#{revieweradminid},
+		'REJECT',
+		'VEHICLE_CHANGE_REQUEST',
+		#{vehiclechangerequestid},
+		#{beforedata, jdbcType=CLOB},
+		#{afterdata, jdbcType=CLOB},
+		#{reviewreason},
+		SYSDATE
+		)
+	</insert>
+
+	<!-- 추가 등록 신청 시 FK가 유효한 REQUESTED 차량 행을 먼저 생성한다. -->
+	<!-- Create an additional vehicle only after approval. -->
+	<!-- ADD 검토 완료 후 차량 생성: 승인과 반려 상태 구분 -->
+	<insert id="addReviewedAddVehicle">
+		<selectKey keyProperty="targetvehicleid"
+			resultType="long"
+			order="BEFORE">
+			SELECT seq_vehicle.NEXTVAL FROM dual
+		</selectKey> INSERT INTO
+		vehicle ( vehicle_id, office_id, vehicle_number, vehicle_model,
+		owner_name, vehicle_type_code, registration_type_code,
+		registration_status_code, registered_at, rejected_reason, created_at,
+		updated_at ) VALUES ( #{targetvehicleid}, #{officeid},
+		#{requestedvehiclenumber}, #{requestedvehiclemodel},
+		#{requestedownername}, #{requestedvehicletypecode}, 'ADDITIONAL', CASE
+		WHEN #{requeststatuscode} = 'APPROVED' THEN 'REGISTERED' ELSE 'REJECTED'
+		END, CASE WHEN #{requeststatuscode} = 'APPROVED' THEN SYSDATE ELSE NULL
+		END, CASE WHEN #{requeststatuscode} = 'REJECTED' THEN #{reviewreason}
+		ELSE NULL END, SYSDATE, SYSDATE ) </insert>
+
+	<!-- 차량 변경 요청 등록 -->
+	<insert id="add">
+		INSERT INTO vehicle_change_request (
+		vehicle_change_request_id, office_id, target_vehicle_id,
+		request_type_code, requested_vehicle_number,
+		requested_vehicle_model, requested_owner_name,
+		requested_vehicle_type_code, request_reason, requested_at
+		) VALUES (
+		seq_vchange_req.NEXTVAL, #{officeid}, CASE WHEN #{requesttypecode} =
+		'ADD' THEN NULL ELSE #{targetvehicleid} END,
+		#{requesttypecode}, #{requestedvehiclenumber},
+		#{requestedvehiclemodel}, #{requestedownername},
+		#{requestedvehicletypecode}, #{requestreason}, SYSDATE
+		)
+	</insert>
+
+	<!-- 추가 등록 신청 이력: 차량 ID는 신청 시 생성한 REQUESTED 차량을 참조 -->
+	<!-- Record history for an approved additional vehicle. -->
+	<!-- ADD 승인 및 반려 이력 저장 -->
+	<insert id="addReviewedAddHistory">
+		INSERT INTO vehicle_history (
+		vehicle_history_id,
+		vehicle_id,
+		office_id,
+		vehicle_number,
+		vehicle_model,
+		owner_name,
+		vehicle_type_code,
+		registration_type_code,
+		registration_status_code,
+		registered_at,
+		rejected_reason,
+		created_at,
+		updated_at,
+		deleted_at,
+		changed_by_admin_id,
+		actor_type_code,
+		actor_id,
+		change_type_code,
+		change_reason,
+		valid_from,
+		valid_to
+		)
+		SELECT
+		seq_vehicle_history.NEXTVAL,
+		v.vehicle_id,
+		v.office_id,
+		v.vehicle_number,
+		v.vehicle_model,
+		v.owner_name,
+		v.vehicle_type_code,
+		v.registration_type_code,
+		v.registration_status_code,
+		v.registered_at,
+		v.rejected_reason,
+		v.created_at,
+		v.updated_at,
+		v.deleted_at,
+		#{revieweradminid},
+		'ADMIN',
+		#{revieweradminid},
+		CASE
+		WHEN #{requeststatuscode} = 'REJECTED'
+		THEN 'REJECT'
+		ELSE 'APPROVE'
+		END,
+		#{reviewreason},
+		SYSDATE,
+		NULL
+		FROM vehicle v
+		WHERE v.vehicle_id = #{targetvehicleid}
+	</insert>
+
+	<!-- 기존 요청 데이터 조회: SQL로 직접 만든 target_vehicle_id NULL 요청의 보완 처리에 사용 -->
+	<select id="findById"
+		resultType="kr.co.alpharking.dto.vehicle.VehicleChangeRequestDTO">
+		SELECT vehicle_change_request_id AS vehiclechangerequestid,
+		office_id AS officeid,
+		target_vehicle_id AS targetvehicleid,
+		request_type_code AS requesttypecode,
+		requested_vehicle_number AS requestedvehiclenumber,
+		requested_vehicle_model AS requestedvehiclemodel,
+		requested_owner_name AS requestedownername,
+		requested_vehicle_type_code AS requestedvehicletypecode,
+		request_reason AS requestreason,
+		request_status_code AS requeststatuscode
+		FROM vehicle_change_request
+		WHERE vehicle_change_request_id = #{vehiclechangerequestid}
+	</select>
+
+	<!-- 생성된 차량 ID를 대상 요청에 연결 -->
+	<!-- 차량 요청 전체 조회 -->
 	<select id="list"
 		resultType="kr.co.alpharking.dto.vehicle.VehicleChangeRequestDTO">
 		SELECT
@@ -24,47 +162,11 @@
 		vcr.reviewed_at AS reviewedat,
 		vcr.applied_at AS appliedat
 		FROM vehicle_change_request vcr
-		LEFT JOIN office o
-		ON vcr.office_id = o.office_id
+		LEFT JOIN office o ON vcr.office_id = o.office_id
 		ORDER BY vcr.requested_at DESC
 	</select>
-	<!-- 차량 변경 요청 등록
-        - 최초 요청 상태는 DB DEFAULT 값인 REQUESTED 사용
-        - 요청 일시는 SYSDATE로 저장
-        - 실제 차량 테이블 반영은 별도 승인 처리에서 수행 -->
-	<insert id="add">
-		INSERT INTO vehicle_change_request (
-		vehicle_change_request_id,
-		office_id,
-		target_vehicle_id,
-		request_type_code,
-		requested_vehicle_number,
-		requested_vehicle_model,
-		requested_owner_name,
-		requested_vehicle_type_code,
-		request_reason,
-		requested_at
-		) VALUES (
-		seq_vchange_req.NEXTVAL,
-		#{officeid},
-		#{targetvehicleid},
-		#{requesttypecode},
-		#{requestedvehiclenumber},
-		#{requestedvehiclemodel},
-		#{requestedownername},
-		#{requestedvehicletypecode},
-		#{requestreason},
-		SYSDATE
-		)
-	</insert>
 
-
-	<!-- 차량 변경 요청 검토 처리
-        - 승인 또는 반려 상태 저장
-        - 검토자 및 검토 사유 저장
-        - 검토 일시 기록
-        - 실제 적용 일시는 여기서 기록하지 않음
-        - 요청 중인 건만 검토 가능 -->
+	<!-- 요청 중인 건만 승인 또는 반려 -->
 	<update id="update">
 		UPDATE vehicle_change_request
 		SET request_status_code = #{requeststatuscode},
@@ -74,11 +176,78 @@
 		WHERE vehicle_change_request_id = #{vehiclechangerequestid}
 		AND request_status_code = 'REQUESTED'
 	</update>
+<!-- 승인/반려 결과를 추가 등록 차량 행에 반영; 비 ADD 요청은 변경하지 않는다. -->
+	<update id="applyAddReviewToVehicle">
+		UPDATE vehicle v
+		SET registration_status_code = (
+		SELECT CASE WHEN request_status_code = 'APPROVED'
+		THEN 'REGISTERED' ELSE 'REJECTED' END
+		FROM vehicle_change_request
+		WHERE vehicle_change_request_id = #{vehiclechangerequestid}
+		AND request_type_code = 'ADD'
+		),
+		registered_at = (
+		SELECT CASE WHEN request_status_code = 'APPROVED' THEN SYSDATE ELSE NULL
+		END
+		FROM vehicle_change_request
+		WHERE vehicle_change_request_id = #{vehiclechangerequestid}
+		AND request_type_code = 'ADD'
+		),
+		rejected_reason = (
+		SELECT CASE WHEN request_status_code = 'REJECTED' THEN review_reason
+		ELSE NULL END
+		FROM vehicle_change_request
+		WHERE vehicle_change_request_id = #{vehiclechangerequestid}
+		AND request_type_code = 'ADD'
+		),
+		updated_at = SYSDATE
+		WHERE v.vehicle_id = (
+		SELECT target_vehicle_id
+		FROM vehicle_change_request
+		WHERE vehicle_change_request_id = #{vehiclechangerequestid}
+		AND request_type_code = 'ADD'
+		)
+	</update>
 
+	<!-- 이전 최신 이력의 valid_to 종료 -->
+	<update id="closeReviewHistory">
+		UPDATE vehicle_history h
+		SET valid_to = SYSDATE
+		WHERE h.vehicle_id = (
+		SELECT target_vehicle_id
+		FROM vehicle_change_request
+		WHERE vehicle_change_request_id = #{vehiclechangerequestid}
+		)
+		AND h.valid_to IS NULL
+	</update>
 
-	<!-- 차량 변경 요청 취소
-        - 실제 행을 삭제하지 않고 상태만 CANCELLED로 변경
-        - 아직 검토되지 않은 요청만 취소 가능 -->
+	<!-- 승인/반려 검토 결과 스냅샷 추가: ADD 요청도 동일한 vehicle_id로 연결 -->
+	<insert id="addReviewHistory">
+		INSERT INTO vehicle_history (
+		vehicle_history_id, vehicle_id, office_id, vehicle_number,
+		vehicle_model, owner_name, vehicle_type_code,
+		registration_type_code, registration_status_code,
+		registered_at, rejected_reason, created_at, updated_at, deleted_at,
+		changed_by_admin_id, actor_type_code, actor_id,
+		change_type_code, change_reason, valid_from, valid_to
+		)
+		SELECT seq_vehicle_history.NEXTVAL, v.vehicle_id, v.office_id,
+		v.vehicle_number, v.vehicle_model, v.owner_name,
+		v.vehicle_type_code, v.registration_type_code,
+		v.registration_status_code, v.registered_at, v.rejected_reason,
+		v.created_at, v.updated_at, v.deleted_at,
+		r.reviewer_admin_id, 'ADMIN', r.reviewer_admin_id,
+		CASE WHEN r.request_status_code = 'REJECTED' THEN 'REJECT'
+		WHEN r.request_type_code = 'ADD' THEN 'APPROVE'
+		WHEN r.request_type_code = 'DELETE' THEN 'DELETE'
+		ELSE 'UPDATE' END,
+		r.review_reason, SYSDATE, NULL
+		FROM vehicle_change_request r
+		JOIN vehicle v ON v.vehicle_id = r.target_vehicle_id
+		WHERE r.vehicle_change_request_id = #{vehiclechangerequestid}
+	</insert>
+
+	<!-- 요청 취소: 실제 요청 행은 보존 -->
 	<update id="delete">
 		UPDATE vehicle_change_request
 		SET request_status_code = 'CANCELLED'
@@ -86,9 +255,7 @@
 		AND request_status_code = 'REQUESTED'
 	</update>
 
-	<!--차량 변경 요청 적용 완료 처리
-        - 실제 vehicle 테이블 변경이 성공한 뒤 호출
-        - 승인된 요청만 적용 완료 처리 -->
+	<!-- 승인된 요청 적용 완료 표시 -->
 	<update id="markApplied">
 		UPDATE vehicle_change_request
 		SET applied_at = SYSDATE
@@ -98,3 +265,5 @@
 	</update>
 
 </mapper>
+
+

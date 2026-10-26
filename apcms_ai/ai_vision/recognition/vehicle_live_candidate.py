@@ -1,4 +1,4 @@
-# ai_vision/recognition/vehicle_live_candidate.py
+# D:/finalProjectB/back/apcms_ai/ai_vision/recognition/vehicle_live_candidate.py
 """실시간 차량 통과 기록을 검증하고 백엔드 전달 후보로 변환하는 모듈.
 
 처리 단계: 실시간 출처 확인 → 통과 기록 검사 → 번호판 확정 여부 확인
@@ -65,3 +65,55 @@ def create_live_candidate(passage, camera_id, down_direction, detected_at, event
     return {"origin": "LIVE", "track_id": checked["track_id"], "status": "BLOCKED" if reasons else "CANDIDATE_ONLY",
             "reasons": reasons, "payload": payload, "http_enabled": False,
             "confidence_basis": "MIN_MATCHING_PLATE_DETECTION_CONFIDENCE_NOT_OCR_ACCURACY"}
+
+
+def create_space_match_candidate(match, current_matches, camera_id, detected_at):
+    """현재 점유·추적과 일치하는 실시간 연결만 Boot 요청 후보로 만듭니다."""
+    from ai_vision.recognition.plate_consensus import summarize_plate_samples
+    from ai_vision.parking.parking_event_sender import convert_space_code
+    from ai_vision.recognition.vehicle_contract import validate_space_match_payload
+    if not isinstance(match, dict) or match.get('kind') != 'LIVE_SPACE_MATCH':
+        raise ValueError('실시간 구획 관찰만 변환할 수 있습니다.')
+    track = match.get('track_id')
+    if type(track) is not int or track < 0:
+        raise ValueError('추적 ID를 확인하세요.')
+    signature = {key: match.get(key) for key in ('track_id', 'space_id', 'plate_number')}
+    if signature not in current_matches:
+        return {'origin': 'LIVE', 'track_id': track, 'status': 'BLOCKED',
+                'reasons': ['MATCH_WITHDRAWN'], 'payload': None}
+    payload = validate_space_match_payload({
+        'event_id': str(uuid.uuid4()), 'event_type': 'VEHICLE_SPACE_MATCH',
+        'camera_id': camera_id, 'detected_at': detected_at,
+        'plate_number': match.get('plate_number'),
+        'confidence': match.get('plate_detection_confidence'),
+        'space_code': convert_space_code(match.get('space_id')), 'method': 'TRACKING'})
+    verified_identity = match.get('identity_basis') == 'ENTRY_AND_B_PLATE_OCR'
+    identity = verified_identity or match.get('identity_basis') == 'SINGLE_VEHICLE_ENTRY_HANDOFF'
+    verification = None
+    if verified_identity:
+        samples = match.get('samples')
+        if not isinstance(samples, list) or not 2 <= len(samples) <= 12:
+            raise ValueError('B 번호판 재확인의 원본 표본이 필요합니다.')
+        consensus = summarize_plate_samples(samples)
+        if consensus != match.get('plate_consensus'):
+            raise ValueError('B 번호판 합의와 원본 표본이 다릅니다.')
+        if (consensus['status'] != 'CONFIRMED' or consensus['plate_number'] != payload['plate_number']
+                or match.get('entry_plate_number') != payload['plate_number']):
+            return {'origin': 'LIVE', 'track_id': track, 'status': 'BLOCKED',
+                    'reasons': ['ENTRY_PLATE_NOT_VERIFIED'], 'payload': None}
+        entry_id = match.get('entry_event_id')
+        if not isinstance(entry_id, str) or str(uuid.UUID(entry_id)) != entry_id:
+            raise ValueError('입차 이벤트 UUID를 확인하세요.')
+        verification = {'basis': 'ENTRY_AND_B_PLATE_OCR', 'entry_event_id': entry_id,
+                        'plate_number': consensus['plate_number'], 'plate_consensus': consensus}
+
+    expected_usage = match.get('parking_usage_id') if identity else None
+    if identity and (type(expected_usage) is not int or expected_usage < 1):
+        raise ValueError('입차 신원 전달의 이용 ID를 확인하세요.')
+    return {'origin': 'LIVE', 'track_id': track, 'status': 'CANDIDATE_ONLY',
+            'reasons': [], 'payload': payload, 'http_enabled': False,
+            **({'expected_parking_usage_id': expected_usage} if identity else {}),
+            **({'identity_verification': verification} if verified_identity else {}),
+            'confidence_basis': ('ENTRY_AND_B_CONFIRMED_PLATE_DETECTION_NOT_OCR_ACCURACY' if verified_identity else
+                                 'ENTRY_PLATE_AND_PARKING_TARGET_DETECTION_NOT_OCR_ACCURACY' if identity
+                                 else 'MIN_MATCHING_PLATE_DETECTION_CONFIDENCE_NOT_OCR_ACCURACY')}

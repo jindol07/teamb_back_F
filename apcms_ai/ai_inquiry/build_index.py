@@ -54,8 +54,17 @@ def main():
 
     # 3. 기존 Chroma DB 삭제
     # 반드시 FastAPI 서버를 종료한 상태에서 실행
+    #if CHROMA_DIR.exists():
+    #    shutil.rmtree(CHROMA_DIR)
+    # 3. 10/23 배포 관련
     if CHROMA_DIR.exists():
-        shutil.rmtree(CHROMA_DIR)
+        for item in CHROMA_DIR.iterdir():
+            if item.is_dir():
+                shutil.rmtree(item)
+            else:
+                item.unlink()
+    else:
+        CHROMA_DIR.mkdir(parents=True, exist_ok=True)
 
     # 4. 로컬 임베딩을 이용해 Chroma DB 생성
     store = Chroma.from_documents(

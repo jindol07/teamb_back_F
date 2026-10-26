@@ -182,8 +182,13 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--demo", action="store_true")
     parser.add_argument("--enable-http", action="store_true", help="실제 카메라의 확정 후보를 Boot로 전송")
+    parser.add_argument('--single-vehicle-handoff', action='store_true', help='한 대 시연용 신원 파일을 새 세션 폴더에 기록')
     parser.add_argument("--boot-context-url", help="관리자 Boot context URL. 키는 AI_OCCUPANCY_API_KEY 환경변수 사용")
     parser.add_argument("--camera-index", type=int, default=0)
+    parser.add_argument("--tracking-target", choices=("vehicle", "plate"), default="vehicle",
+                        help="기준선 통과 추적 대상. 종이 시연에서는 plate를 명시")
+    parser.add_argument("--tracking-imgsz", type=int, choices=(640, 960, 1280),
+                        help="번호판 추론 크기. 미지정 시 plate 1280, vehicle 640 유지")
     parser.add_argument("--vision-api-url", help="지정하면 차량 추적은 현장 PC, 번호판 인식은 해당 Vision API에서 수행")
     parser.add_argument("--buffered-capture", action="store_true", help="별도 스레드에서 최신 프레임 한 장만 유지. OCR 중 추적은 계속 멈춥니다")
     parser.add_argument("--async-ocr", action="store_true", help="원격 OCR을 별도 작업으로 처리하고 차량 추적을 계속 수행")
@@ -194,6 +199,14 @@ def main(argv=None):
     parser.add_argument("--seconds", type=float, default=20)
     parser.add_argument("--output-dir", type=Path, required=True)
     args = parser.parse_args(argv)
+    if args.tracking_imgsz is not None and (args.tracking_target != "plate" or args.demo):
+        parser.error("추론 크기는 실제 번호판 추적 모드에서만 지정합니다.")
+    if args.tracking_target == "plate" and args.vision_api_url is not None:
+        parser.error("번호판 직접 추적은 현재 로컬 OCR에서만 지원합니다.")
+    if args.demo and args.tracking_target != "vehicle":
+        parser.error("합성 데모에서는 추적 대상을 변경하지 않습니다.")
+    if args.single_vehicle_handoff and (args.demo or not args.enable_http):
+        parser.error('한 대 시연 신원 전달은 실제 입출차 HTTP 모드에서만 사용합니다.')
     if args.demo and (args.enable_http or args.boot_context_url is not None or args.vision_api_url is not None or args.buffered_capture or args.async_ocr or args.preview):
         parser.error("합성 데모에서는 실제 전송 옵션을 사용할 수 없습니다.")
     if args.async_ocr and args.vision_api_url is None:
@@ -226,7 +239,12 @@ def main(argv=None):
             if args.preview:
                 from ai_vision.recognition.preview_gate_config import LiveGatePreview
                 preview = LiveGatePreview(config, args.down_direction)
-            processor = LiveGateProcessor(config, plate_reader=remote_reader.read) if remote_reader else LiveGateProcessor(config)
+            processor_options = {"plate_reader": remote_reader.read} if remote_reader else {}
+            if args.tracking_target != "vehicle":
+                processor_options["tracking_target"] = args.tracking_target
+            if args.tracking_imgsz is not None:
+                processor_options["tracking_imgsz"] = args.tracking_imgsz
+            processor = LiveGateProcessor(config, **processor_options)
             if args.async_ocr:
                 processor = AsyncGateProcessor(processor)
             print("차량 추적 모델 준비 중입니다. 번호판 인식은 원격 API를 사용합니다." if remote_reader else
@@ -252,13 +270,16 @@ def main(argv=None):
             if args.buffered_capture:
                 capture = LatestFrameCapture(capture)
             # 카메라 생성에 걸린 시간도 촬영 시간과 프레임 시각에서 제외합니다.
-            session = LiveGateSession(args.camera_id, args.down_direction, flow=VehicleDeliveryFlow(client))
+            session = LiveGateSession(args.camera_id, args.down_direction, flow=VehicleDeliveryFlow(client),
+                                      handoff_path=output/'single_vehicle_handoff.json' if args.single_vehicle_handoff else None)
             options = {"preview": preview} if preview is not None else {}
             if not ready:
                 options["start_cancelled"] = True
             report = {**execute(capture, processor, session, seconds=args.seconds, **options), "uses_synthetic_source": False}
         # 서버 주소·키는 결과에 남기지 않고 인식 위치만 구분합니다.
-        report = {**report, "run_context": context, "recognition_mode": "REMOTE_API" if args.vision_api_url else "LOCAL"}
+        report = {**report, "run_context": context, "recognition_mode": "REMOTE_API" if args.vision_api_url else "LOCAL",
+                  "tracking_target": args.tracking_target,
+                  "tracking_imgsz": args.tracking_imgsz if args.tracking_imgsz is not None else (1280 if args.tracking_target == "plate" else 640)}
         execution_finished = True
         phase = "FINAL_SAVE"
         write_json_atomic(output / "summary.json", report)

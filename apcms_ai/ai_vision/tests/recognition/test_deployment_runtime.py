@@ -138,7 +138,7 @@ class DeploymentRuntimeTests(unittest.TestCase):
         base.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=base) as folder, \
                 patch("ai_vision.recognition.record_gate_video.open_camera", return_value=capture), \
-                patch("cv2.VideoWriter", return_value=writer), \
+                patch("cv2.VideoWriter", side_effect=lambda path, *args: (Path(path).touch(), writer)[1]), \
                 patch("ai_vision.recognition.record_gate_video.monotonic", side_effect=[0, 0, 1, 1]), \
                 patch("cv2.imshow", side_effect=AssertionError("GUI forbidden")), \
                 patch("cv2.waitKey", side_effect=AssertionError("GUI forbidden")), \
@@ -149,6 +149,87 @@ class DeploymentRuntimeTests(unittest.TestCase):
         capture.release.assert_called_once()
         writer.release.assert_called_once()
         writer.write.assert_called_once()
+
+    def test_record_manual_start_cancel_does_not_save_video(self):
+        capture = Mock()
+        capture.read.return_value = (True, np.zeros((10, 10, 3), dtype=np.uint8))
+        base = paths.RESULT_DIR / 'test_tmp'
+        base.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=base) as folder, \
+                patch('ai_vision.recognition.record_gate_video.open_camera', return_value=capture) as opened, \
+                patch('ai_vision.recognition.record_gate_video.require_display'), \
+                patch('ai_vision.parking.parking_preview.ParkingPreview') as preview, \
+                patch('cv2.VideoWriter') as writer:
+            preview.return_value.wait_until_ready.return_value = None
+            result = record(1, 10, Path(folder), camera_backend='auto', wait_for_start=True)
+            self.assertEqual(result['status'], 'CANCELLED')
+            opened.assert_called_once_with(1, backend='auto')
+            writer.assert_not_called()
+            self.assertEqual(list(Path(folder).iterdir()), [])
+            preview.return_value.close.assert_called_once()
+        capture.release.assert_called_once()
+
+    def test_record_rejects_hidden_manual_start_before_camera(self):
+        with patch('ai_vision.recognition.record_gate_video.open_camera') as opened:
+            with self.assertRaises(ValueError):
+                record(1, 10, paths.RESULT_DIR, preview=False, wait_for_start=True)
+        opened.assert_not_called()
+
+    def test_preparation_allows_recording_without_vehicle_detection(self):
+        from ai_vision.parking.parking_preview import ParkingPreview
+        view = ParkingPreview.__new__(ParkingPreview)
+        view.show = Mock(return_value=ord(' '))
+        first, second = np.zeros((10, 10, 3), dtype=np.uint8), np.ones((10, 10, 3), dtype=np.uint8)
+        capture = Mock()
+        capture.read.side_effect = [(True, first), (True, second)]
+        checker = Mock(side_effect=[False, True])
+        self.assertIs(view.wait_until_ready(capture, checker), first)
+        self.assertEqual(checker.call_count, 1)
+
+    def test_vehicle_check_requires_config_and_manual_start(self):
+        with patch('ai_vision.recognition.record_gate_video.open_camera') as opened:
+            with self.assertRaises(ValueError):
+                record(1, 10, paths.RESULT_DIR, check_vehicle=True)
+            with self.assertRaises(ValueError):
+                record(1, 10, paths.RESULT_DIR, wait_for_start=True, check_vehicle=True)
+        opened.assert_not_called()
+
+    def test_vehicle_preparation_checks_actual_model_boxes_inside_space(self):
+        from ai_vision.tests.recognition.test_vehicle_space_tracker import CONFIG
+        from ai_vision.recognition.local_io import write_json_atomic
+        capture = Mock()
+        capture.read.return_value = (True, np.zeros((140, 240, 3), dtype=np.uint8))
+        base = paths.RESULT_DIR / 'test_tmp'
+        base.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=base) as folder:
+            config = Path(folder) / 'config.json'
+            write_json_atomic(config, CONFIG)
+            with patch.dict(os.environ, {'YOLO_AUTOINSTALL': 'false'}), \
+                    patch('ultralytics.YOLO') as model, \
+                    patch('ai_vision.recognition.record_gate_video.open_camera', return_value=capture), \
+                    patch('ai_vision.recognition.record_gate_video.require_display'), \
+                    patch('ai_vision.parking.parking_preview.ParkingPreview') as preview:
+                model.return_value.names = {0: 'car', 1: 'cell phone'}
+                box = Mock()
+                box.xyxy = np.array([[25, 25, 75, 90]])
+                prediction = Mock()
+                prediction.boxes = [box]
+                model.return_value.predict.return_value = [prediction]
+                def prepare(camera, check_ready):
+                    self.assertTrue(check_ready(capture.read.return_value[1]))
+                    self.assertEqual(preview.return_value.source_label, 'VEHICLE IN SPACE')
+                    box.xyxy = np.array([[25, 25, 75, 135]])
+                    self.assertFalse(check_ready(capture.read.return_value[1]))
+                    self.assertEqual(preview.return_value.source_label, 'VEHICLE OUTSIDE SPACE')
+                    prediction.boxes = []
+                    self.assertFalse(check_ready(capture.read.return_value[1]))
+                    self.assertEqual(preview.return_value.source_label, 'VEHICLE NOT DETECTED')
+                    return None
+                preview.return_value.wait_until_ready.side_effect = prepare
+                result = record(1, 10, Path(folder), wait_for_start=True, config_path=config, check_vehicle=True)
+                self.assertEqual(result['status'], 'CANCELLED')
+                self.assertEqual(model.return_value.predict.call_args.kwargs['classes'], [0])
+        capture.release.assert_called_once()
 
     def test_all_python_sources_parse_without_running_experiment_scripts(self):
         # import하면 카메라·모델을 실행하는 구형 실험도 있어 전체 파일은 구문만 검사합니다.

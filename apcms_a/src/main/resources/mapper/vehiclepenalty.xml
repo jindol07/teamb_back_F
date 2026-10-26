@@ -11,7 +11,7 @@
         <result property="imposedbyadminid" column="imposedbyadminid" />
         <result property="imposedat" column="imposedat" />
         <result property="statuscode" column="statuscode" />
-        <association property="vehicle" javaType="kr.co.alpharking.dto.vehicle.VehicleDTO" autoMapping="true">
+        <association property="vehicle" javaType="kr.co.alpharking.dto.vehicle.VehicleDTO">
             <id property="vehicleid" column="v_vehicleid" />
             <result property="officeid" column="v_officeid" />
             <result property="officenumber" column="v_officenumber" />
@@ -27,7 +27,7 @@
             <result property="updatedat" column="v_updatedat" />
             <result property="deletedat" column="v_deletedat" />
         </association>
-        <association property="admin" javaType="kr.co.alpharking.security.Admin" autoMapping="true">
+        <association property="admin" javaType="kr.co.alpharking.security.Admin">
             <id property="admin_id" column="a_admin_id" />
             <result property="admin_name" column="a_admin_name" />
             <result property="email" column="a_email" />
@@ -39,14 +39,14 @@
     </resultMap>
 
     <sql id="penaltySelectColumns">
-        p.vehiclepenaltyid AS vehiclepenaltyid,
-        p.vehicleid AS vehicleid,
-        p.violationtypecode AS violationtypecode,
-        p.penaltyamount AS penaltyamount,
+        p.vehicle_penalty_id AS vehiclepenaltyid,
+        p.vehicle_id AS vehicleid,
+        p.violation_type_code AS violationtypecode,
+        p.penalty_amount AS penaltyamount,
         p.reason AS reason,
-        p.imposedbyadminid AS imposedbyadminid,
-        p.imposedat AS imposedat,
-        p.statuscode AS statuscode,
+        p.imposed_by_admin_id AS imposedbyadminid,
+        p.imposed_at AS imposedat,
+        p.status_code AS statuscode,
         v.vehicle_id AS v_vehicleid,
         v.office_id AS v_officeid,
         o.office_number AS v_officenumber,
@@ -71,16 +71,16 @@
     </sql>
 
     <sql id="penaltyFrom">
-        FROM VEHICLE_PENALTY p
-        LEFT JOIN vehicle v ON v.vehicle_id = p.vehicleid
+        FROM vehicle_penalty p
+        LEFT JOIN vehicle v ON v.vehicle_id = p.vehicle_id
         LEFT JOIN office o ON o.office_id = v.office_id
-        LEFT JOIN admin a ON a.admin_id = p.imposedbyadminid
+        LEFT JOIN admin a ON a.admin_id = p.imposed_by_admin_id
     </sql>
 
     <insert id="add" parameterType="kr.co.alpharking.dto.vehiclepenalty.VehiclePenaltyDto">
-        INSERT INTO VEHICLE_PENALTY (
-            vehiclepenaltyid, vehicleid, violationtypecode, penaltyamount,
-            reason, imposedbyadminid, imposedat, statuscode
+        INSERT INTO vehicle_penalty (
+            vehicle_penalty_id, vehicle_id, violation_type_code, penalty_amount,
+            reason, imposed_by_admin_id, imposed_at, status_code
         ) VALUES (
             SEQ_VEHICLE_PENALTY.NEXTVAL, #{vehicleid}, #{violationtypecode}, #{penaltyamount},
             #{reason}, #{imposedbyadminid}, COALESCE(#{imposedat}, SYSDATE), COALESCE(#{statuscode}, 'ACTIVE')
@@ -90,21 +90,21 @@
     <select id="list" resultMap="vehiclePenaltyResultMap">
         SELECT <include refid="penaltySelectColumns" />
         <include refid="penaltyFrom" />
-        ORDER BY p.imposedat DESC, p.vehiclepenaltyid DESC
+        ORDER BY p.imposed_at DESC, p.vehicle_penalty_id DESC
     </select>
 
     <update id="update" parameterType="kr.co.alpharking.dto.vehiclepenalty.VehiclePenaltyDto">
-        UPDATE VEHICLE_PENALTY
-        SET vehicleid = #{vehicleid},
-            violationtypecode = #{violationtypecode},
-            penaltyamount = #{penaltyamount},
+        UPDATE vehicle_penalty
+        SET vehicle_id = #{vehicleid},
+            violation_type_code = #{violationtypecode},
+            penalty_amount = #{penaltyamount},
             reason = #{reason},
-            imposedat = COALESCE(#{imposedat}, imposedat),
-            statuscode = #{statuscode}
-        WHERE vehiclepenaltyid = #{vehiclepenaltyid}
+            imposed_at = COALESCE(#{imposedat}, imposed_at),
+            status_code = #{statuscode}
+        WHERE vehicle_penalty_id = #{vehiclepenaltyid}
     </update>
 
     <delete id="delete">
-        DELETE FROM VEHICLE_PENALTY WHERE vehiclepenaltyid = #{vehiclepenaltyid}
+        DELETE FROM vehicle_penalty WHERE vehicle_penalty_id = #{vehiclepenaltyid}
     </delete>
 </mapper>
