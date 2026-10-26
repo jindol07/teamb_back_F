@@ -17,6 +17,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.client.RestTemplate;
 
 import kr.co.alpharking.security.Admin;
 import kr.co.alpharking.security.jwt.AuthRequest;
@@ -33,6 +34,9 @@ public class AuthController {
 
 	@Autowired
 	private AuthTokenService authTokenService;
+	
+//	@Autowired
+//	private RestTemplate restTemplate;
 
 	@PostMapping("/login")
 	public ResponseEntity<?> authenticateUser(@RequestBody AuthRequest authRequest) {
@@ -79,4 +83,11 @@ public class AuthController {
 		SecurityContextHolder.clearContext();
 		return ResponseEntity.noContent().build();
 	}
+	
+	
+//	// naver
+//	@GetMapping("/naver")
+//	public ResponseEntity<String> naverLogin() {
+//		restTemplate.getForEntity("https://nid.naver.com/oauth2.0/authorize", );
+//	}
 }

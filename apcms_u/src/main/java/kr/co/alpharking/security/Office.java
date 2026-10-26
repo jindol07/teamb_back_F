@@ -53,6 +53,9 @@ public class Office implements UserDetails {
 	private LocalDateTime updated_at;
 	private LocalDateTime withdrawn_at;
 	
+	// 네이버 로그인 연동 ID (KAKAO_USER_ID 와 같은 방식)
+	private String naver_user_id;
+	
     @Column(unique = true, nullable = false, name = "login_id") 
     private String username; // 아이디 값을 이메일로 넣어서 사영
     @Column(name = "password_hash")
