@@ -75,7 +75,10 @@ public class VehicleService {
     }
 
     public List<Vehicle> searchByVehicleNumber(String vehicleNumber) {
-        return vehicleRepository.findByVehicleNumberContaining(vehicleNumber);
+        if (vehicleNumber == null || vehicleNumber.isBlank()) {
+            return List.of();
+        }
+        return vehicleRepository.searchByVehicleNumberContaining(vehicleNumber.trim());
     }
 
     public Optional<Vehicle> findRegisteredVehicleByNumber(String vehicleNumber) {
