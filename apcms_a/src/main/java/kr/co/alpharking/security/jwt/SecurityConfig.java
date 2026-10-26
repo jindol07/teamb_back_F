@@ -1,4 +1,5 @@
 package kr.co.alpharking.security.jwt;
+
 import java.util.List;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
@@ -38,88 +39,85 @@ public class SecurityConfig {
 
 	@Autowired
 	private JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint;
-	
-	//1023: 배포 CORS 이슈
+
+	// 1023: 배포 CORS 이슈
 	@Value("${app.cors.origins}")
 	private String corsOrigins;
-	
-	//단방향 비밀번호 인코딩 -> 시큐리티는 데이터 베이스에 저장할 때 암호화 해서 저장
+
+	// 단방향 비밀번호 인코딩 -> 시큐리티는 데이터 베이스에 저장할 때 암호화 해서 저장
 	@Bean
 	public PasswordEncoder passwordEncoder() {
 		return new BCryptPasswordEncoder();
 	}
-	
-    @Bean
-    public DaoAuthenticationProvider daoAuthenticationProvider() {
-        DaoAuthenticationProvider provider =
-                new DaoAuthenticationProvider(userDetailsService);
 
-        provider.setPasswordEncoder(passwordEncoder());
-        return provider;
-    }
-    // BCryptPasswordEncoder를 사용하여 비밀번호를 암호화하는 PasswordEncoder 객체를 생성
-    // BCryptPasswordEncoder는 비밀번호를 안전하게 저장하기 위한 현대적인 해시 알고리즘을 사용
-    @Bean
-    AuthenticationManager authenticationManager(
-            AuthenticationConfiguration authenticationConfiguration) throws Exception {
-        return authenticationConfiguration.getAuthenticationManager();
-    }
-    
-    
-    @Bean
-    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
-        		http
-                .csrf((csrf) -> csrf.disable())
-                //리액트와 크로스 통신 및 리액트의 view를 사용 
-                .cors((cors) -> cors.configurationSource(corsConfigurationSource()))
-                .formLogin((login) -> login.disable())
-                .httpBasic((basic) -> basic.disable())
-            	//.authenticationProvider(daoAuthenticationProvider())
-                .authorizeHttpRequests((auth) -> auth
-                		// 오류 처리용 내부 디스패치만 허용
-                	    .dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
-                        // 관리자 공지 API는 목록·상세·다운로드·변경 이력을 포함해 ADMIN만 접근합니다.
-                        // 일반 사용자 공지 조회는 사용자 서버의 API를 사용합니다.
-                        .requestMatchers("/api/notice", "/api/notice/**").hasAuthority("ADMIN")
-                        .requestMatchers("/api/auth/**").permitAll() // /api/auth/** 에서 오는 모든 요청은 허용
-                        // refresh 실패(401/400/500)가 /error 재디스패치에서 다시 401로 바뀌지 않게 한다.
-                        .requestMatchers("/error").permitAll()
-                        .requestMatchers("/demos/**").permitAll() 
-                        .requestMatchers("/api/gallery/**").permitAll()
-                        .requestMatchers("/api/board/**").permitAll()
-                        .requestMatchers("/api/member/**").permitAll()
-                        .requestMatchers("/uploads/**").permitAll() //이미지 경로도 열어줘야 한다.
-                        .requestMatchers("/api/employees/**","/back/api/employees/**").permitAll()
-                        // 주차 소켓은 첫 AUTH 메시지에서 JWT를 검증한다. 인증 전 현황 전송은 금지한다.
-                        .requestMatchers(HttpMethod.GET, "/ws/parking/spaces").permitAll()
-                        // AI 이벤트는 Controller의 X-AI-API-Key 검사로 인증한다.
-                        .requestMatchers(HttpMethod.POST,
-                                "/api/parking/ai/vehicle-events",
-                                "/api/parking/ai/space-match-events",
-                                "/api/parking/ai/space-release-events",
-                                "/api/parking/ai/occupancy-events").permitAll()
-                        // Jenkins 배포 후 Health Check : 서버 가용성 확인 => 10/25
-                        .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
-                        // 민감 정보를 제외한 현황도 로그인은 필요하다.
-                        .requestMatchers(HttpMethod.GET, "/api/parking/spaces/public").authenticated()
-                        // 관리자용 구획 및 입출차 관리는 ADMIN 권한으로 제한한다.
-                        .requestMatchers("/api/parking/spaces", "/api/parking/spaces/**",
-                                "/api/parking/usages", "/api/parking/usages/**").hasAuthority("ADMIN")
-                        .requestMatchers("/api/notifications", "/api/notifications/**").permitAll()
-                        //.requestMatchers("/demos/**").permitAll()
-                        //.requestMatchers("/**").permitAll()
-                        .anyRequest().authenticated()) // 모든 요청에 대해 인증을 요구
-                // JWT 토큰 필터 추가: JwtTokenFilter를 BasicAuthenticationFilter 전에 추가하여 JWT 토큰을 검증
-                .addFilterBefore(jwtTokenFilter, BasicAuthenticationFilter.class)
-                // 만료/누락 토큰은 403이 아니라 401로 반환해 프론트 refresh가 동작하게 한다.
-                .exceptionHandling(handler -> handler.authenticationEntryPoint(jwtAuthenticationEntryPoint))
-                // 세션 정책 설정: SessionCreationPolicy.STATELESS로 설정하여 세션 기반 인증을 사용하지 않도록 한다.
-                .sessionManagement((session) -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                // 로그아웃 기능 비활성화: 상태를 유지하지 않는 인증 방식에서는 로그아웃이 필요 없다.
-                .logout((logout) -> logout.disable());
-        return http.build();
-    }
-    
+	@Bean
+	public DaoAuthenticationProvider daoAuthenticationProvider() {
+		DaoAuthenticationProvider provider = new DaoAuthenticationProvider(userDetailsService);
+
+		provider.setPasswordEncoder(passwordEncoder());
+		return provider;
+	}
+
+	// BCryptPasswordEncoder를 사용하여 비밀번호를 암호화하는 PasswordEncoder 객체를 생성
+	// BCryptPasswordEncoder는 비밀번호를 안전하게 저장하기 위한 현대적인 해시 알고리즘을 사용
+	@Bean
+	AuthenticationManager authenticationManager(AuthenticationConfiguration authenticationConfiguration)
+			throws Exception {
+		return authenticationConfiguration.getAuthenticationManager();
+	}
+
+	@Bean
+	public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+		http.csrf((csrf) -> csrf.disable())
+				// 리액트와 크로스 통신 및 리액트의 view를 사용
+				.cors((cors) -> cors.configurationSource(corsConfigurationSource()))
+				.formLogin((login) -> login.disable()).httpBasic((basic) -> basic.disable())
+				// .authenticationProvider(daoAuthenticationProvider())
+				.authorizeHttpRequests((auth) -> auth
+						// 오류 처리용 내부 디스패치만 허용
+						.dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+						// 관리자 공지 API는 목록·상세·다운로드·변경 이력을 포함해 ADMIN만 접근합니다.
+						// 일반 사용자 공지 조회는 사용자 서버의 API를 사용합니다.
+						.requestMatchers("/api/notice", "/api/notice/**").hasAuthority("ADMIN")
+						.requestMatchers("/api/auth/**").permitAll() // /api/auth/** 에서 오는 모든 요청은 허용
+						// refresh 실패(401/400/500)가 /error 재디스패치에서 다시 401로 바뀌지 않게 한다.
+						.requestMatchers("/error").permitAll().requestMatchers("/demos/**").permitAll()
+						.requestMatchers("/api/gallery/**").permitAll().requestMatchers("/api/board/**").permitAll()
+						.requestMatchers("/api/member/**").permitAll().requestMatchers("/uploads/**").permitAll() // 이미지
+																													// 경로도
+																													// 열어줘야
+																													// 한다.
+						.requestMatchers("/api/employees/**", "/back/api/employees/**").permitAll()
+						// 주차 소켓은 첫 AUTH 메시지에서 JWT를 검증한다. 인증 전 현황 전송은 금지한다.
+						.requestMatchers(HttpMethod.GET, "/ws/parking/spaces").permitAll()
+						// AI 이벤트는 Controller의 X-AI-API-Key 검사로 인증한다.
+						.requestMatchers(HttpMethod.POST, "/api/parking/ai/vehicle-events",
+								"/api/parking/ai/space-match-events", "/api/parking/ai/space-release-events",
+								"/api/parking/ai/occupancy-events")
+						.permitAll()
+						// Jenkins 배포 후 Health Check : 서버 가용성 확인 => 10/25
+						.requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
+						// 민감 정보를 제외한 현황도 로그인은 필요하다.
+						.requestMatchers(HttpMethod.GET, "/api/parking/spaces/public").authenticated()
+						// 관리자용 구획 및 입출차 관리는 ADMIN 권한으로 제한한다.
+						.requestMatchers("/api/parking/spaces", "/api/parking/spaces/**", "/api/parking/usages",
+								"/api/parking/usages/**")
+						.hasAuthority("ADMIN").requestMatchers("/api/notifications", "/api/notifications/**")
+						.permitAll()
+						// .requestMatchers("/demos/**").permitAll()
+						// .requestMatchers("/**").permitAll()
+						.anyRequest().authenticated()) // 모든 요청에 대해 인증을 요구
+				// JWT 토큰 필터 추가: JwtTokenFilter를 BasicAuthenticationFilter 전에 추가하여 JWT 토큰을 검증
+				.addFilterBefore(jwtTokenFilter, BasicAuthenticationFilter.class)
+				// 만료/누락 토큰은 403이 아니라 401로 반환해 프론트 refresh가 동작하게 한다.
+				.exceptionHandling(handler -> handler.authenticationEntryPoint(jwtAuthenticationEntryPoint))
+				// 세션 정책 설정: SessionCreationPolicy.STATELESS로 설정하여 세션 기반 인증을 사용하지 않도록 한다.
+				.sessionManagement((session) -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+				// 로그아웃 기능 비활성화: 상태를 유지하지 않는 인증 방식에서는 로그아웃이 필요 없다.
+				.logout((logout) -> logout.disable());
+		return http.build();
+	}
+
 // 1023: 배포 CORS 이슈
 //    @Bean
 //    public CorsConfigurationSource corsConfigurationSource() {
@@ -137,44 +135,30 @@ public class SecurityConfig {
 //        return urlBasedCorsConfigurationSource;
 //
 //    }// corsConfigurationSource
-    
-  //1023: 배포 CORS 이슈   
-    @Bean
-    public CorsConfigurationSource corsConfigurationSource() {
 
-        CorsConfiguration corsConfiguration = new CorsConfiguration();
+	// 1023: 배포 CORS 이슈
+	@Bean
+	public CorsConfigurationSource corsConfigurationSource() {
 
-        corsConfiguration.setAllowCredentials(true);
+		CorsConfiguration corsConfiguration = new CorsConfiguration();
 
-        // application.properties 또는 AWS 환경변수에서 허용 Origin 조회
-        corsConfiguration.setAllowedOrigins(
-            Arrays.stream(corsOrigins.split(","))
-                .map(String::trim)
-                .filter(origin -> !origin.isEmpty())
-                .toList()
-        );
+		corsConfiguration.setAllowCredentials(true);
 
-        corsConfiguration.setAllowedMethods(
-            List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS")
-        );
+		// application.properties 또는 AWS 환경변수에서 허용 Origin 조회
+		corsConfiguration.setAllowedOrigins(
+				Arrays.stream(corsOrigins.split(",")).map(String::trim).filter(origin -> !origin.isEmpty()).toList());
 
-        corsConfiguration.setAllowedHeaders(List.of("*"));
+		corsConfiguration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
 
-        corsConfiguration.setExposedHeaders(
-            List.of("Authorization")
-        );
+		corsConfiguration.setAllowedHeaders(List.of("*"));
 
-        UrlBasedCorsConfigurationSource source =
-            new UrlBasedCorsConfigurationSource();
+		corsConfiguration.setExposedHeaders(List.of("Authorization"));
 
-        source.registerCorsConfiguration("/**", corsConfiguration);
+		UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
 
-        return source;
-    }
+		source.registerCorsConfiguration("/**", corsConfiguration);
+
+		return source;
+	}
 
 }
-
-
-
-
-
