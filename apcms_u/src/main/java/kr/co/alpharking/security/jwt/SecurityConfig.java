@@ -1,6 +1,8 @@
 package kr.co.alpharking.security.jwt;
+import java.util.Arrays;
 import java.util.List;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.http.HttpMethod;
@@ -19,6 +21,8 @@ import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
+import jakarta.annotation.PostConstruct;
+import jakarta.servlet.DispatcherType;
 
 //1023: 배포 CORS 이슈
 import java.util.Arrays;
@@ -33,10 +37,14 @@ public class SecurityConfig {
 	// 사용자 상세 정보를 제공하는 서비스
 	@Autowired
 	private UserDetailsService userDetailsService;
-	
+
+	@Autowired
+	private JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint;
+
 	//1023: 배포 CORS 이슈
 	@Value("${app.cors.origins}")
 	private String corsOrigins;
+	
 	
 	//단방향 비밀번호 인코딩 -> 시큐리티는 데이터 베이스에 저장할 때 암호화 해서 저장
 	@Bean
@@ -69,6 +77,11 @@ public class SecurityConfig {
                 .httpBasic((basic) -> basic.disable())
             	//.authenticationProvider(daoAuthenticationProvider())
                 .authorizeHttpRequests((auth) -> auth
+                		// [error-handling] Forward server errors (500/400) to /error without auth.
+                		// Otherwise the real error is masked as 401 by the entry point.
+                		.dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+                		.requestMatchers("/error").permitAll()
+                		.requestMatchers("/api/notice/**").permitAll()
                         .requestMatchers("/api/auth/**").permitAll() // /api/auth/** 에서 오는 모든 요청은 허용
                         .requestMatchers("/demos/**").permitAll() 
                         .requestMatchers("/api/gallery/**").permitAll()
@@ -83,6 +96,7 @@ public class SecurityConfig {
                         // AI 주차 추천은 로그인한 사용자만 요청할 수 있다.
                         .requestMatchers(HttpMethod.POST, "/api/recmn/recommend").authenticated()
                         //.requestMatchers("/api/chatbot/**").permitAll()
+                        
                         // Jenkins 배포 후 Health Check : 서버 가용성 확인 => 10/25
                         .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
                         
@@ -98,6 +112,7 @@ public class SecurityConfig {
                         .anyRequest().authenticated()) // 모든 요청에 대해 인증을 요구
                 // JWT 토큰 필터 추가: JwtTokenFilter를 BasicAuthenticationFilter 전에 추가하여 JWT 토큰을 검증
                 .addFilterBefore(jwtTokenFilter, BasicAuthenticationFilter.class)
+                .exceptionHandling(handler -> handler.authenticationEntryPoint(jwtAuthenticationEntryPoint))
                 // 세션 정책 설정: SessionCreationPolicy.STATELESS로 설정하여 세션 기반 인증을 사용하지 않도록 한다.
                 .sessionManagement((session) -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 // 로그아웃 기능 비활성화: 상태를 유지하지 않는 인증 방식에서는 로그아웃이 필요 없다.
@@ -132,6 +147,11 @@ public class SecurityConfig {
 
         // 쿠키 등 인증 정보가 포함된 요청 허용
         corsConfiguration.setAllowCredentials(true);
+        // 운영/개발 오리진은 application.properties(app.cors.origins)에서 관리한다.
+        corsConfiguration.setAllowedOrigins(
+                Arrays.asList(corsOrigins.split("\\s*,\\s*"))
+        );
+        corsConfiguration.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         // application.properties 또는 환경변수에서 허용 Origin 읽기
         corsConfiguration.setAllowedOrigins(
             Arrays.stream(corsOrigins.split(","))

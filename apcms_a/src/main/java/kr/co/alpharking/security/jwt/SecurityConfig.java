@@ -35,6 +35,9 @@ public class SecurityConfig {
 	// 사용자 상세 정보를 제공하는 서비스
 	@Autowired
 	private UserDetailsService userDetailsService;
+
+	@Autowired
+	private JwtAuthenticationEntryPoint jwtAuthenticationEntryPoint;
 	
 	//1023: 배포 CORS 이슈
 	@Value("${app.cors.origins}")
@@ -79,6 +82,8 @@ public class SecurityConfig {
                         // 일반 사용자 공지 조회는 사용자 서버의 API를 사용합니다.
                         .requestMatchers("/api/notice", "/api/notice/**").hasAuthority("ADMIN")
                         .requestMatchers("/api/auth/**").permitAll() // /api/auth/** 에서 오는 모든 요청은 허용
+                        // refresh 실패(401/400/500)가 /error 재디스패치에서 다시 401로 바뀌지 않게 한다.
+                        .requestMatchers("/error").permitAll()
                         .requestMatchers("/demos/**").permitAll() 
                         .requestMatchers("/api/gallery/**").permitAll()
                         .requestMatchers("/api/board/**").permitAll()
@@ -105,6 +110,8 @@ public class SecurityConfig {
                         .anyRequest().authenticated()) // 모든 요청에 대해 인증을 요구
                 // JWT 토큰 필터 추가: JwtTokenFilter를 BasicAuthenticationFilter 전에 추가하여 JWT 토큰을 검증
                 .addFilterBefore(jwtTokenFilter, BasicAuthenticationFilter.class)
+                // 만료/누락 토큰은 403이 아니라 401로 반환해 프론트 refresh가 동작하게 한다.
+                .exceptionHandling(handler -> handler.authenticationEntryPoint(jwtAuthenticationEntryPoint))
                 // 세션 정책 설정: SessionCreationPolicy.STATELESS로 설정하여 세션 기반 인증을 사용하지 않도록 한다.
                 .sessionManagement((session) -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 // 로그아웃 기능 비활성화: 상태를 유지하지 않는 인증 방식에서는 로그아웃이 필요 없다.
