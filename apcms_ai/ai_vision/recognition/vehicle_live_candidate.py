@@ -108,8 +108,11 @@ def create_space_match_candidate(match, current_matches, camera_id, detected_at)
                         'plate_number': consensus['plate_number'], 'plate_consensus': consensus}
 
     expected_usage = match.get('parking_usage_id') if identity else None
-    if identity and (type(expected_usage) is not int or expected_usage < 1):
+    if identity and (type(expected_usage) is not int or not 0 < expected_usage <= 9223372036854775807):
         raise ValueError('입차 신원 전달의 이용 ID를 확인하세요.')
+    # 1. 입차 근거를 후보 생성 시점부터 요청에 포함해 저장·전송 계약을 일치시킵니다.
+    if identity:
+        payload = validate_space_match_payload(payload | {'expected_parking_usage_id': expected_usage})
     return {'origin': 'LIVE', 'track_id': track, 'status': 'CANDIDATE_ONLY',
             'reasons': [], 'payload': payload, 'http_enabled': False,
             **({'expected_parking_usage_id': expected_usage} if identity else {}),

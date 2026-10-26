@@ -204,7 +204,13 @@ class DeploymentRuntimeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(dir=base) as folder:
             config = Path(folder) / 'config.json'
             write_json_atomic(config, CONFIG)
-            with patch.dict(os.environ, {'YOLO_AUTOINSTALL': 'false'}), \
+            # 실제 추론은 모의 모델을 쓰므로 Git 제외 가중치에 의존하지 않습니다.
+            model_dir = Path(folder) / 'models'
+            model_dir.mkdir()
+            model_file = model_dir / 'yolo11n.pt'
+            model_file.write_bytes(b'mocked model; YOLO loader is patched below')
+            with patch.object(paths, 'MODEL_DIR', model_dir), \
+                    patch.dict(os.environ, {'YOLO_AUTOINSTALL': 'false'}), \
                     patch('ultralytics.YOLO') as model, \
                     patch('ai_vision.recognition.record_gate_video.open_camera', return_value=capture), \
                     patch('ai_vision.recognition.record_gate_video.require_display'), \
@@ -228,8 +234,25 @@ class DeploymentRuntimeTests(unittest.TestCase):
                 preview.return_value.wait_until_ready.side_effect = prepare
                 result = record(1, 10, Path(folder), wait_for_start=True, config_path=config, check_vehicle=True)
                 self.assertEqual(result['status'], 'CANCELLED')
+                model.assert_called_once_with(model_file)
                 self.assertEqual(model.return_value.predict.call_args.kwargs['classes'], [0])
         capture.release.assert_called_once()
+
+    def test_missing_preparation_model_does_not_download_or_open_camera(self):
+        from ai_vision.tests.recognition.test_vehicle_space_tracker import CONFIG
+        from ai_vision.recognition.local_io import write_json_atomic
+        with tempfile.TemporaryDirectory() as folder:
+            config = Path(folder) / 'spaces.json'
+            write_json_atomic(config, CONFIG)
+            with patch.object(paths, 'MODEL_DIR', Path(folder) / 'missing_models'), \
+                    patch('ultralytics.YOLO') as model, \
+                    patch('ai_vision.recognition.record_gate_video.require_display'), \
+                    patch('ai_vision.recognition.record_gate_video.open_camera') as camera:
+                with self.assertRaises(FileNotFoundError):
+                    record(1, 10, Path(folder) / 'output', wait_for_start=True,
+                           config_path=config, check_vehicle=True)
+                model.assert_not_called()
+                camera.assert_not_called()
 
     def test_all_python_sources_parse_without_running_experiment_scripts(self):
         # import하면 카메라·모델을 실행하는 구형 실험도 있어 전체 파일은 구문만 검사합니다.

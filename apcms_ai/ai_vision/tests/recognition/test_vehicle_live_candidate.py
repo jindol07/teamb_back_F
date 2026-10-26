@@ -2,6 +2,7 @@
 
 import copy
 import unittest
+from unittest.mock import patch
 from ai_vision.recognition.plate_consensus import summarize_plate_samples
 from ai_vision.recognition.vehicle_delivery_flow import VehicleDeliveryFlow
 from ai_vision.recognition.vehicle_http import VehicleHTTPClient
@@ -101,6 +102,11 @@ class SpaceMatchCandidateTests(unittest.TestCase):
         flow=SpaceMatchDeliveryFlow()
         try:
             flow.submit(candidate,('verification',1),lambda:None)
+            from ai_vision.parking.demo_session import valid_demo_delivery_shape,resolved_demo_delivery
+            self.assertEqual(flow.records[0]['status'],'DISABLED')
+            self.assertIsNone(flow.records[0]['receipt'])
+            self.assertTrue(valid_demo_delivery_shape(flow.records[0]))
+            self.assertFalse(resolved_demo_delivery(flow.records[0]))
             self.assertEqual(flow.records[0]['identity_verification'],candidate['identity_verification'])
             candidate['identity_verification']['plate_number']='changed'
             self.assertEqual(flow.records[0]['identity_verification']['plate_number'],'91소6408')
@@ -109,6 +115,44 @@ class SpaceMatchCandidateTests(unittest.TestCase):
         for change in ({'samples':samples[:1]}, {'plate_consensus':{}},
                        {'parking_usage_id':True},{'entry_event_id':'wrong'}):
             with self.subTest(change=change),self.assertRaises(ValueError):convert({**event,**change})
+
+    def test_temporary_two_space_mapping_preserves_candidate_identity_and_restores(self):
+        from ai_vision.parking import parking_event_sender as sender
+        from ai_vision.parking.demo_session import demo_space_mapping
+        from ai_vision.recognition.vehicle_live_candidate import create_space_match_candidate
+        original=sender.SPACE_CODE_MAP.copy()
+        with patch.dict(sender.SPACE_CODE_MAP,demo_space_mapping({'scenario':'wrong_space_correction'})):
+            for space,code in (('A-02','999F-Z02'),('A-01','999F-Z01')):
+                row={'track_id':2,'space_id':space,'plate_number':'91소6408'}
+                event=row|{'kind':'LIVE_SPACE_MATCH','plate_detection_confidence':.9,
+                           'identity_basis':'SINGLE_VEHICLE_ENTRY_HANDOFF','parking_usage_id':83}
+                candidate=create_space_match_candidate(event,[row],'B0','2020-01-01T00:00:00Z')
+                self.assertEqual(candidate['payload']['space_code'],code)
+                self.assertEqual(candidate['payload']['expected_parking_usage_id'],83)
+        self.assertEqual(sender.SPACE_CODE_MAP,original)
+
+    def test_handoff_candidate_already_contains_exact_request_usage(self):
+        from ai_vision.recognition.vehicle_live_candidate import create_space_match_candidate
+        row={'track_id':2,'space_id':'A-01','plate_number':'91소6408'}
+        event=row|{'kind':'LIVE_SPACE_MATCH','plate_detection_confidence':.9,
+                   'identity_basis':'SINGLE_VEHICLE_ENTRY_HANDOFF','parking_usage_id':83}
+        candidate=create_space_match_candidate(event,[row],'B0','2020-01-01T00:00:00Z')
+        self.assertEqual(candidate['payload']['expected_parking_usage_id'],83)
+        self.assertEqual(candidate['expected_parking_usage_id'],83)
+        self.assertNotIn('expected_parking_usage_id',event)
+        from ai_vision.parking.run_parking_camera import apply_parking_decisions
+        record={'track_id':2,'status':'APPLIED','expected_parking_usage_id':83,'payload':candidate['payload'],
+                'receipt':{'event_id':candidate['payload']['event_id'],'event_type':'VEHICLE_SPACE_MATCH',
+                           'state':'APPLIED','request_attempted':True,'receipt_verified':True,
+                           'parking_usage_id':83,'parking_decision':'MATCHED'}}
+        observation=row|{'status':'LOCAL_MATCH','parking_usage_id':83}
+        self.assertEqual(apply_parking_decisions([observation],[record])[0]['parking_decision'],'MATCHED')
+        for usage in (None,True,84):
+            self.assertNotIn('parking_decision',apply_parking_decisions([row|{'status':'LOCAL_MATCH','parking_usage_id':usage}],[record])[0])
+
+        for value in (True,0,-1,9223372036854775808):
+            with self.subTest(value=value),self.assertRaises(ValueError):
+                create_space_match_candidate(event|{'parking_usage_id':value},[row],'B0','2020-01-01T00:00:00Z')
 
     def test_current_live_match_maps_db_code_and_preserves_source_time(self):
         from ai_vision.recognition.vehicle_live_candidate import create_space_match_candidate

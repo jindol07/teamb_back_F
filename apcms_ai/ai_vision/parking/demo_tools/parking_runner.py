@@ -4,7 +4,7 @@ import cv2,time,os
 def main():
     from ai_vision.parking.demo_session import load_demo_profile
     profile=load_demo_profile(os.environ['PARKING_DEMO_PROFILE_DIR'])
-    backend=os.environ.get('PARKING_DEMO_CAMERA_BACKEND','msmf')
+    backend=os.environ.get('PARKING_DEMO_CAMERA_BACKEND',profile['camera_backend'])
     if backend not in ('msmf','dshow'):raise ValueError('Unsupported camera backend')
     from dotenv import dotenv_values
     from ai_vision.parking import run_parking_camera as camera
@@ -17,15 +17,23 @@ def main():
     ParkingPreview.__init__=preview_init
     root=Path(os.environ['PARKING_DEMO_RUN_DIR']);layout=profile['root'];out=root/'parking'
     # 이번 프로세스에서만 종이 A-01을 합성 시험 구획으로 연결합니다.
-    sender.SPACE_CODE_MAP['A-01']='999F-Z01'
+    from ai_vision.parking.demo_session import demo_space_mapping
+    mapping=demo_space_mapping(profile)
+    original_mapping=sender.SPACE_CODE_MAP.copy()
+    sender.SPACE_CODE_MAP.update(mapping)
     settings=dotenv_values('apcms_ai/.env',encoding='utf-8-sig',interpolate=False)
     key=settings.get('AI_OCCUPANCY_API_KEY');assert key,'AI key missing'
     env={'PARKING_AI_BASE_URL':profile['boot_context_url'],'PARKING_AI_API_KEY':key,'AI_OCCUPANCY_API_KEY':key}
     original_show=ParkingPreview.show
     def show(self,frame,*args,**kwargs):
-        try:
-            if (root/'fixture_ready.flag').exists():self.source_label=(root/'phase.txt').read_text(encoding='utf-8')
-        except OSError:pass
+        from ai_vision.parking.demo_session import read_demo_phase,demo_guidance
+        if (root/'fixture_ready.flag').exists() or (root/'stop_requested.flag').exists():
+            self.source_label=read_demo_phase(root)
+        guide_phase=read_demo_phase(root)
+        if ((root/'parking_started.flag').exists() and not (root/'fixture_ready.flag').exists()
+                and not (root/'stop_requested.flag').exists()):
+            guide_phase='WAIT: BOTH WINDOWS START / KEEP EMPTY'
+        self.guidance=demo_guidance(guide_phase)
         return original_show(self,frame,*args,**kwargs)
     ParkingPreview.show=show
     native=camera.open_camera;state={'cap':None,'frame':None}
@@ -78,10 +86,11 @@ def main():
                 handoff_path=root/'gate/single_vehicle_handoff.json',
                 verify_handoff_plate=os.environ.get('PARKING_DEMO_VERIFY_HANDOFF_PLATE')=='1',
                 enable_http=True,enable_space_http=True,
-                allowed_codes=['999F-Z01'],environment=env)
+                allowed_codes=list(mapping.values()),environment=env)
         if report['status'] in ('FAILED','INCOMPLETE'):
             raise RuntimeError('B camera did not complete safely: '+str(report.get('error_type')))
     finally:
+        sender.SPACE_CODE_MAP.clear();sender.SPACE_CODE_MAP.update(original_mapping)
         if state['cap'] is not None:state['cap'].release()
         if state['frame'] is not None:
             out.mkdir(exist_ok=True);cv2.imwrite(str(out/'last_frame.png'),state['frame'])
