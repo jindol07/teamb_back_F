@@ -22,6 +22,7 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import jakarta.annotation.PostConstruct;
+import jakarta.servlet.DispatcherType;
 
 //1023: 배포 CORS 이슈
 import java.util.Arrays;
@@ -76,6 +77,10 @@ public class SecurityConfig {
                 .httpBasic((basic) -> basic.disable())
             	//.authenticationProvider(daoAuthenticationProvider())
                 .authorizeHttpRequests((auth) -> auth
+                		// [error-handling] Forward server errors (500/400) to /error without auth.
+                		// Otherwise the real error is masked as 401 by the entry point.
+                		.dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
+                		.requestMatchers("/error").permitAll()
                 		.requestMatchers("/api/notice/**").permitAll()
                         .requestMatchers("/api/auth/**").permitAll() // /api/auth/** 에서 오는 모든 요청은 허용
                         .requestMatchers("/demos/**").permitAll() 
