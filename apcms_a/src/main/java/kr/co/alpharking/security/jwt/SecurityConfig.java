@@ -105,6 +105,7 @@ public class SecurityConfig {
                         // 관리자용 구획 및 입출차 관리는 ADMIN 권한으로 제한한다.
                         .requestMatchers("/api/parking/spaces", "/api/parking/spaces/**",
                                 "/api/parking/usages", "/api/parking/usages/**").hasAuthority("ADMIN")
+                        .requestMatchers("/api/notifications", "/api/notifications/**").permitAll()
                         //.requestMatchers("/demos/**").permitAll()
                         //.requestMatchers("/**").permitAll()
                         .anyRequest().authenticated()) // 모든 요청에 대해 인증을 요구

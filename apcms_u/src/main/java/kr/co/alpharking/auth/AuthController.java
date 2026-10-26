@@ -25,6 +25,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 
 import kr.co.alpharking.dto.auth.SignupRequest;
 import kr.co.alpharking.dto.auth.SignupResponse;
@@ -55,6 +56,9 @@ public class AuthController {
 	private SignupVehicleRepository vehicleRepository;
 	@Autowired
 	private AuthTokenService authTokenService;
+	// 네이버 로그인 (회원가입 없이 기존 회원만 로그인)
+	@Autowired
+	private NaverOAuthService naverOAuthService;
 	
 	@PostMapping("/login")
 	public ResponseEntity<?> authenticateUser(@RequestBody AuthRequest authRequest) {
@@ -191,6 +195,52 @@ public class AuthController {
         authTokenService.logout(request == null ? null : request.refreshToken());
         SecurityContextHolder.clearContext();
         return ResponseEntity.noContent().build();
+    }
+
+    // ------------------------------------------------------------------
+    // 네이버 로그인 (회원가입 없이 기존 회원만 로그인)
+    // ------------------------------------------------------------------
+
+    /** 네이버 authorize URL을 반환한다. state는 서버(Redis)에 5분간 보관된다. */
+    @GetMapping("/naver/authorize")
+    public ResponseEntity<?> naverAuthorize() {
+        try {
+            return ResponseEntity.ok(
+                    new NaverAuthorizeResponse(naverOAuthService.createAuthorizeUrl()));
+        } catch (ResponseStatusException e) {
+            return naverError(e);
+        }
+    }
+
+    /** 콜백의 code/state를 검증하고 기존 회원에게 우리 서비스 토큰을 발급한다. */
+    @PostMapping("/naver/login")
+    public ResponseEntity<?> naverLogin(@RequestBody(required = false) NaverLoginRequest request) {
+        if (request == null) {
+            return ResponseEntity.badRequest().body(Map.of("message", "요청 본문이 없습니다."));
+        }
+
+        try {
+            return ResponseEntity.ok(naverOAuthService.login(request.code(), request.state()));
+        } catch (ResponseStatusException e) {
+            return naverError(e);
+        }
+    }
+
+    /**
+     * 네이버 로그인 실패 사유를 로그인 화면에서 그대로 보여주기 위한 응답.
+     * 기존 /login, /refresh, /logout 응답 형식은 건드리지 않는다.
+     */
+    private ResponseEntity<Map<String, Object>> naverError(ResponseStatusException e) {
+        String message = e.getReason() == null ? "네이버 로그인에 실패했습니다." : e.getReason();
+        return ResponseEntity.status(e.getStatusCode()).body(Map.of("message", message));
+    }
+
+    /** /naver/login 요청 본문. */
+    public record NaverLoginRequest(String code, String state) {
+    }
+
+    /** /naver/authorize 응답. SNAKE_CASE 설정으로 authorize_url 로 내려간다. */
+    public record NaverAuthorizeResponse(String authorizeUrl) {
     }
 
     /** /refresh, /logout 요청 본문. SNAKE_CASE 전략으로 refresh_token 과 매핑된다. */
