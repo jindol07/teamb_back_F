@@ -2,10 +2,13 @@
 from pathlib import Path
 from functools import lru_cache
 import re
+import json
 from langchain_chroma import Chroma
-from ai_inquiry.llm import get_embeddings
+from ai_inquiry.llm import get_embeddings, EMBEDDING_FORMAT
+from ai_inquiry.config import settings
 
-CHROMA_DIR = Path(__file__).resolve().parent / 'chroma_db'
+# Hugging Face 인덱스(chroma_db)는 그대로 두고 Gemini 인덱스만 사용합니다.
+CHROMA_DIR = Path(__file__).resolve().parent / 'chroma_db_gemini'
 
 # 정책 도메인 용어의 질문 표현 차이를 보완한다.
 SYNONYMS = {
@@ -22,6 +25,16 @@ STOPWORDS = {'어떻게', '하나요', '있나요', '되나요', '무엇을', '�
 def get_store():
     if not (CHROMA_DIR / 'chroma.sqlite3').exists():
         raise FileNotFoundError('정책 인덱스가 없습니다. python -m ai_inquiry.build_index 실행 후 다시 시도하세요.')
+    # 생성이 완료되지 않았거나 다른 모델·차원으로 만든 인덱스는 섞어 쓰지 않습니다.
+    try:
+        manifest = json.loads((CHROMA_DIR / 'embedding_manifest.json').read_text(encoding='utf-8'))
+    except (OSError, ValueError):
+        raise RuntimeError('Gemini 정책 인덱스 생성이 완료되지 않았습니다. 인덱스를 확인하세요.') from None
+    cfg = settings()
+    if (manifest.get('model') != cfg['embedding_model']
+            or manifest.get('dimensions') != cfg['embedding_dimensions']
+            or manifest.get('format') != EMBEDDING_FORMAT):
+        raise RuntimeError('정책 인덱스와 임베딩 설정이 다릅니다. 같은 설정으로 인덱스를 다시 생성하세요.')
     return Chroma(
         collection_name='parking_policies',
         persist_directory=str(CHROMA_DIR),

@@ -71,6 +71,7 @@ class EntryIdentityParkingTests(unittest.TestCase):
         match = next(e for e in events if e['kind'] == 'LOCAL_SPACE_MATCH')
         self.assertEqual(match['identity_basis'], 'SINGLE_VEHICLE_ENTRY_HANDOFF')
         self.assertEqual(match['parking_usage_id'], 70)
+        self.assertEqual(self.process(5)['progress'][0]['parking_usage_id'],70)
         self.assertEqual(self.observer.summary()['ocr_submitted'], 0)
         self.assertEqual(self.observer.tracker.states[1]['samples'], [])
         self.assertEqual(self.observer.tracker.states[1]['number'], '91소6408')
@@ -80,6 +81,55 @@ class EntryIdentityParkingTests(unittest.TestCase):
         self.identity = None
         self.process(5)
         self.assertFalse(any(s['matched'] for s in self.observer.tracker.states.values()))
+
+    def test_real_handoff_reader_observer_and_delivery_accept_second_entry_after_suppression(self):
+        from datetime import datetime,timedelta,timezone
+        from concurrent.futures import wait
+        from ai_vision.recognition.single_vehicle_handoff import SingleVehicleHandoff,SingleVehicleHandoffReader
+        from ai_vision.recognition.vehicle_delivery_flow import SpaceMatchDeliveryFlow
+        from ai_vision.recognition.vehicle_live_candidate import create_space_match_candidate
+        from ai_vision.tests.recognition.test_vehicle_response import sample_event
+        folder=tempfile.TemporaryDirectory(dir=RESULT_DIR);self.addCleanup(folder.cleanup)
+        now=datetime(2020,1,1,tzinfo=timezone.utc)
+        source=SingleVehicleHandoff(Path(folder.name)/'entry.json','gate_test','A',now)
+        reader=SingleVehicleHandoffReader(source.path,clock=lambda:now)
+        self.observer._handoff_reader=reader.read
+        event=sample_event()|{'detected_at':now.isoformat()}
+        def receipt(event,usage):return {'event_id':event['event_id'],'event_type':'VEHICLE_PASSAGE',
+            'state':'APPLIED','receipt_verified':True,'request_attempted':True,'parking_usage_id':usage}
+        source.record(event,receipt(event,70),now)
+        first=next(row for row in self.match() if row['kind']=='LOCAL_SPACE_MATCH')
+        client=Mock(enabled=True)
+        client.send.side_effect=lambda payload: {'event_id':payload['event_id'],'event_type':payload['event_type'],
+            'state':'APPLIED','receipt_verified':True,'request_attempted':True,
+            'parking_usage_id':payload['expected_parking_usage_id']}
+        flow=SpaceMatchDeliveryFlow(client);self.addCleanup(flow.close,lambda:None)
+        def candidate(row):return create_space_match_candidate(row|{'kind':'LIVE_SPACE_MATCH'},
+            [{'track_id':row['track_id'],'space_id':row['space_id'],'plate_number':row['plate_number']}],'B',now.isoformat())
+        flow.submit(candidate(first),'first',lambda:None)
+        wait([flow._future]);flow.poll(lambda:None)
+        self.assertEqual(flow.submit(candidate(first),'suppressed',lambda:None),'HELD_RELEASE_REQUIRED')
+        now+=timedelta(seconds=1)
+        exited=event|{'direction':'EXIT','detected_at':now.isoformat()}
+        source.record(exited,receipt(exited,70),now)
+        now+=timedelta(seconds=1)
+        entered=event|{'event_id':'a47ac10b-58cc-4372-a567-0e02b2c3d479','detected_at':now.isoformat()}
+        source.record(entered,receipt(entered,71),now)
+        # B는 EMPTY를 한 번도 읽지 않은 상태에서 새 입차를 관찰합니다.
+        outcome=self.process(5)
+        self.assertFalse(any(row['kind']=='LOCAL_SPACE_MATCH' for row in outcome['events']))
+        self.assertEqual(reader.last_exit['parking_usage_id'],70)
+        self.assertTrue(flow.acknowledge_gate_exit('91소6408',70))
+        events=[]
+        for index in range(6,11):events.extend(self.process(index)['events'])
+        second=next(row for row in events if row['kind']=='LOCAL_SPACE_MATCH')
+        self.assertEqual(second['parking_usage_id'],71)
+        self.assertEqual(self.process(11)['progress'][0]['parking_usage_id'],71)
+        self.assertEqual(flow.submit(candidate(second),'second',lambda:None),'IN_FLIGHT')
+        wait([flow._future]);flow.poll(lambda:None)
+        self.assertEqual(client.send.call_count,2)
+        self.assertEqual(flow.records[-1]['receipt']['parking_usage_id'],71)
+        self.assertFalse(flow.acknowledge_gate_exit('91소6408',70))
 
     def test_new_entry_generation_requires_new_dwell(self):
         self.match()

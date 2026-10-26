@@ -586,7 +586,8 @@ class VehicleSpaceObserver:
             progress.append({'track_id': row['track_id'], 'box': list(row['box']), 'space_id': space,
                              'status': status, 'plate_number': state['number'] or latest.get('plate_number', ''),
                              'plate_type': latest.get('plate_type'),
-                             'video_seconds': seconds})
+                             'video_seconds': seconds,
+                             **({'parking_usage_id': identity['parking_usage_id']} if identity is not None else {})})
         return {'events': events, 'observations': valid, 'completed_samples': completed, 'progress': progress}
 
     def current_matches(self, occupancy, seconds):

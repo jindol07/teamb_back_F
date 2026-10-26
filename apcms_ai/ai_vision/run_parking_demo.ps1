@@ -1,7 +1,10 @@
-﻿# Windows 현장 한 대 시연 진입점. 준비/사전점검은 카메라·HTTP·DB를 사용하지 않습니다.
+﻿# .ps1 : Windows PowerShell 스크립트 파일
+# Windows 현장 한 대 시연 진입점. 준비/사전점검은 카메라·HTTP·DB를 사용하지 않습니다.
 param(
     [string]$ProfileDir = (Join-Path $PSScriptRoot 'results\parking_demo\local'),
     [string]$PythonExe = "",
+    [ValidateSet('profile','msmf','dshow')]
+    [string]$CameraBackend = 'profile',
     [switch]$VerifyHandoffPlate,
     [switch]$Prepare,
     [switch]$CheckOnly
@@ -30,6 +33,7 @@ $oldPythonPath = $env:PYTHONPATH
 $oldProfile = $env:PARKING_DEMO_PROFILE_DIR
 $oldRun = $env:PARKING_DEMO_RUN_DIR
 $oldVerifyIdentity = $env:PARKING_DEMO_VERIFY_HANDOFF_PLATE
+$oldCameraBackend = $env:PARKING_DEMO_CAMERA_BACKEND
 try {
     try { $ownsMutex = $mutex.WaitOne(0) }
     catch [System.Threading.AbandonedMutexException] { $ownsMutex = $true }
@@ -42,6 +46,15 @@ try {
         Write-Host $preflight
         throw 'Profile validation failed or an earlier fixture needs recovery. No cameras were opened.'
     }
+    # 1. 프로필의 선택을 기본으로 사용하며 명령행의 명시적 선택을 우선합니다.
+    $profile = Get-Content -LiteralPath (Join-Path $baseDir 'demo.local.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+    $profileBackend = if ($profile.PSObject.Properties.Name -contains 'camera_backend') { $profile.camera_backend } else { 'msmf' }
+    $selectedBackend = if ($CameraBackend -eq 'profile') { $profileBackend } else { $CameraBackend }
+    $env:PARKING_DEMO_CAMERA_BACKEND = $selectedBackend
+    Write-Host "CAMERA_CONFIG: A_GATE=$($profile.gate_camera) B_PARKING=$($profile.parking_camera) BACKEND=$selectedBackend"
+    $scenario = if ($profile.PSObject.Properties.Name -contains 'scenario') { $profile.scenario } else { 'normal' }
+    $cycles = if ($profile.PSObject.Properties.Name -contains 'cycles') { $profile.cycles } else { 1 }
+    Write-Host "SCENARIO: $scenario / CYCLES=$cycles / TEMPORARY PROCESS MAPPING ONLY"
     if (-not (Get-Command java -ErrorAction SilentlyContinue)) { throw 'Java is required.' }
     if ($Prepare) {
         if (-not (Get-Command javac -ErrorAction SilentlyContinue)) { throw 'JDK javac is required for preparation.' }
@@ -105,6 +118,7 @@ finally {
     $env:PARKING_DEMO_PROFILE_DIR = $oldProfile
     $env:PARKING_DEMO_RUN_DIR = $oldRun
     $env:PARKING_DEMO_VERIFY_HANDOFF_PLATE = $oldVerifyIdentity
+    $env:PARKING_DEMO_CAMERA_BACKEND = $oldCameraBackend
     if ($ownsMutex) { $mutex.ReleaseMutex() }
     $mutex.Dispose()
 }

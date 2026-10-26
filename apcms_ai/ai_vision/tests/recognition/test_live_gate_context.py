@@ -44,6 +44,51 @@ class SingleVehicleHandoffTests(unittest.TestCase):
         self.source.record(event, self.receipt(event), self.now)
         self.assertIsNone(self.reader.read())
 
+    def next_entry_without_empty_read(self):
+        import uuid
+        self.enter();self.reader.read()
+        self.now+=timedelta(seconds=1)
+        exited=self.event|{'direction':'EXIT','detected_at':self.now.isoformat()}
+        self.source.record(exited,self.receipt(exited),self.now)
+        self.now+=timedelta(seconds=1)
+        entered=self.event|{'event_id':str(uuid.uuid4()),'detected_at':self.now.isoformat()}
+        self.source.record(entered,self.receipt(entered,usage=71),self.now)
+        return entered
+
+    def test_two_cycles_finish_empty_and_retained_identity_is_not_reused(self):
+        entered=self.next_entry_without_empty_read()
+        self.assertEqual(self.reader.read()['parking_usage_id'],71)
+        self.now+=timedelta(seconds=1)
+        exited=entered|{'direction':'EXIT','detected_at':self.now.isoformat()}
+        self.assertTrue(self.source.allow(exited,self.now))
+        self.source.record(exited,self.receipt(exited,usage=71),self.now)
+        self.assertIsNone(self.reader.read())
+        self.assertEqual(self.reader.snapshot()['status'],'EMPTY')
+        self.assertIsNone(self.reader.snapshot()['retained_identity'])
+        self.assertEqual(self.reader.last_exit['parking_usage_id'],71)
+
+    def test_next_entry_with_verified_previous_exit_does_not_require_reading_empty(self):
+        entered=self.next_entry_without_empty_read()
+        self.assertEqual(self.reader.read()['parking_usage_id'],71)
+        self.assertEqual(self.reader.snapshot()['retained_identity']['event_id'],entered['event_id'])
+        self.assertEqual(self.reader.last_exit['parking_usage_id'],70)
+
+    def test_rollover_rejects_wrong_exit_reused_usage_or_entry_before_exit(self):
+        from ai_vision.recognition.local_io import write_json_atomic
+        self.next_entry_without_empty_read()
+        original=copy.deepcopy(self.source.state)
+        for kind in ('wrong_exit','same_usage','old_entry','same_event','blocked'):
+            row=copy.deepcopy(original)
+            if kind=='wrong_exit':row['last_exit']['parking_usage_id']=99
+            if kind=='same_usage':row['active']['parking_usage_id']=70
+            if kind=='old_entry':row['active']['detected_at']=self.event['detected_at']
+            if kind=='same_event':row['active']['event_id']=self.event['event_id']
+            if kind=='blocked':row['status']='BLOCKED'
+            write_json_atomic(self.path,row)
+            with self.subTest(kind=kind):
+                self.assertIsNone(self.reader.read())
+                self.assertEqual(self.reader.snapshot()['retained_identity']['parking_usage_id'],70)
+
     def test_second_vehicle_blocks_without_overwriting_original_identity(self):
         self.enter()
         self.assertFalse(self.source.allow(self.event | {'plate_number': '12가3456'}, self.now))

@@ -21,6 +21,60 @@ from ai_vision.parking.parking_calibration import load_reference, configure_reso
 from ai_vision.recognition.latest_frame_capture import LatestFrameCapture
 
 
+def apply_parking_decisions(observations, records):
+    """현재 정차 근거와 일치하는 최신 응답만 화면·기록에 사용합니다."""
+    from ai_vision.parking.parking_event_sender import convert_space_code
+    for observation in observations:
+        observation.pop('parking_decision', None)
+        if observation.get('status') != 'LOCAL_MATCH' or not observation.get('space_id'):
+            continue
+        try:
+            code = convert_space_code(observation['space_id'])
+        except (ValueError, TypeError, KeyError):
+            continue
+        for record in reversed(records):
+            if not isinstance(record, dict) or not isinstance(record.get('payload'), dict):
+                continue
+            payload, receipt = record['payload'], record.get('receipt') or {}
+            if not isinstance(receipt, dict):
+                receipt = {}
+            if (record.get('track_id') != observation['track_id']
+                    or payload.get('event_type') != 'VEHICLE_SPACE_MATCH'
+                    or payload.get('plate_number') != observation.get('plate_number')
+                    or payload.get('space_code') != code):
+                continue
+            # 1. 같은 번호·추적 ID여도 이전 입차 이용의 응답은 재사용하지 않습니다.
+            current_usage = observation.get('parking_usage_id')
+            expected = record.get('expected_parking_usage_id')
+            if current_usage is not None or expected is not None:
+                if (type(current_usage) is not int or type(expected) is not int
+                        or current_usage < 1 or current_usage != expected
+                        or payload.get('expected_parking_usage_id') != current_usage):
+                    continue
+            # 미전송 억제는 현재 이용의 마지막 실제 응답을 가리지 않습니다.
+            if (record.get('status') == 'HELD_RELEASE_REQUIRED' and record.get('receipt') is None
+                    and not record.get('blocking_reason')):
+                continue
+            # 새 요청이 미확정이면 이전 성공 응답으로 돌아가지 않습니다.
+            decision = 'UNDETERMINED'
+            if (receipt.get('receipt_verified') is True
+                    and receipt.get('request_attempted') is True
+                    and isinstance(payload.get('event_id'), str) and bool(payload['event_id'])
+                    and receipt.get('event_id') == payload['event_id']
+                    and receipt.get('event_type') == payload['event_type']
+                    and receipt.get('state') == record.get('status') and not record.get('blocking_reason')
+                    and record.get('status') in ('APPLIED', 'UNCHANGED', 'HELD')
+                    and (expected is None or (type(receipt.get('parking_usage_id')) is int
+                                             and receipt['parking_usage_id'] == expected))):
+                received = receipt.get('parking_decision')
+                if ((received == 'MATCHED' and record['status'] in ('APPLIED', 'UNCHANGED'))
+                        or (received in ('WRONG_SPACE', 'NO_VALID_RESERVATION') and record['status'] == 'HELD')):
+                    decision = received
+            observation['parking_decision'] = decision
+            break
+    return observations
+
+
 def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=60, preview=True,
                enable_http=False, allowed_codes=(), environment=None, previous_report=None,
                publish_results=False, camera_backend='default', track_vehicles=False,
@@ -198,6 +252,7 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
                             del pending_matches[key]
                     vehicle['statistics'] = vehicle_observer.summary()
                     vehicle['observations'] = tracking.get('progress', [])
+                    apply_parking_decisions(vehicle['observations'], match_flow.records)
                     if handoff is not None:
                         vehicle['entry_handoff_status'] = handoff.status
                         vehicle['entry_handoff'] = handoff.snapshot()

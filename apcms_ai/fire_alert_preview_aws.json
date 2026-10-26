@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "alerts": [
+    {
+      "schema_version": "1.0",
+      "transition_id": "e3c9bc5e24e6d7abf5f7ea724c8e52966c265830d650f84a3c0c084f07b7ad68",
+      "incident_id": "8643afcd55f1499ebbea0692588a3b50",
+      "region_id": "ff35c02802e84c3b940039953be4154f",
+      "hazard_type": "FIRE",
+      "status": "SUSPECTED",
+      "observed_at_utc": "2026-10-21T12:46:47.463717+00:00",
+      "source_seconds": 1.067,
+      "frame_index": 17,
+      "confidence": 0.8757,
+      "bbox_xyxy": [
+        112,
+        181,
+        493,
+        549
+      ],
+      "hits_in_window": 3,
+      "reason": null,
+      "source": {
+        "kind": "VIDEO",
+        "name": "dual_fire_sequence.mp4"
+      },
+      "session_started_at_utc": "2026-10-21T12:46:45.173308+00:00",
+      "is_test": true,
+      "requires_human_review": true
+    }
+  ]
+}

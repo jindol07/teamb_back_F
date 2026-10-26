@@ -4,6 +4,8 @@ import json,cv2,time,os
 def main():
     from ai_vision.parking.demo_session import load_demo_profile
     profile=load_demo_profile(os.environ['PARKING_DEMO_PROFILE_DIR'])
+    backend=os.environ.get('PARKING_DEMO_CAMERA_BACKEND',profile['camera_backend'])
+    if backend not in ('msmf','dshow'):raise ValueError('Unsupported camera backend')
     from ai_vision.recognition.run_live_gate import main as execute
     from ai_vision.recognition.preview_gate_config import LiveGatePreview
     from ai_vision.recognition.vehicle_http import VehicleHTTPClient
@@ -34,8 +36,12 @@ def main():
     LiveGateProcessor._track=track
     original_show=LiveGatePreview.__call__
     def show(self,frame):
-        try:text=(root/'phase.txt').read_text(encoding='utf-8')
-        except OSError:text='WAIT: KEEP BOTH EMPTY'
+        from ai_vision.parking.demo_session import read_demo_phase,demo_guidance
+        from ai_vision.parking.parking_preview import draw_demo_guidance
+        text=read_demo_phase(root)
+        if ((root/'gate_started.flag').exists() and not (root/'fixture_ready.flag').exists()
+                and not (root/'stop_requested.flag').exists()):
+            text='WAIT: BOTH WINDOWS START / KEEP EMPTY'
         display=frame.copy();cv2.putText(display,text,(15,95),cv2.FONT_HERSHEY_SIMPLEX,.8,(0,255,255),2)
         gap=observed.get('gap_seconds',0)
         label=f"A inference {observed.get('inference_seconds',0):.2f}s / sample gap {gap:.2f}s"
@@ -50,6 +56,7 @@ def main():
             x1,y1,x2,y2=row['box'];cx=(x1+x2)//2;cy=(y1+y2)//2
             cv2.rectangle(display,(x1,y1),(x2,y2),(0,255,0),2);cv2.circle(display,(cx,cy),5,(0,255,255),-1)
             cv2.putText(display,f"ID {row['track_id']} / Y {cy}",(x1,max(20,y1-10)),cv2.FONT_HERSHEY_SIMPLEX,.6,(0,255,0),2)
+        display=draw_demo_guidance(display,demo_guidance(text))
         return original_show(self,display)
     LiveGatePreview.__call__=show
     native=cv2.VideoCapture;state={'cap':None,'frame':None}
@@ -66,7 +73,7 @@ def main():
     class Capture:
         def __init__(self,index):
             if index!=profile['gate_camera']:raise ValueError('Unexpected gate camera index')
-            self.native=native(index,cv2.CAP_MSMF);self.native.set(cv2.CAP_PROP_FRAME_WIDTH,1280);self.native.set(cv2.CAP_PROP_FRAME_HEIGHT,1024);state['cap']=self
+            self.native=native(index,cv2.CAP_DSHOW if backend=='dshow' else cv2.CAP_MSMF);self.native.set(cv2.CAP_PROP_FRAME_WIDTH,1280);self.native.set(cv2.CAP_PROP_FRAME_HEIGHT,1024);state['cap']=self
         def read(self):
             if (root/'stop_requested.flag').exists():raise RuntimeError('SAFETY_ABORT_REQUESTED')
             ok,frame=self.native.read()

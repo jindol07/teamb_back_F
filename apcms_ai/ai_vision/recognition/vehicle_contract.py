@@ -92,7 +92,7 @@ def validate_space_match_payload(payload, now=None):
     # 구획 연결을 입출차로 보내지 않고 기존 Boot 전용 계약으로 검사합니다.
     required = (REQUIRED - {'direction'}) | {'space_code', 'method'}
     if (not isinstance(payload, dict) or not required <= payload.keys()
-            or payload.keys() - required - {'direction'}
+            or payload.keys() - required - {'direction', 'expected_parking_usage_id'}
             or payload.get('direction') is not None or payload.get('event_type') != 'VEHICLE_SPACE_MATCH'):
         raise ValueError('구획 연결 요청 필드를 확인하세요.')
     if (not isinstance(payload['space_code'], str)
@@ -105,6 +105,12 @@ def validate_space_match_payload(payload, now=None):
     event = validate_vehicle_payload(common, now)
     event.pop('direction')
     event.update(event_type='VEHICLE_SPACE_MATCH', space_code=payload['space_code'], method=payload['method'])
+    # 1. 입차 근거 ID는 정수 범위 확인 후 HTTP 요청에도 그대로 보존합니다.
+    if 'expected_parking_usage_id' in payload:
+        usage = payload['expected_parking_usage_id']
+        if type(usage) is not int or not 0 < usage <= 9223372036854775807:
+            raise ValueError('입차 근거의 이용 ID를 확인하세요.')
+        event['expected_parking_usage_id'] = usage
     return event
 
 

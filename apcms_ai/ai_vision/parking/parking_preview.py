@@ -4,8 +4,63 @@
 import cv2
 import numpy as np
 from pathlib import Path
+from functools import lru_cache
 from PIL import Image, ImageDraw, ImageFont
 from ai_vision.camera_runtime import require_display
+
+
+@lru_cache(maxsize=16)
+def _guidance_font(size):
+    for path in (Path('C:/Windows/Fonts/malgun.ttf'),
+                 Path('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc')):
+        if path.is_file():
+            try:
+                return ImageFont.truetype(str(path),size)
+            except OSError:
+                continue
+    return None
+
+
+@lru_cache(maxsize=32)
+def _guidance_panel(width,height,guidance):
+    """같은 단계의 글꼴 측정·문자 렌더링을 매 프레임 반복하지 않습니다."""
+    size=max(14,min(36,width//32))
+    font=_guidance_font(size)
+    scale=size/30
+    measure=(lambda value:font.getlength(value)) if font else (lambda value:cv2.getTextSize(value,cv2.FONT_HERSHEY_SIMPLEX,scale,1)[0][0])
+    lines=[]
+    for korean,english in guidance:
+        value=korean if font else english
+        line=''
+        for character in value:
+            if line and measure(line+character)>max(20,width-32):
+                lines.append(line);line=''
+            line+=character
+        if line:lines.append(line)
+    spacing=size+10
+    panel_height=min(height,len(lines)*spacing+16)
+    image=np.full((panel_height,width,3),16,dtype=np.uint8)
+    top=0
+    if font:
+        canvas=Image.fromarray(cv2.cvtColor(image,cv2.COLOR_BGR2RGB))
+        draw=ImageDraw.Draw(canvas)
+        for index,line in enumerate(lines):draw.text((12,top+6+index*spacing),line,font=font,fill=(255,255,0))
+        panel=cv2.cvtColor(np.asarray(canvas),cv2.COLOR_RGB2BGR)
+        panel.setflags(write=False)
+        return panel
+    for index,line in enumerate(lines):
+        cv2.putText(image,line,(12,top+size+index*spacing),cv2.FONT_HERSHEY_SIMPLEX,scale,(0,255,255),1)
+    image.setflags(write=False)
+    return image
+
+
+def draw_demo_guidance(frame, guidance):
+    """원본을 보존하고 화면 폭에 맞춘 안내판을 아래쪽에 표시합니다."""
+    image=frame.copy()
+    height,width=image.shape[:2]
+    panel=_guidance_panel(width,height,tuple(guidance))
+    image[height-panel.shape[0]:,:]=panel
+    return image
 
 
 class ParkingPreview:
@@ -46,6 +101,8 @@ class ParkingPreview:
             cv2.putText(image, self.source_label, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, .6, (0, 255, 255), 2)
         if not preparing and self.vehicle_progress:
             image = self._draw_vehicles(image)
+        if getattr(self,'guidance',None):
+            image=draw_demo_guidance(image,self.guidance)
         cv2.imshow(self.name, image)
         key = cv2.waitKey(1) & 0xff
         if preparing and key == ord('r') and self.reference is not None:
@@ -73,9 +130,14 @@ class ParkingPreview:
                     'WAIT_IDENTITY': '입차 차량 번호 대조 중', 'IDENTITY_MISMATCH': '입차 차량 번호 불일치'}
         for row in self.vehicle_progress:
             x1, y1, x2, y2 = row['box']
-            color = (0, 220, 0) if row['status'] == 'LOCAL_MATCH' else (0, 180, 255)
+            decision = row.get('parking_decision')
+            decisions = {'MATCHED':'정상 주차', 'WRONG_SPACE':'다른 자리 주차',
+                         'NO_VALID_RESERVATION':'유효 예약 없음', 'UNDETERMINED':'주차 판정 불가'}
+            color = (0, 220, 0) if (decision == 'MATCHED' or (decision is None and row['status'] == 'LOCAL_MATCH')) else (0, 180, 255)
             cv2.rectangle(image, (x1, y1), (x2, y2), color, 2)
             status = statuses.get(row['status'], row['status']) if self._font is not None else row['status']
+            if decision in decisions:
+                status = decisions[decision] if self._font is not None else decision
             label = f"ID {row['track_id']} | {row['space_id'] or '-'} | {status}"
             if row['plate_number']:
                 label += ' | ' + row['plate_number']

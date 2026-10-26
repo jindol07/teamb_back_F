@@ -155,8 +155,14 @@ class SpaceMatchDeliveryFlow:
             raise ValueError('후보 상태를 확인하세요.')
         event = validate_space_match_payload(candidate['payload'])
         expected_usage = candidate.get('expected_parking_usage_id')
-        if expected_usage is not None and (type(expected_usage) is not int or expected_usage < 1):
+        if expected_usage is not None and (type(expected_usage) is not int or not 0 < expected_usage <= 9223372036854775807):
             raise ValueError('입차 근거의 이용 ID를 확인하세요.')
+        # 1. 로컬 입차 근거와 요청 필드가 충돌하면 전송하지 않습니다.
+        payload_usage = event.get('expected_parking_usage_id')
+        if payload_usage is not None and expected_usage != payload_usage:
+            raise ValueError('요청과 입차 근거의 이용 ID가 일치하지 않습니다.')
+        if expected_usage is not None:
+            event['expected_parking_usage_id'] = expected_usage
         if self.blocked:
             return 'BLOCKED'
         if observation_key in self._seen:
@@ -168,12 +174,39 @@ class SpaceMatchDeliveryFlow:
             raise ValueError('구획 연결 기록 한도를 초과했습니다.')
         if (self.client.enabled and self.release_client.enabled and event['plate_number'] in self._links):
             return 'BUSY'
+        # 3. 다른 자리로 연결을 거절받은 동일 입차만 새 구획의 관찰을 다시 판정받습니다.
+        # 이미 연결된 차량의 이동 해제나 같은 요청의 자동 재시도는 허용하지 않습니다.
+        corrected_space = False
+        correction_source = None
+        if expected_usage is not None and event['plate_number'] in self._plates:
+            previous = next((row for row in reversed(self.records)
+                             if row['payload']['plate_number'] == event['plate_number']
+                             and row['status'] != 'HELD_RELEASE_REQUIRED'), None)
+            if previous is not None:
+                receipt = previous.get('receipt') or {}
+                corrected_space = (
+                    previous['status'] == 'HELD' and not previous.get('blocking_reason')
+                    and receipt.get('state') == 'HELD' and receipt.get('receipt_verified') is True
+                    and receipt.get('request_attempted') is True
+                    and receipt.get('parking_decision') == 'WRONG_SPACE'
+                    and type(receipt.get('parking_usage_id')) is int
+                    and receipt['parking_usage_id'] == expected_usage
+                    and previous.get('expected_parking_usage_id') == expected_usage
+                    and previous['payload']['space_code'] != event['space_code'])
+                if corrected_space:
+                    from ai_vision.recognition.vehicle_contract import parse_detected_at
+                    corrected_space = (parse_detected_at(event['detected_at'])
+                                       > parse_detected_at(previous['payload']['detected_at']))
+                    if corrected_space:
+                        correction_source = previous['payload']['event_id']
         status = ('DISABLED' if not self.client.enabled else
-                  'HELD_RELEASE_REQUIRED' if event['plate_number'] in self._plates else 'IN_FLIGHT')
+                  'HELD_RELEASE_REQUIRED' if event['plate_number'] in self._plates and not corrected_space else 'IN_FLIGHT')
         record = {'track_id': candidate['track_id'], 'status': status,
                   'payload': deepcopy(event), 'receipt': None, 'automatic_retry_allowed': False}
         if expected_usage is not None:
             record['expected_parking_usage_id'] = expected_usage
+        if correction_source is not None:
+            record['correction_of_event_id'] = correction_source
         if 'identity_verification' in candidate:
             record['identity_verification'] = deepcopy(candidate['identity_verification'])
         self.records.append(record)
@@ -187,6 +220,7 @@ class SpaceMatchDeliveryFlow:
                 self._future = self._executor.submit(self.client.send, deepcopy(event))
             except Exception:
                 record['status'] = 'DELIVERY_UNKNOWN'
+                self.blocked = True
                 self._record = None
                 persist()
                 raise
@@ -201,9 +235,20 @@ class SpaceMatchDeliveryFlow:
         for record in reversed(self.records):
             if record['payload']['plate_number'] != plate:
                 continue
+            # 1. HTTP를 보내지 않은 억제 기록이 마지막 실제 응답을 가리지 않게 합니다.
+            if (record['status'] == 'HELD_RELEASE_REQUIRED' and record.get('receipt') is None
+                    and not record.get('blocking_reason')):
+                continue
             receipt = record.get('receipt') or {}
-            if (receipt.get('receipt_verified') is not True or receipt.get('parking_usage_id') != usage_id
-                    or record['status'] not in ('APPLIED', 'UNCHANGED')):
+            allowed = record['status'] in ('APPLIED', 'UNCHANGED') or (
+                record['status'] == 'HELD' and record.get('expected_parking_usage_id') == usage_id
+                and receipt.get('parking_decision') in ('WRONG_SPACE', 'NO_VALID_RESERVATION', 'UNDETERMINED'))
+            if (not allowed or record.get('blocking_reason')
+                    or receipt.get('receipt_verified') is not True or receipt.get('request_attempted') is not True
+                    or type(receipt.get('parking_usage_id')) is not int or receipt['parking_usage_id'] != usage_id
+                    or receipt.get('state') != record['status']
+                    or receipt.get('event_id') != record['payload']['event_id']
+                    or receipt.get('event_type') != record['payload']['event_type']):
                 return False
             self._links.pop(plate, None)
             self._plates.discard(plate)
@@ -239,6 +284,7 @@ class SpaceMatchDeliveryFlow:
                 self._future = self._executor.submit(self.release_client.send, deepcopy(event))
             except Exception:
                 record['status'] = 'DELIVERY_UNKNOWN'
+                self.blocked = True
                 self._record = None
                 persist()
                 raise

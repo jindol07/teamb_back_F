@@ -91,6 +91,26 @@ class SpaceMatchDeliveryTests(unittest.TestCase):
         self.addCleanup(flow.close, lambda: None)
         return flow
 
+    def test_handoff_usage_is_in_actual_sent_payload(self):
+        client = Mock(enabled=True)
+        client.send.return_value = {'state': 'HELD', 'request_attempted': True}
+        flow = self.flow(client)
+        candidate = self.candidate() | {'expected_parking_usage_id': 83}
+        flow.submit(candidate, 'expected-id', lambda: None)
+        flow.close(lambda: None)
+        self.assertEqual(client.send.call_args.args[0]['expected_parking_usage_id'], 83)
+        self.assertNotIn('expected_parking_usage_id', candidate['payload'])
+
+    def test_conflicting_payload_usage_prevents_network(self):
+        client = Mock(enabled=True)
+        flow = self.flow(client)
+        candidate = self.candidate() | {'expected_parking_usage_id': 83}
+        candidate['payload']['expected_parking_usage_id'] = 84
+        with self.assertRaises(ValueError):
+            flow.submit(candidate, 'conflict', lambda: None)
+        client.send.assert_not_called()
+        self.assertEqual(flow.records, [])
+
     def test_disabled_records_once_without_network(self):
         flow = self.flow()
         self.assertEqual(flow.submit(self.candidate(), 'stop1', lambda: None), 'DISABLED')
@@ -118,6 +138,94 @@ class SpaceMatchDeliveryTests(unittest.TestCase):
         flow.close(lambda: None)
         self.assertEqual(flow.records[0]['status'], 'APPLIED')
         client.send.assert_called_once()
+
+    def test_executor_failure_blocks_following_candidates_without_network(self):
+        client=Mock(enabled=True)
+        flow=self.flow(client)
+        flow._executor.submit=Mock(side_effect=RuntimeError('executor stopped'))
+        with self.assertRaises(RuntimeError):
+            flow.submit(self.candidate(),'first',lambda:None)
+        self.assertTrue(flow.blocked)
+        self.assertEqual(flow.records[0]['status'],'DELIVERY_UNKNOWN')
+        self.assertEqual(flow.submit(self.candidate(),'second',lambda:None),'BLOCKED')
+        client.send.assert_not_called()
+
+    def test_wrong_space_can_move_to_new_space_for_same_entry_only(self):
+        from concurrent.futures import wait
+        client=Mock(enabled=True)
+        def send(event):
+            decision='WRONG_SPACE' if event['space_code']=='1F-A01' else 'MATCHED'
+            return {'event_id':event['event_id'],'event_type':event['event_type'],
+                    'state':'HELD' if decision=='WRONG_SPACE' else 'APPLIED',
+                    'receipt_verified':True,'request_attempted':True,
+                    'parking_usage_id':83,'parking_decision':decision}
+        client.send.side_effect=send
+        flow=self.flow(client)
+        first=self.candidate()|{'expected_parking_usage_id':83}
+        self.assertEqual(flow.submit(first,'wrong-space',lambda:None),'IN_FLIGHT')
+        wait([flow._future]);flow.poll(lambda:None)
+        self.assertEqual(flow.submit(self.candidate()|{'expected_parking_usage_id':83},'same-space',lambda:None),'HELD_RELEASE_REQUIRED')
+        from ai_vision.parking.demo_session import valid_demo_delivery_shape,resolved_demo_delivery
+        # 미전송 억제에는 HTTP 응답이 없으므로 null을 그대로 보존합니다.
+        self.assertIsNone(flow.records[-1]['receipt'])
+        self.assertTrue(valid_demo_delivery_shape(flow.records[-1]))
+        self.assertTrue(resolved_demo_delivery(flow.records[-1]))
+        second=self.candidate()|{'expected_parking_usage_id':83}
+        second['payload']['space_code']='1F-A02'
+        second['payload']['detected_at']='2020-01-01T00:00:01+00:00'
+        self.assertEqual(flow.submit(second,'corrected-space',lambda:None),'IN_FLIGHT')
+        wait([flow._future]);flow.poll(lambda:None)
+        self.assertEqual(flow.records[-1]['status'],'APPLIED')
+        self.assertEqual(flow.records[-1]['correction_of_event_id'],first['payload']['event_id'])
+        third=self.candidate()|{'expected_parking_usage_id':83}
+        third['payload']['space_code']='1F-A03'
+        self.assertEqual(flow.submit(third,'after-success',lambda:None),'HELD_RELEASE_REQUIRED')
+        self.assertEqual(client.send.call_count,2)
+
+    def test_wrong_space_correction_rejects_unverified_changed_or_same_entry_evidence(self):
+        from concurrent.futures import wait
+        for change in ({'receipt_verified':False},{'request_attempted':False},
+                       {'parking_usage_id':84},{'parking_decision':'UNDETERMINED'},
+                       {'parking_decision':'NO_VALID_RESERVATION'}):
+            client=Mock(enabled=True)
+            client.send.side_effect=lambda event: {'event_id':event['event_id'],'event_type':event['event_type'],
+                'state':'HELD','receipt_verified':True,'request_attempted':True,
+                'parking_usage_id':83,'parking_decision':'WRONG_SPACE',**change}
+            flow=self.flow(client)
+            first=self.candidate()|{'expected_parking_usage_id':83}
+            flow.submit(first,'first',lambda:None);wait([flow._future]);flow.poll(lambda:None)
+            second=self.candidate()|{'expected_parking_usage_id':83}
+            second['payload']['space_code']='1F-A02'
+            with self.subTest(change=change):
+                self.assertEqual(flow.submit(second,'next',lambda:None),'HELD_RELEASE_REQUIRED')
+                self.assertEqual(client.send.call_count,1)
+        for expected,space in ((83,'1F-A01'),(84,'1F-A02')):
+            client=Mock(enabled=True)
+            client.send.side_effect=lambda event: {'event_id':event['event_id'],'event_type':event['event_type'],
+                'state':'HELD','receipt_verified':True,'request_attempted':True,
+                'parking_usage_id':83,'parking_decision':'WRONG_SPACE'}
+            flow=self.flow(client);flow.submit(self.candidate()|{'expected_parking_usage_id':83},'first',lambda:None)
+            wait([flow._future]);flow.poll(lambda:None)
+            second=self.candidate()|{'expected_parking_usage_id':expected};second['payload']['space_code']=space
+            self.assertEqual(flow.submit(second,'next',lambda:None),'HELD_RELEASE_REQUIRED')
+            self.assertEqual(client.send.call_count,1)
+
+    def test_same_or_older_observation_cannot_correct_wrong_space(self):
+        from concurrent.futures import wait
+        for detected in ('2019-12-31T23:59:59Z','2020-01-01T00:00:00Z','2020-01-01T09:00:00+09:00'):
+            client=Mock(enabled=True)
+            client.send.side_effect=lambda event: {'event_id':event['event_id'],'event_type':event['event_type'],
+                'state':'HELD','receipt_verified':True,'request_attempted':True,
+                'parking_usage_id':83,'parking_decision':'WRONG_SPACE'}
+            flow=self.flow(client)
+            flow.submit(self.candidate()|{'expected_parking_usage_id':83},'first',lambda:None)
+            wait([flow._future]);flow.poll(lambda:None)
+            second=self.candidate()|{'expected_parking_usage_id':83}
+            second['payload'].update(space_code='1F-A02',detected_at=detected)
+            with self.subTest(detected=detected):
+                self.assertEqual(flow.submit(second,'stale',lambda:None),'HELD_RELEASE_REQUIRED')
+                self.assertEqual(client.send.call_count,1)
+                self.assertNotIn('correction_of_event_id',flow.records[-1])
 
     def test_unknown_never_retries_or_reassigns_same_plate(self):
         client = Mock(enabled=True)
@@ -207,6 +315,57 @@ class SpaceReleaseFlowTests(unittest.TestCase):
         self.complete(flow)
         self.assertEqual(client.send.call_count, 2)
         release.send.assert_not_called()
+
+    def test_suppressed_record_does_not_hide_verified_exit_and_old_exit_cannot_clear_new_usage(self):
+        flow,client,release=self.setup_link()
+        # 기존 연결 뒤 다른 관찰은 미전송 억제로 남습니다.
+        self.assertEqual(flow.submit(self.candidate(),'suppressed',lambda:None),'BUSY')
+        # 해제 API를 쓰지 않는 handoff 모드의 억제 상태를 재현합니다.
+        release.enabled=False
+        self.assertEqual(flow.submit(self.candidate(),'suppressed',lambda:None),'HELD_RELEASE_REQUIRED')
+        self.assertTrue(flow.acknowledge_gate_exit('91소6408',70))
+        client.send.side_effect=lambda event: {'event_id':event['event_id'],'event_type':event['event_type'],
+            'state':'APPLIED','request_attempted':True,'receipt_verified':True,'parking_usage_id':71}
+        self.assertEqual(flow.submit(self.candidate()|{'expected_parking_usage_id':71},'next',lambda:None),'IN_FLIGHT')
+        self.complete(flow)
+        self.assertFalse(flow.acknowledge_gate_exit('91소6408',70))
+        self.assertTrue(flow.acknowledge_gate_exit('91소6408',71))
+        release.send.assert_not_called()
+
+    def test_exit_cannot_clear_second_cycle_while_new_match_is_in_flight(self):
+        import threading
+        flow,client,release=self.setup_link()
+        self.assertTrue(flow.acknowledge_gate_exit('91소6408',70))
+        release.enabled=False
+        started=threading.Event();finish=threading.Event()
+        self.addCleanup(finish.set)
+        def send(event):
+            started.set();finish.wait(5)
+            return {'event_id':event['event_id'],'event_type':event['event_type'],'state':'APPLIED',
+                    'receipt_verified':True,'request_attempted':True,'parking_usage_id':71}
+        client.send.side_effect=send
+        flow.submit(self.candidate()|{'expected_parking_usage_id':71},'second-cycle',lambda:None)
+        self.assertTrue(started.wait(1))
+        self.assertFalse(flow.acknowledge_gate_exit('91소6408',70))
+        self.assertFalse(flow.acknowledge_gate_exit('91소6408',71))
+        finish.set();self.complete(flow)
+        self.assertTrue(flow.acknowledge_gate_exit('91소6408',71))
+        self.assertEqual(client.send.call_count,2)
+
+    def test_verified_exit_clears_wrong_space_hold_but_unverified_receipt_does_not(self):
+        from ai_vision.recognition.vehicle_delivery_flow import SpaceMatchDeliveryFlow
+        for changed in ({},{'receipt_verified':False},{'request_attempted':False},{'parking_usage_id':71}):
+            with self.subTest(changed=changed):
+                client=Mock(enabled=True)
+                client.send.side_effect=lambda event: {'event_id':event['event_id'],'event_type':event['event_type'],
+                    'state':'HELD','request_attempted':True,'receipt_verified':True,'parking_usage_id':70,
+                    'parking_decision':'WRONG_SPACE',**changed}
+                flow=SpaceMatchDeliveryFlow(client)
+                self.addCleanup(flow.close,lambda:None)
+                flow.submit(self.candidate()|{'expected_parking_usage_id':70},'first',lambda:None)
+                self.complete(flow)
+                flow.submit(self.candidate()|{'expected_parking_usage_id':70},'suppressed',lambda:None)
+                self.assertEqual(flow.acknowledge_gate_exit('91소6408',70),not bool(changed))
 
     def test_release_enabled_requires_verified_usable_match_version(self):
         from ai_vision.recognition.vehicle_delivery_flow import SpaceMatchDeliveryFlow

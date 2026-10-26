@@ -158,7 +158,15 @@ class SingleVehicleHandoffReader:
                 raise ValueError('Invalid entry identity')
             identity = dict(active, owner_session_id=owner)
             if self._retained is not None and identity != self._retained:
-                raise ValueError('Active identity changed without verified exit')
+                # 1. B가 중간 EMPTY를 읽지 못했어도 이전 이용의 검증 출차가 있어야 전환합니다.
+                previous = self._retained
+                if (row['status'] != 'ACTIVE' or exited is None
+                        or any(exited[k] != previous[k] for k in ('parking_usage_id', 'plate_number'))
+                        or parse_detected_at(exited['detected_at']) < parse_detected_at(previous['detected_at'])
+                        or active['parking_usage_id'] == previous['parking_usage_id']
+                        or active['event_id'] == previous['event_id']
+                        or parse_detected_at(active['detected_at']) < parse_detected_at(exited['detected_at'])):
+                    raise ValueError('Active identity changed without verified exit')
             self._retained = identity
             # 유효 신원을 저장해도 A의 신호가 끊기면 새 구획 연결에는 사용하지 않습니다.
             if not fresh:
