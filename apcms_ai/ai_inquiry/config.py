@@ -44,9 +44,9 @@ def settings():
         "fee_path": os.getenv("FEES_PATH", "/api/maintenance"),
         "model": os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
         "embedding_model": os.getenv(
-            "LOCAL_EMBED_MODEL",
-            "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+            "GEMINI_EMBED_MODEL", "gemini-embedding-2",
         ),
+        "embedding_dimensions": int(os.getenv("GEMINI_EMBED_DIMENSIONS", "768")),
         "cors": [
             x.strip()
             for x in os.getenv(

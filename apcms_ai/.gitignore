@@ -24,6 +24,7 @@ env/
 results/
 # RAG 빌드 / 개발용 대화 DB
 ai_inquiry/chroma_db/
+ai_inquiry/chroma_db_gemini/
 ai_inquiry/mocks/*.sqlite3
 
 # Temporary local embedding index builds
