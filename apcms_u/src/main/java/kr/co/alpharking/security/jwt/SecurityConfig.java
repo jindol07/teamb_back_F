@@ -89,6 +89,7 @@ public class SecurityConfig {
                         .requestMatchers("/api/member/**").permitAll()
                         .requestMatchers("/uploads/**").permitAll() //이미지 경로도 열어줘야 한다.
                         .requestMatchers("/api/employees/**","/back/api/employees/**").permitAll()
+                        .requestMatchers("/api/notifications", "/api/notifications/**").permitAll()
                         // 주차 소켓은 첫 AUTH 메시지에서 JWT를 검증한다. 인증 전 현황 전송은 금지한다.
                         .requestMatchers(HttpMethod.GET, "/ws/parking/spaces").permitAll()
                         // 사용자 주차현황은 기존과 동일하게 로그인한 사용자만 조회한다.
@@ -106,7 +107,6 @@ public class SecurityConfig {
 
                         // 공지사항은 로그인한 사용자만 접근
                         .requestMatchers("/api/notice", "/api/notice/**").authenticated()
-                        
                         
                         
                         .anyRequest().authenticated()) // 모든 요청에 대해 인증을 요구
