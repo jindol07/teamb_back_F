@@ -5,8 +5,23 @@ from pathlib import Path
 
 
 def run_worker(role, config, run_dir, stop_event, heartbeat):
+    # 1. 전달 스레드를 만들기 전에 작업 프로세스부터 격리합니다.
     from ai_vision.parking.parking_process_scope import isolate_worker
     isolate_worker()
+    publisher = None
+    try:
+        if config.get("frame_export_dir"):
+            from ai_vision.parking.frame_exchange import FramePublisher
+            publisher = FramePublisher(Path(config["frame_export_dir"])/Path(run_dir).name,
+                role, config["gate_id" if role == "gate" else "parking_id"],
+                Path(run_dir).name, config.get("frame_export_fps", 2))
+        return _run_worker(role, config, run_dir, stop_event, heartbeat, publisher)
+    finally:
+        if publisher is not None:
+            publisher.close()
+
+
+def _run_worker(role, config, run_dir, stop_event, heartbeat, publisher):
     # 1. 관찰 모드에서는 기존 환경변수에 키가 있어도 송신을 활성화하지 않습니다.
     sending = config.get("delivery_enabled", False)
     if sending:
@@ -25,13 +40,13 @@ def run_worker(role, config, run_dir, stop_event, heartbeat):
             args.append("--preview")
         if sending:
             args += ["--enable-http", "--single-vehicle-handoff", "--boot-context-url", config["boot_context_url"]]
-        main(args, stop_event=stop_event, runtime_mode=True, on_frame=observed)
+        main(args, stop_event=stop_event, runtime_mode=True, on_frame=observed, on_raw_frame=publisher.submit if publisher is not None else None)
     else:
         from ai_vision.parking.run_parking_camera import run_camera
         report = run_camera(config["reference"], config["spaces_config"], run/"parking",
             camera_index=config["parking_camera"], preview=config.get("preview", False), enable_http=sending,
             allowed_codes=config["allowed_codes"] if sending else (), track_vehicles=True, enable_space_http=sending,
             camera_id=config["parking_id"], tracking_target="plate", tracking_imgsz=1280,
-            handoff_path=run/"gate"/"single_vehicle_handoff.json" if sending else None, stop_event=stop_event, runtime_mode=True, on_frame=observed)
+            handoff_path=run/"gate"/"single_vehicle_handoff.json" if sending else None, stop_event=stop_event, runtime_mode=True, on_frame=observed, on_raw_frame=publisher.submit if publisher is not None else None)
         if report["status"] not in ("STOPPED",):
             raise RuntimeError("주차 관찰이 종료됐습니다.")

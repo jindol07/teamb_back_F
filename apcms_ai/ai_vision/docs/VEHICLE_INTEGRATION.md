@@ -1,5 +1,8 @@
 # 입출차 연동과 중복 억제
 
+> 현재 실행·검증 기준은 [HANDOFF](HANDOFF.md#현재-실행-기준-2026-10-27)에 통합합니다. 배포는 Docker Compose + Jenkins이며 Kubernetes는 사용하지 않습니다. 수동 시연은 SPACE/Q, 승인된 `-ServerTrial`은 자동 시작/종료입니다. 2026-10-27 사용자 직접 실행에서 다른 자리→예약 자리→출차 및 시험 기록 정리가 성공했습니다. 아래 10월 26일 확인은 과거 기록입니다.
+
+
 > 2026-10-26 통합 확인: PR #104 반영 후 Redis 실행으로 관리자 로그인에 성공했고, 기존 입출차 기록과 AI 판정 빈 목록을 화면에서 확인했습니다. 이후 인증 만료가 발생해 지속 조회 검증은 미완료입니다. 토큰 자동 갱신은 로그인 담당 영역으로 분리하며 AI 기능 오류로 단정하거나 인증 코드를 우회하지 않습니다. 현재 새 판정 행을 만들기 위한 카메라/DB 시험은 하지 않았습니다. 배포 시 AWS11g 버전 컬럼·트리거 적용 여부와 장치/파일 공유 설정은 별도 확인이 필요합니다.
 
 
@@ -2032,3 +2035,35 @@ PRECHECK_OK도 실제 촬영·예약 검증 성공이 아닙니다. 현재는 �
 ### 서버+실제전송 단일 실행 결과 (2026-10-27)
 
 `-ServerTrial`의 current_20261027/e2e_manual_8e180300에서 원본success=true/18조건통과를 확인했습니다. SPACE 없이 서버기동→A/B준비→빈자리확인→시험기록생성→입차97→A-02다른자리/DB미연결→A-01정상/동일97연결→출차97→DONE후서버자동종료→시험18행정리/잔여0/기존이용4보존까지 한 실행입니다. B신원EMPTY,두작업종료0/0,runtimeSTOPPED이며 강제종료는 없었습니다. 전용시험8002·임시구획 범위의 성공이며 화재포함main:app·실제업무구획·장기운영·재시작복원·다중차량의 성공을 뜻하지 않습니다. 이전 카메라열기실패 회차253e88c5는 DB기록생성없음으로 종료했고 결과를 보존합니다.
+
+## 화재 담당 전달 명세: 주차 원본 프레임 v1
+
+이 절은 주차 송신 측 계약입니다. 화재 소스는 수정하지 않습니다. 동일 호스트 또는 같은 로컬 파일시스템을 공유한 컨테이너에서 사용하며 네트워크 영상 전송 규약이 아닙니다.
+
+- 설정: 주차 운영 JSON에 `frame_export_dir`(선택 경로), `frame_export_fps`(선택, 기본2, 0초과10이하)를 지정합니다. 경로 생략 시 전달하지 않습니다. 외부 폴더 대신 실행별 output 하위 경로 사용을 권장합니다.
+- 전달 위치는 `<frame_export_dir>/<run_id>/gate.frame` / `parking.frame`입니다. run_id는 주차 실행 폴더 이름이며 소비자는 지정한 현재 실행 폴더만 읽습니다. 원본 uint8 H×W×3 BGR, 크기 변경·JPEG 압축·표시 문구 없음.
+- 파일: ASCII `APCMSF1\n` 8바이트 + big-endian uint32 JSON 길이 + UTF-8 JSON + C 순서 BGR 바이트. 임시 파일 쓰기 후 os.replace로 교체합니다.
+- 메타데이터: version=1, role, camera_id(설정된 논리 ID), run_id(실행 폴더 ID), sequence(전달 표본 순번), captured_monotonic(동일 호스트 단조 시각), published_at_utc, shape, dtype=uint8, color=BGR, status=FRAME/CLOSED.
+- 상한 FPS는 카메라 FPS가 아닙니다. 주차 분석 루프가 읽은 원본만 전달하므로 실제 전달률은 분석 속도에 제한됩니다. 큐는 최신1장, 소비가 느려도 누적하지 않습니다.
+- 소비자는 `ai_vision.parking.frame_exchange.read_latest(path, max_age=3)`를 폴링합니다. 반환 None은 파일없음/종료/유효기간초과이며 감지 증거로 쓰지 않습니다. 손상·규격 불일치는 ValueError, 접근 오류는 OSError로 처리합니다. `(run_id, sequence)`가 같은 프레임은 다시 분석하지 않습니다.
+- 새 실행은 run_id가 바뀝니다. 소비자는 A/B 상태를 분리하고 이전 실행 상태를 새 프레임에 이월하지 않습니다. 정상 종료는 CLOSED, 강제 종료는 마지막 촬영 시각의 max_age 초과로 감지합니다. 화재 상태의 종료/유예 정책은 화재 담당이 구현합니다.
+- 송신 오류는 주차 감지를 중단시키지 않고 경고 기록으로 남깁니다. 소비자는 입력 만료를 별도로 표시해야 합니다. 공유 폴더는 신뢰된 프로세스만 읽고 쓰도록 권한을 제한하며 보존/삭제는 실행 결과 정책을 따릅니다.
+
+화재 담당 구현: read_latest에서 얻은 `(metadata, frame)`을 기존 화재 상태 누적·증거·전송 흐름에 주입하는 모드, 카메라별 상태 분리, 새 실행/중복/만료/종료 처리. 공유 모드에서는 VideoCapture와 장치 재연결을 사용하지 않아야 합니다. 현재 통합 앱의 같은 카메라 중복 차단은 유지하며, 화재 공유 입력 연동 후에만 별도 변경합니다.
+
+화재 소비자 사용 예시(소비자 프로세스에서 실행):
+
+```python
+from ai_vision.parking.frame_exchange import read_latest
+
+# 운영자가 지정한 현재 run_id 폴더. 두 카메라는 각각 호출합니다.
+sample = read_latest("/shared/frames/<run_id>/gate.frame", max_age=3)
+if sample is not None:
+    metadata, bgr_frame = sample
+    token = (metadata["run_id"], metadata["sequence"])
+    # token 중복 확인 후 기존 화재 파이프라인에 입력합니다.
+    # 화재 이벤트 상태/증거 저장/전송은 화재 담당 구현 범위입니다.
+```
+
+주차 운영 JSON 추가 예시: `"frame_export_dir": "shared_frames", "frame_export_fps": 2`.
+컨테이너 간 사용 시 같은 호스트의 로컬 볼륨을 송신 측 쓰기/소비 측 읽기로 연결합니다. 네트워크 파일시스템 및 서로 다른 호스트 간 monotonic 시계 비교는 지원 범위가 아닙니다. 현재 수동 시연 및 전용 ServerTrial은 이 전달 설정을 활성화하지 않으며, 일반 주차 runtime 경로에만 연결했습니다.

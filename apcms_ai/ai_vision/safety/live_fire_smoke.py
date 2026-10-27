@@ -36,6 +36,12 @@ class LiveConfig:
     # 1-1. 영상 입력: video_path가 없다면 로컬 카메라 사용
     camera_index: int = 0
     video_path: str | None = None
+    # SAFETY_SHARED_FRAME_INPUT_V1: 주차 A/B 공유 프레임. 직접 카메라를 열지 않습니다.
+    shared_run_dir: Path | None = None
+    shared_role: str | None = None
+    shared_camera_id: str | None = None
+    shared_max_age: float = 3.0
+    shared_max_silence: float = 12.0
     interval: float = 0.5
     conf: float = 0.20                  # 기존 공통 임계값 (호환 유지)
     fire_conf: float | None = None      # 미지정 시 conf 사용
@@ -79,6 +85,24 @@ class LiveConfig:
             raise ValueError("카메라 번호는 0 이상의 정수여야 합니다.")
         if self.video_path is not None and (not isinstance(self.video_path, str) or not self.video_path.strip()):
             raise ValueError("영상 파일 경로를 확인하세요.")
+        if self.shared_run_dir is not None:
+            if self.video_path is not None or self.shared_role not in ("gate", "parking"):
+                raise ValueError("공유 입력에서는 --video 대신 role=gate/parking을 지정하세요.")
+            if (not isinstance(self.shared_camera_id, str) or not self.shared_camera_id.strip()
+                    or len(self.shared_camera_id) > 128):
+                raise ValueError("공유 입력에는 예상 논리 camera_id가 필요합니다.")
+            # 3. Boot source.name 계약과 같은 문자·길이 제한을 모델 로드 전에 검사합니다.
+            source_name = f"{self.shared_role}.{self.shared_camera_id}"
+            if len(source_name) > 128 or any(c not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-" for c in source_name):
+                raise ValueError("공유 출처 이름은 영문·숫자·밑줄·점·하이픈 128자 이하여야 합니다.")
+            for key in ("shared_max_age", "shared_max_silence"):
+                val = getattr(self, key)
+                if type(val) not in (int, float) or not math.isfinite(val) or val <= 0:
+                    raise ValueError(f"{key}는 양의 유한한 시간(초)이어야 합니다.")
+            if self.shared_max_silence <= self.shared_max_age:
+                raise ValueError("공유 입력 대기시간은 프레임 만료시간보다 길어야 합니다.")
+        elif self.shared_role is not None or self.shared_camera_id is not None:
+            raise ValueError("공유 프레임 설정에는 shared_run_dir가 필요합니다.")
         for name in ("interval", "max_seconds", "cooldown"):
             value = getattr(self, name)
             if type(value) not in (int, float) or not math.isfinite(value) or (value <= 0 if name == "interval" else value < 0):
@@ -307,11 +331,31 @@ def run_live(config, *, model=None, capture=None, monotonic=None, capture_factor
         require_display()
 
     owned_model = model is None
+    # 공유 모드에서는 VideoCapture를 생성하지 않고 제공받은 원본 프레임만 읽습니다.
     factory = cv2.VideoCapture if capture_factory is None else capture_factory
     clock = time.monotonic if monotonic is None else monotonic
     writer = None
     candidate_handle = None
     window_opened = False
+    preview_frames = preview_wait_pumps = 0
+    last_preview_tick = None
+    preview_title = (f"{PREVIEW_TITLE} [{config.shared_role}:{config.shared_camera_id}]"
+                     if config.shared_run_dir is not None else PREVIEW_TITLE)
+
+    def preview_wait():
+        nonlocal window_opened, preview_wait_pumps
+        # 2. 수신 0장이어도 입력 대기 상태를 보이고 Q를 처리합니다.
+        preview_wait_pumps += 1
+        # 새 표본 사이에는 마지막 분석 화면을 유지하고 입력 만료 때만 대기로 전환합니다.
+        if last_preview_tick is not None and time.monotonic() - last_preview_tick <= config.shared_max_age:
+            return cv2.waitKey(1) & 0xFF != ord("q")
+        canvas = np.zeros((240, 640, 3), dtype=np.uint8)
+        cv2.putText(canvas, "WAITING FOR FRESH SHARED FRAME", (20, 65), cv2.FONT_HERSHEY_SIMPLEX, .7, (0, 255, 255), 2)
+        cv2.putText(canvas, f"{config.shared_role}:{config.shared_camera_id}", (20, 110), cv2.FONT_HERSHEY_SIMPLEX, .7, (255, 255, 255), 2)
+        cv2.putText(canvas, "Check parking runtime / current run_id. Q: stop", (20, 160), cv2.FONT_HERSHEY_SIMPLEX, .55, (255, 255, 255), 1)
+        cv2.imshow(preview_title, canvas)
+        window_opened = True
+        return cv2.waitKey(1) & 0xFF != ord("q")
     frame_count = sample_count = total_inference_ms = 0
     last_sample_sec = None
     status = "STOPPED"
@@ -345,6 +389,9 @@ def run_live(config, *, model=None, capture=None, monotonic=None, capture_factor
                   else RESULT_DIR / "safety" / "live" / session_id)
     output_dir.mkdir(parents=True, exist_ok=True)
     started_utc = datetime.now(timezone.utc).isoformat()
+    input_name = (f"{config.shared_role}.{config.shared_camera_id}"
+                  if config.shared_run_dir is not None else
+                  (Path(config.video_path).name if config.video_path else f"camera_{config.camera_index}"))
     # 실행 도중 생성하는 sidecar와 종료 summary가 같은 운영/시험 식별자를 사용합니다.
     record_type = "FIRE_SMOKE_LIVE_PRODUCTION" if config.production_camera else "FIRE_SMOKE_LIVE_TEST"
     # 4-1. 실시간 전송용 식별 정보는 시작 시점에만 선택적으로 기록합니다.
@@ -357,7 +404,7 @@ def run_live(config, *, model=None, capture=None, monotonic=None, capture_factor
         write_json_atomic(output_dir / "alert_session.json", {
             "record_type": record_type,
             "source": "VIDEO" if config.video_path else "CAMERA",
-            "source_name": Path(config.video_path).name if config.video_path else f"camera_{config.camera_index}",
+            "source_name": input_name,
             "started_at_utc": started_utc,
             "status": "RUNNING",
         })
@@ -385,6 +432,13 @@ def run_live(config, *, model=None, capture=None, monotonic=None, capture_factor
 
     def open_source():
         nonlocal capture, capture_open_attempts, camera_reconnect_attempts
+        if config.shared_run_dir is not None:
+            from ai_vision.safety.shared_frame_source import SharedFrameCapture
+            capture = SharedFrameCapture(config.shared_run_dir, config.shared_role,
+                config.shared_camera_id, max_age=config.shared_max_age,
+                max_silence=config.shared_max_silence,
+                on_wait=preview_wait if config.show else None)
+            return capture.isOpened()
         # 첫 번째 시도는 별도 연결 지연 없이 실행합니다.
         for attempt in range(config.camera_retries + 1 if config.video_path is None else 1):
             if attempt:
@@ -408,6 +462,9 @@ def run_live(config, *, model=None, capture=None, monotonic=None, capture_factor
         write_json_atomic(output_dir / "incident_history.json", {"transitions": transitions})
 
     try:
+        if config.show and config.shared_run_dir is not None:
+            if not preview_wait():
+                raise KeyboardInterrupt
         if config.save_candidates:
             candidate_handle = (output_dir / "detection_candidates.jsonl").open("w", encoding="utf-8", newline="\n")
 
@@ -423,7 +480,8 @@ def run_live(config, *, model=None, capture=None, monotonic=None, capture_factor
                 warmup_completed = True
         # 주입된 가짜/외부 모델은 자동 워밍업하지 않아 기존 테스트·호출자를 유지합니다.
         if not open_source():
-            status = "VIDEO_OPEN_FAILED" if config.video_path else "CAMERA_OPEN_FAILED"
+            status = ("SHARED_INPUT_UNAVAILABLE" if config.shared_run_dir is not None else
+                      ("VIDEO_OPEN_FAILED" if config.video_path else "CAMERA_OPEN_FAILED"))
         else:
             started_tick = clock()   # 모델 로드·워밍업·카메라 열기 시간은 관찰시간에서 제외
             if config.video_path is not None:
@@ -447,6 +505,12 @@ def run_live(config, *, model=None, capture=None, monotonic=None, capture_factor
                         status = "VIDEO_READ_FAILED" if bad_end else "VIDEO_END"
                         break
 
+                    if config.shared_run_dir is not None:
+                        # 입력 만료/CLOSED/손상 시 과거 프레임을 재사용하지 않고 사건을 종료.
+                        # 주차 카메라 장치 재연결은 시도하지 않습니다.
+                        status = "USER_INTERRUPTED" if capture.last_reason == "USER_INTERRUPTED" else "SHARED_INPUT_UNAVAILABLE"
+                        record_health("SHARED_INPUT_" + (capture.last_reason or "UNAVAILABLE"))
+                        break
                     camera_read_failures += 1
                     record_health("CAMERA_READ_FAILED")
                     recovered = False
@@ -554,7 +618,9 @@ def run_live(config, *, model=None, capture=None, monotonic=None, capture_factor
                         saved_video_segments.append(video_name)
                     writer.write(annotated)
                 if config.show:
-                    cv2.imshow(PREVIEW_TITLE, annotated)
+                    cv2.imshow(preview_title, annotated)
+                    preview_frames += 1
+                    last_preview_tick = time.monotonic()
                     window_opened = True
                     if cv2.waitKey(1) & 0xFF == ord("q"):
                         status = "USER_INTERRUPTED"
@@ -576,7 +642,7 @@ def run_live(config, *, model=None, capture=None, monotonic=None, capture_factor
             finally:
                 close_capture()
             if window_opened:
-                cv2.destroyWindow(PREVIEW_TITLE)
+                cv2.destroyWindow(preview_title)
             last_second = state.last_time if state.last_time is not None else 0.0
             end_changes = state.finish(last_second, frame_count, status)
             for change in end_changes:
@@ -587,9 +653,11 @@ def run_live(config, *, model=None, capture=None, monotonic=None, capture_factor
             summary = {
                 "record_type": record_type, "status": status,
                 "error_type": error_type, "source": "VIDEO" if config.video_path else "CAMERA",
-                "source_name": Path(config.video_path).name if config.video_path else f"camera_{config.camera_index}",
+                "source_name": input_name,
                 "started_at_utc": started_utc, "completed_at_utc": datetime.now(timezone.utc).isoformat(),
                 "captured_frames": frame_count, "inference_samples": sample_count,
+                "preview_requested": config.show, "preview_frames": preview_frames,
+                "preview_wait_pumps": preview_wait_pumps,
                 "suspected_events": len(events),
                 "average_inference_ms": round(total_inference_ms / sample_count, 2) if sample_count else None,
                 "model_load_ms": model_load_ms, "model_warmup_ms": model_warmup_ms,
@@ -632,6 +700,11 @@ def main(argv=None):
     source = parser.add_mutually_exclusive_group()
     source.add_argument("--camera", type=int, default=0, help="웹캠 번호 (기본값 0)")
     source.add_argument("--video", type=str, help="MP4 등 영상 파일 경로")
+    source.add_argument("--shared-run-dir", type=Path, help="주차 최신 프레임 실행 폴더(run_id). 카메라 재오픈 없음")
+    parser.add_argument("--shared-role", choices=("gate", "parking"))
+    parser.add_argument("--shared-camera-id", help="주차 설정의 gate_id 또는 parking_id")
+    parser.add_argument("--shared-max-age", type=float, default=3.0)
+    parser.add_argument("--shared-max-silence", type=float, default=12.0)
     parser.add_argument("--interval", type=float, default=0.5, help="추론 간격(초); 기본 0.5")
     parser.add_argument("--conf", type=float, default=0.20, help="공통 신뢰도 임계값 (기존 옵션; 기본 0.20)")
     parser.add_argument("--fire-conf", type=float, help="FIRE 신뢰도 기준 (미지정 시 --conf 사용)")
@@ -672,6 +745,9 @@ def main(argv=None):
     parser.add_argument("--output", type=Path, help="결과 저장 폴더")
     args = parser.parse_args(argv)
     config = LiveConfig(camera_index=args.camera, video_path=args.video, interval=args.interval,
+                        shared_run_dir=args.shared_run_dir, shared_role=args.shared_role,
+                        shared_camera_id=args.shared_camera_id, shared_max_age=args.shared_max_age,
+                        shared_max_silence=args.shared_max_silence,
                         conf=args.conf, fire_conf=args.fire_conf, smoke_conf=args.smoke_conf,
                         save_candidates=args.save_candidates, candidate_conf=args.candidate_conf,
                         iou=args.iou, image_size=args.imgsz, device=args.device,
@@ -688,7 +764,7 @@ def main(argv=None):
     report = run_live(config)
     print(f"[완료] {report['status']} | 수집 {report['captured_frames']}프레임 | "
           f"추론 {report['inference_samples']}회 | 의심 이벤트 {report['suspected_events']}건")
-    return 0 if report["status"] not in ("ERROR", "CAMERA_READ_FAILED", "CAMERA_OPEN_FAILED", "VIDEO_OPEN_FAILED", "VIDEO_READ_FAILED") else 1
+    return 0 if report["status"] not in ("ERROR", "CAMERA_READ_FAILED", "CAMERA_OPEN_FAILED", "VIDEO_OPEN_FAILED", "VIDEO_READ_FAILED", "SHARED_INPUT_UNAVAILABLE") else 1
 
 
 if __name__ == "__main__":

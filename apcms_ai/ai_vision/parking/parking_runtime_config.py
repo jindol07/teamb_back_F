@@ -17,8 +17,23 @@ def load_runtime_config(environment, *, check_safety=True):
     config = read_json(path, max_bytes=65536)
     required = {"gate_camera", "parking_camera", "gate_id", "parking_id", "down_direction",
                 "gate_config", "spaces_config", "reference", "allowed_codes", "boot_context_url", "output_dir"}
-    if not isinstance(config, dict) or not required <= set(config) <= required | {"delivery_enabled", "preview"}:
+    if not isinstance(config, dict) or not required <= set(config) <= required | {"delivery_enabled", "preview", "frame_export_dir", "frame_export_fps"}:
         raise ValueError("운영 주차 설정 항목을 확인하세요.")
+    # 3. 원본 전달은 경로를 명시한 경우에만 활성화합니다.
+    if "frame_export_fps" in config and "frame_export_dir" not in config:
+        raise ValueError("프레임 전달 경로가 필요합니다.")
+    if "frame_export_dir" in config:
+        import math
+        directory = config["frame_export_dir"]
+        fps = config.setdefault("frame_export_fps", 2)
+        if not isinstance(directory, str) or not directory.strip():
+            raise ValueError("프레임 전달 경로를 확인하세요.")
+        if type(fps) not in (int, float) or not math.isfinite(fps) or not 0 < fps <= 10:
+            raise ValueError("프레임 전달 FPS는 0초과10이하여야 합니다.")
+        export = (path.parent / directory).resolve()
+        if export.exists() and not export.is_dir():
+            raise ValueError("프레임 전달 경로는 폴더여야 합니다.")
+        config["frame_export_dir"] = str(export)
     config.setdefault("preview", False)
     if type(config["preview"]) is not bool:
         raise ValueError("preview는 명시적인 true/false여야 합니다.")
