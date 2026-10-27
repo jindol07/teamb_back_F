@@ -61,8 +61,10 @@ public class AuthTokenService {
             throw unauthorized("리프레시 토큰이 없습니다.");
         }
 
-        String username = refreshTokenRedisDao.consume(rawRefreshToken)
-                .orElseThrow(() -> unauthorized("리프레시 토큰이 유효하지 않습니다."));
+        String username = refreshTokenRedisDao
+        		.consume(rawRefreshToken)
+                .orElseThrow(() -> unauthorized(
+                		"리프레시 토큰이 유효하지 않습니다."));
 
         UserDetails user;
         try {
@@ -78,7 +80,8 @@ public class AuthTokenService {
         }
 
         Authentication authentication =
-                new UsernamePasswordAuthenticationToken(user, null, user.getAuthorities());
+                new UsernamePasswordAuthenticationToken(
+                		user, null, user.getAuthorities());
 
         return issue(authentication);
     }

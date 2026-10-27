@@ -71,53 +71,36 @@ public class SecurityConfig {
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         		http
                 .csrf((csrf) -> csrf.disable())
-                //리액트와 크로스 통신 및 리액트의 view를 사용 
                 .cors((cors) -> cors.configurationSource(corsConfigurationSource()))
                 .formLogin((login) -> login.disable())
                 .httpBasic((basic) -> basic.disable())
-            	//.authenticationProvider(daoAuthenticationProvider())
                 .authorizeHttpRequests((auth) -> auth
-                		// [error-handling] Forward server errors (500/400) to /error without auth.
-                		// Otherwise the real error is masked as 401 by the entry point.
                 		.dispatcherTypeMatchers(DispatcherType.ERROR).permitAll()
                 		.requestMatchers("/error").permitAll()
                 		.requestMatchers("/api/notice/**").permitAll()
-                        .requestMatchers("/api/auth/**").permitAll() // /api/auth/** 에서 오는 모든 요청은 허용
+                        .requestMatchers("/api/auth/**").permitAll()
                         .requestMatchers("/demos/**").permitAll() 
                         .requestMatchers("/api/gallery/**").permitAll()
                         .requestMatchers("/api/board/**").permitAll()
                         .requestMatchers("/api/member/**").permitAll()
-                        .requestMatchers("/uploads/**").permitAll() //이미지 경로도 열어줘야 한다.
+                        .requestMatchers("/uploads/**").permitAll()
                         .requestMatchers("/api/employees/**","/back/api/employees/**").permitAll()
                         .requestMatchers("/api/notifications", "/api/notifications/**").permitAll()
-                        // 주차 소켓은 첫 AUTH 메시지에서 JWT를 검증한다. 인증 전 현황 전송은 금지한다.
                         .requestMatchers(HttpMethod.GET, "/ws/parking/spaces").permitAll()
-                        // 사용자 주차현황은 기존과 동일하게 로그인한 사용자만 조회한다.
                         .requestMatchers(HttpMethod.GET, "/api/parking/spaces").authenticated()
-                        // AI 주차 추천은 로그인한 사용자만 요청할 수 있다.
                         .requestMatchers(HttpMethod.POST, "/api/recmn/recommend").authenticated()
-                        //.requestMatchers("/api/chatbot/**").permitAll()
-                        
-                        // Jenkins 배포 후 Health Check : 서버 가용성 확인 => 10/25
                         .requestMatchers("/actuator/health", "/actuator/health/**").permitAll()
-                        
-                        // 관리자 및 사용자 권한
                         .requestMatchers("/admin/**").hasAuthority("ADMIN")
                         .requestMatchers("/user/**").hasAuthority("OFFICE")
-
-                        // 공지사항은 로그인한 사용자만 접근
                         .requestMatchers("/api/notice", "/api/notice/**").authenticated()
-                        
-                        
-                        .anyRequest().authenticated()) // 모든 요청에 대해 인증을 요구
-                // JWT 토큰 필터 추가: JwtTokenFilter를 BasicAuthenticationFilter 전에 추가하여 JWT 토큰을 검증
-                .addFilterBefore(jwtTokenFilter, BasicAuthenticationFilter.class)
-                .exceptionHandling(handler -> handler.authenticationEntryPoint(jwtAuthenticationEntryPoint))
-                // 세션 정책 설정: SessionCreationPolicy.STATELESS로 설정하여 세션 기반 인증을 사용하지 않도록 한다.
-                .sessionManagement((session) -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
-                // 로그아웃 기능 비활성화: 상태를 유지하지 않는 인증 방식에서는 로그아웃이 필요 없다.
+                        .anyRequest().authenticated())
+                .addFilterBefore(jwtTokenFilter, 
+                		BasicAuthenticationFilter.class)
+                .exceptionHandling(handler -> handler
+                		.authenticationEntryPoint(jwtAuthenticationEntryPoint))
+                .sessionManagement((session) -> session
+                		.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .logout((logout) -> logout.disable());
-        		
         return http.build();
     }
     

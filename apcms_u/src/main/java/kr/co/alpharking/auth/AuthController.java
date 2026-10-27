@@ -64,9 +64,11 @@ public class AuthController {
 	public ResponseEntity<?> authenticateUser(@RequestBody AuthRequest authRequest) {
 	    try {
 	        Authentication authentication = authenticationManager.authenticate(
-	                new UsernamePasswordAuthenticationToken(authRequest.getUsername(), authRequest.getPassword()));
+	                new UsernamePasswordAuthenticationToken(
+	                		authRequest.getUsername(), authRequest.getPassword()));
 
-	        SecurityContextHolder.getContext().setAuthentication(authentication);
+	        SecurityContextHolder.getContext()
+	        	.setAuthentication(authentication);
 
 	        return ResponseEntity.ok(authTokenService.issue(authentication));
 	    } catch (AuthenticationException e) {
