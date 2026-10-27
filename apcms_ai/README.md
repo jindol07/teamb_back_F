@@ -14,8 +14,8 @@
 ## 로컬 실행
 Python 가상환경을 `apcms_ai`에 만들고 기존 비전 requirements와 RAG 라이브러리를 함께 설치합니다.
 ```bash
-python -m venv .venv312
-# Windows: .venv312\Scripts\activate
+python -m venv .venv
+# Windows: .venv\Scripts\activate
 # Linux: source .venv/bin/activate
 python -m pip install -r requirements.txt
 # .env.example 을 .env 로 복사하고 GOOGLE_API_KEY 설정
@@ -57,18 +57,15 @@ API 예시 POST `http://localhost:8000/api/inquiry/chat`
 ### AI 프로젝트 3개 파이썬 버전 3.12 통일!
 3.12 설치
 
-& "D:\finalProjectB\app\Python312\python.exe" -m venv .venv312
+& "D:\finalProjectB\app\Python312\python.exe" -m venv .venv
 
-.venv312\Scripts\Activate
+.venv\Scripts\Activate
 
 python -m pip install --upgrade pip
 
 python -m pip install -r requirements.txt
 
--- 기존 가상환경 제거
-Remove-Item -Recurse -Force .venv
-
--- 제거 완료: False
-Test-Path .venv
+가상환경 폴더 이름은 `.venv`이며 Python 버전은 3.12입니다.
+기존 가상환경을 사용 중이라면 삭제하지 말고 활성화해서 사용합니다.
 
 # AI ci/cd Test 10/25

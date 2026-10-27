@@ -1,0 +1,32 @@
+{
+  "schema_version": "1.0",
+  "alerts": [
+    {
+      "schema_version": "1.0",
+      "transition_id": "b79e49a9a2ad62b6e05e800e037769336eb8845f0dc5629790d99f05f4954dab",
+      "incident_id": "c692af2306a94f66a4e27a378e934856",
+      "region_id": "0411db1a317f4955aecd4a3221f5484d",
+      "hazard_type": "SMOKE",
+      "status": "SUSPECTED",
+      "observed_at_utc": "2026-10-23T05:46:08.898904+00:00",
+      "source_seconds": 1.0,
+      "frame_index": 51,
+      "confidence": 0.8861,
+      "bbox_xyxy": [
+        2,
+        12,
+        1919,
+        1053
+      ],
+      "hits_in_window": 3,
+      "reason": null,
+      "source": {
+        "kind": "VIDEO",
+        "name": "forest_smoke_video.mp4"
+      },
+      "session_started_at_utc": "2026-10-23T05:46:04.273820+00:00",
+      "is_test": true,
+      "requires_human_review": true
+    }
+  ]
+}

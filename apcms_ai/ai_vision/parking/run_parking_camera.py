@@ -26,6 +26,7 @@ def apply_parking_decisions(observations, records):
     from ai_vision.parking.parking_event_sender import convert_space_code
     for observation in observations:
         observation.pop('parking_decision', None)
+        observation.pop('reservation_check_status', None)
         if observation.get('status') != 'LOCAL_MATCH' or not observation.get('space_id'):
             continue
         try:
@@ -51,6 +52,10 @@ def apply_parking_decisions(observations, records):
                         or current_usage < 1 or current_usage != expected
                         or payload.get('expected_parking_usage_id') != current_usage):
                     continue
+            # 서버 전송을 끈 로컬 시험은 예약 판정 실패와 구분합니다.
+            if record.get('status') == 'DISABLED' and record.get('receipt') is None:
+                observation['reservation_check_status'] = 'NOT_REQUESTED'
+                break
             # 미전송 억제는 현재 이용의 마지막 실제 응답을 가리지 않습니다.
             if (record.get('status') == 'HELD_RELEASE_REQUIRED' and record.get('receipt') is None
                     and not record.get('blocking_reason')):
@@ -78,7 +83,7 @@ def apply_parking_decisions(observations, records):
 def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=60, preview=True,
                enable_http=False, allowed_codes=(), environment=None, previous_report=None,
                publish_results=False, camera_backend='default', track_vehicles=False,
-               vehicle_tracker=None, plate_reader=None, enable_space_http=False, camera_id=None, enable_space_release_http=False, tracking_target='vehicle', ocr_execution='auto', tracking_imgsz=None, handoff_path=None, verify_handoff_plate=False):
+               vehicle_tracker=None, plate_reader=None, enable_space_http=False, camera_id=None, enable_space_release_http=False, tracking_target='vehicle', ocr_execution='auto', tracking_imgsz=None, handoff_path=None, verify_handoff_plate=False, stop_event=None, runtime_mode=False, on_frame=None):
     # 1. 저장 경로와 입력을 먼저 확인하여 기존 운영 결과를 보호합니다.
     if type(camera_index) is not int or not 0 <= camera_index <= 99:
         raise ValueError('카메라 번호는 0~99 정수여야 합니다.')
@@ -173,7 +178,7 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
         created_output = True
         write_json_atomic(output_dir / 'parking_camera_check.json', report)
         # 2. 수동 시작을 기다린 뒤에만 측정 시계를 시작합니다.
-        if view is not None and view.wait_until_ready(capture) is None:
+        if view is not None and not runtime_mode and view.wait_until_ready(capture) is None:
             report['status'] = 'CANCELLED'
         else:
             wall_started = datetime.now(timezone.utc)
@@ -185,7 +190,10 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
             last_publish = started
             while True:
                 now = time.monotonic()
-                if now - started >= seconds:
+                if stop_event is not None and stop_event.is_set():
+                    report["status"] = "STOPPED"
+                    break
+                if not runtime_mode and now - started >= seconds:
                     report['status'] = 'COMPLETED' if processor.occupancy() is not None else 'INCOMPLETE'
                     break
                 if worker is not None and not worker.poll(lambda: checkpoint(output_dir, report, processor, delivery)):
@@ -197,7 +205,7 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
                 report['read_frames'] += 1
                 observed_seconds = ((frame_capture.captured_monotonic if frame_capture is not None
                                      else time.monotonic()) - started)
-                if frame_capture is not None and observed_seconds >= seconds:
+                if not runtime_mode and frame_capture is not None and observed_seconds >= seconds:
                     report['status'] = 'COMPLETED' if processor.occupancy() is not None else 'INCOMPLETE'
                     break
                 outcome = processor.process(frame, observed_seconds)
@@ -290,6 +298,8 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
                 if now - last_checkpoint >= 5:
                     checkpoint(output_dir, report, processor, delivery)
                     last_checkpoint = now
+                if on_frame is not None:
+                    on_frame()
                 if view is not None and view.show(frame, pending_http=worker.pending if worker is not None else 0) == ord('q'):
                     report['status'] = 'STOPPED'
                     break

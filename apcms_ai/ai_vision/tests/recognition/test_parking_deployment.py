@@ -1039,6 +1039,32 @@ class ParkingCameraTests(ParkingSceneFixture, unittest.TestCase):
                     self.assertLessEqual(call.args[2][0]+size[0],width)
                     self.assertLess(call.args[2][1],height)
 
+    def test_disabled_delivery_is_not_a_failed_reservation_decision(self):
+        from ai_vision.parking.run_parking_camera import apply_parking_decisions
+        row={'track_id':1,'space_id':'A-01','plate_number':'91소6408','status':'LOCAL_MATCH','parking_decision':'MATCHED'}
+        record={'track_id':1,'status':'DISABLED','payload':{'event_id':'local','event_type':'VEHICLE_SPACE_MATCH','plate_number':'91소6408','space_code':'1F-A01'},'receipt':None}
+        apply_parking_decisions([row],[record])
+        self.assertNotIn('parking_decision',row)
+        self.assertEqual(row['reservation_check_status'],'NOT_REQUESTED')
+        apply_parking_decisions([row|{'status':'WAIT_DWELL'}],[record])
+        changed=row|{'status':'WAIT_DWELL'}
+        apply_parking_decisions([changed],[record])
+        self.assertNotIn('reservation_check_status',changed)
+        pending=record|{'status':'IN_FLIGHT'}
+        apply_parking_decisions([row],[record,pending])
+        self.assertEqual(row['parking_decision'],'UNDETERMINED')
+        self.assertNotIn('reservation_check_status',row)
+
+    def test_disabled_delivery_preview_explains_reservation_not_checked(self):
+        from ai_vision.parking.parking_preview import ParkingPreview
+        view=ParkingPreview.__new__(ParkingPreview)
+        view._font_checked=True;view._font=None
+        view.vehicle_progress=[{'track_id':1,'box':[10,60,90,110],'space_id':'A-01','status':'LOCAL_MATCH','plate_number':'','reservation_check_status':'NOT_REQUESTED'}]
+        with patch('cv2.putText') as text:
+            view._draw_vehicles(np.zeros((120,600,3),dtype=np.uint8))
+        self.assertIn('RESERVATION NOT CHECKED',text.call_args.args[1])
+        self.assertNotIn('UNDETERMINED',text.call_args.args[1])
+
     def test_parking_decision_label_is_distinct_from_local_tracking_match(self):
         from ai_vision.parking.parking_preview import ParkingPreview
         view=ParkingPreview.__new__(ParkingPreview)
