@@ -13,7 +13,11 @@ public class ChatbotConversationRepository {
     public ChatbotConversationRepository(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
     @JsonNaming(PropertyNamingStrategies.LowerCamelCaseStrategy.class)
-    public record Message(String id, String senderTypeCode, String content) {}
+    public record Message(String id, String senderTypeCode, String content, String createdAt) {
+        public Message(String id, String senderTypeCode, String content) {
+            this(id, senderTypeCode, content, null);
+        }
+    }
     public record Exchange(long conversationId, String question, String answer,
                            String metadata, String questionMessageId, String answerMessageId) {}
 
@@ -173,14 +177,16 @@ public class ChatbotConversationRepository {
             SELECT
                 INQUIRY_MESSAGE_ID,
                 SENDER_TYPE_CODE,
-                MESSAGE_CONTENT
+                MESSAGE_CONTENT,
+                TO_CHAR(CREATED_AT, 'YYYY-MM-DD"T"HH24:MI:SS') AS MESSAGE_CREATED_AT
             FROM (
                 SELECT *
                 FROM (
                     SELECT
                         INQUIRY_MESSAGE_ID,
                         SENDER_TYPE_CODE,
-                        MESSAGE_CONTENT
+                        MESSAGE_CONTENT,
+                        CREATED_AT
                     FROM INQUIRY_MESSAGE
                     WHERE INQUIRY_CONVERSATION_ID = ?
                       AND SENDER_TYPE_CODE IN ('USER', 'AI')
@@ -193,7 +199,8 @@ public class ChatbotConversationRepository {
             (rs, row) -> new Message(
                 rs.getString("INQUIRY_MESSAGE_ID"),
                 rs.getString("SENDER_TYPE_CODE"),
-                rs.getString("MESSAGE_CONTENT")
+                rs.getString("MESSAGE_CONTENT"),
+                rs.getString("MESSAGE_CREATED_AT")
             ),
             conversationId
         );
