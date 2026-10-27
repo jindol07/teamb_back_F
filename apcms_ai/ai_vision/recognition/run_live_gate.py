@@ -44,7 +44,7 @@ def _create_http_client(enabled, context_url=None, env_file=None):
 
 
 def execute(capture, processor, session, seconds=20, max_frames=100000, monotonic_reader=None, performance_reader=None,
-            allow_source_end=False, deadline_reader=None, preview=None, start_cancelled=False, stop_event=None, runtime_mode=False, on_frame=None):
+            allow_source_end=False, deadline_reader=None, preview=None, start_cancelled=False, stop_event=None, runtime_mode=False, on_frame=None, on_raw_frame=None):
     reader = time.monotonic if monotonic_reader is None else monotonic_reader
     metrics = LiveGateMetrics(performance_reader)
     stop_reason, status, results, cleanup_errors, error_type = "FRAME_LIMIT", "STOPPED", [], 0, None
@@ -102,6 +102,8 @@ def execute(capture, processor, session, seconds=20, max_frames=100000, monotoni
             # 1. 파일 FPS가 아니라 카메라 read 직후의 세션 시각을 고정합니다.
             # 별도 수집 모드에서는 처리 시작 시각 대신 실제 카메라 읽기 직후 시각을 사용합니다.
             captured_time = capture.captured_monotonic if isinstance(capture, LatestFrameCapture) else reader()
+            if on_raw_frame is not None:
+                on_raw_frame(frame, captured_time)
             stamp = session.capture(index, captured_time)
             metrics.record_frame(stamp.elapsed_seconds)
             if not runtime_mode and stamp.elapsed_seconds >= seconds:
@@ -188,7 +190,7 @@ def _demo():
             "run_context": build_run_context(None, None, synthetic=True)}
 
 
-def main(argv=None, *, stop_event=None, runtime_mode=False, camera_backend="default", on_frame=None):
+def main(argv=None, *, stop_event=None, runtime_mode=False, camera_backend="default", on_frame=None, on_raw_frame=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--demo", action="store_true")
     parser.add_argument("--enable-http", action="store_true", help="실제 카메라의 확정 후보를 Boot로 전송")
@@ -286,7 +288,7 @@ def main(argv=None, *, stop_event=None, runtime_mode=False, camera_backend="defa
             options = {"preview": preview} if preview is not None else {}
             if not ready:
                 options["start_cancelled"] = True
-            report = {**execute(capture, processor, session, seconds=args.seconds, stop_event=stop_event, runtime_mode=runtime_mode, on_frame=on_frame, **options), "uses_synthetic_source": False}
+            report = {**execute(capture, processor, session, seconds=args.seconds, stop_event=stop_event, runtime_mode=runtime_mode, on_frame=on_frame, on_raw_frame=on_raw_frame, **options), "uses_synthetic_source": False}
         # 서버 주소·키는 결과에 남기지 않고 인식 위치만 구분합니다.
         report = {**report, "runtime_mode": runtime_mode, "run_context": context, "recognition_mode": "REMOTE_API" if args.vision_api_url else "LOCAL",
                   "tracking_target": args.tracking_target,

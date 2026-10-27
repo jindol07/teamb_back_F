@@ -181,6 +181,22 @@ class RuntimeTests(unittest.TestCase):
                 self.assertEqual(checked["reference"],str(root/"empty.png"))
                 self.assertFalse((root/"out").exists())
                 camera.assert_not_called();http.assert_not_called()
+            config["frame_export_dir"]="shared_frames"
+            path.write_text(json.dumps(config))
+            exported=load_runtime_config(env)
+            self.assertEqual(exported["frame_export_fps"],2)
+            self.assertEqual(exported["frame_export_dir"],str(root/"shared_frames"))
+            self.assertFalse((root/"shared_frames").exists())
+            (root/"not_a_folder").write_text("file")
+            config["frame_export_dir"]="not_a_folder";path.write_text(json.dumps(config))
+            with self.assertRaisesRegex(ValueError,"폴더"):
+                load_runtime_config(env)
+            config["frame_export_dir"]="shared_frames"
+            for fps in (True,0,11,float("nan")):
+                config["frame_export_fps"]=fps;path.write_text(json.dumps(config))
+                with self.assertRaises(ValueError):load_runtime_config(env)
+            config.pop("frame_export_fps")
+            path.write_text(json.dumps(config))
             self.assertFalse(checked["delivery_enabled"])
             env.pop("AI_OCCUPANCY_API_KEY")
             self.assertFalse(load_runtime_config(env)["delivery_enabled"])

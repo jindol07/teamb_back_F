@@ -248,3 +248,73 @@ class RunnerTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SharedPreviewTests(unittest.TestCase):
+    def test_waiting_window_without_input_and_q_cancel(self):
+        from ai_vision.safety.shared_frame_source import SharedFrameCapture
+        for role,keys,expected in [("gate",[-1,ord("q")],"USER_INTERRUPTED"),("parking",[-1],"SHARED_INPUT_UNAVAILABLE")]:
+            with self.subTest(role=role), tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);run=root/"run";run.mkdir()
+                config=LiveConfig(shared_run_dir=run,shared_role=role,shared_camera_id=role.upper(),show=True,shared_max_age=.01,shared_max_silence=.02,output_dir=root/"out")
+                ticks=[0.0]
+                def sleep(seconds):ticks[0]+=seconds
+                def source(*args,**kwargs):return SharedFrameCapture(*args,**kwargs,reader=lambda *a,**k:None,clock=lambda:ticks[0],sleeper=sleep)
+                key_calls=[]
+                def key(_):
+                    key_calls.append(1)
+                    return keys[min(len(key_calls)-1,len(keys)-1)]
+                with patch("ai_vision.camera_runtime.require_display"), patch("ai_vision.safety.shared_frame_source.SharedFrameCapture",side_effect=source), patch("cv2.VideoCapture") as camera, patch("cv2.imshow") as show, patch("cv2.waitKey",side_effect=key), patch("cv2.destroyWindow") as close:
+                    report=run_live(config,model=FakeModel())
+                    self.assertEqual(report["status"],expected)
+                    self.assertTrue(report["preview_requested"])
+                    self.assertGreaterEqual(report["preview_wait_pumps"],2)
+                    self.assertEqual(report["preview_frames"],0)
+                    self.assertIn(role+":"+role.upper(),show.call_args.args[0])
+                    camera.assert_not_called();close.assert_called_once()
+
+    def test_display_receives_actual_annotated_frame(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config=LiveConfig(show=True,max_frames=1,max_seconds=0,output_dir=Path(directory))
+            capture=FakeCapture(frames=1)
+            with patch("ai_vision.camera_runtime.require_display"), patch("cv2.imshow") as show, patch("cv2.waitKey",return_value=-1), patch("cv2.destroyWindow"):
+                report=run_live(config,model=FakeModel(),capture=capture)
+            displayed=show.call_args.args[1]
+            self.assertEqual(displayed.shape,(32,40,3))
+            self.assertGreater(int(np.count_nonzero(displayed)),0)
+            self.assertEqual(report["preview_frames"],1)
+            self.assertEqual(report["inference_samples"],1)
+
+    def test_between_shared_samples_keeps_analysis_view(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);run=root/"run";run.mkdir()
+            config=LiveConfig(shared_run_dir=run,shared_role="gate",shared_camera_id="A",show=True,output_dir=root/"out")
+            callback=[]
+            class Capture(FakeCapture):
+                last_reason="USER_INTERRUPTED"
+                def read(self):
+                    if self.frames:return True,self.frames.pop(0)
+                    callback[0]()
+                    return False,None
+            cap=Capture(frames=1)
+            def source(*args,**kwargs):callback.append(kwargs["on_wait"]);return cap
+            with patch("ai_vision.camera_runtime.require_display"),patch("ai_vision.safety.shared_frame_source.SharedFrameCapture",side_effect=source),patch("cv2.imshow") as show,patch("cv2.waitKey",return_value=-1),patch("cv2.destroyWindow"):
+                report=run_live(config,model=FakeModel())
+            self.assertEqual(report["preview_frames"],1)
+            self.assertEqual(show.call_count,2) # 최초 대기 + 분석 화면, 중간 대기 덮어쓰기 없음
+            self.assertEqual(report["preview_wait_pumps"],2)
+
+    def test_shared_source_name_matches_boot_contract(self):
+        import re
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);run=root/"run";run.mkdir()
+            config=LiveConfig(shared_run_dir=run,shared_role="parking",shared_camera_id="PARKING_B",max_frames=1,output_dir=root/"out")
+            with patch("ai_vision.safety.shared_frame_source.SharedFrameCapture",return_value=FakeCapture(frames=1)):
+                report=run_live(config,model=FakeModel())
+            self.assertEqual(report["source_name"],"parking.PARKING_B")
+            self.assertRegex(report["source_name"],r"^[a-zA-Z0-9_.-]{1,128}$")
+
+    def test_shared_invalid_boot_source_fails_before_models(self):
+        for camera in ["bad:camera","공유카메라","a"*128]:
+            with self.subTest(camera=camera), self.assertRaises(ValueError):
+                LiveConfig(shared_run_dir=Path("run"),shared_role="gate",shared_camera_id=camera)

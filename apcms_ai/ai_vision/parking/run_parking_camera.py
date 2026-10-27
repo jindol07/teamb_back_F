@@ -83,7 +83,7 @@ def apply_parking_decisions(observations, records):
 def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=60, preview=True,
                enable_http=False, allowed_codes=(), environment=None, previous_report=None,
                publish_results=False, camera_backend='default', track_vehicles=False,
-               vehicle_tracker=None, plate_reader=None, enable_space_http=False, camera_id=None, enable_space_release_http=False, tracking_target='vehicle', ocr_execution='auto', tracking_imgsz=None, handoff_path=None, verify_handoff_plate=False, stop_event=None, runtime_mode=False, on_frame=None):
+               vehicle_tracker=None, plate_reader=None, enable_space_http=False, camera_id=None, enable_space_release_http=False, tracking_target='vehicle', ocr_execution='auto', tracking_imgsz=None, handoff_path=None, verify_handoff_plate=False, stop_event=None, runtime_mode=False, on_frame=None, on_raw_frame=None):
     # 1. 저장 경로와 입력을 먼저 확인하여 기존 운영 결과를 보호합니다.
     if type(camera_index) is not int or not 0 <= camera_index <= 99:
         raise ValueError('카메라 번호는 0~99 정수여야 합니다.')
@@ -208,6 +208,8 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
                 if not runtime_mode and frame_capture is not None and observed_seconds >= seconds:
                     report['status'] = 'COMPLETED' if processor.occupancy() is not None else 'INCOMPLETE'
                     break
+                if on_raw_frame is not None:
+                    on_raw_frame(frame, started + observed_seconds)
                 outcome = processor.process(frame, observed_seconds)
                 if vehicle_observer is not None:
                     # 2-1. OCR 대기 중에도 다음 카메라 프레임과 차량 추적을 계속 처리합니다.
