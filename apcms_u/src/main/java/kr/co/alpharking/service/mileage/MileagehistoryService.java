@@ -24,8 +24,11 @@ public class MileagehistoryService {
     }
 
     @Transactional(readOnly = true)
-    public List<MileagehistoryDto> findAll() {
-        return mileagehistoryDao.findAll();
+    public List<MileagehistoryDto> findAll(Long officeId) {
+        if (officeId == null) {
+            throw new ResponseStatusException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다.");
+        }
+        return mileagehistoryDao.findAllByOfficeIdOrderByCreatedatDesc(officeId);
     }
 
     @Transactional(readOnly = true)

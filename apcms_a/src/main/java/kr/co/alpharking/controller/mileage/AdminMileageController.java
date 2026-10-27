@@ -69,7 +69,8 @@ public class AdminMileageController {
         if (request == null || request.officeId == null || request.officeId <= 0
                 || request.amount == null || request.amount <= 0
                 || request.mileageTypeCode == null
-                || !("ADMIN_REWARD".equals(request.mileageTypeCode) || "USE".equals(request.mileageTypeCode))
+                || !("ADMIN_REWARD".equals(request.mileageTypeCode) || "USE".equals(request.mileageTypeCode)
+                        || "ON_TIME_EXIT_REWARD".equals(request.mileageTypeCode))
                 || request.description == null || request.description.isBlank()) {
             throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "사무실, 유형, 양수 마일리지, 처리 사유를 확인해 주세요.");
         }
