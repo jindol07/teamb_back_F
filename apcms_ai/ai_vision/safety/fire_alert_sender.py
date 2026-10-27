@@ -190,6 +190,19 @@ def build_payloads(results_dir: Path, *, include_ongoing: bool = False,
 
 # 2. 외부 서버 전송 보호
 
+# APCMS 팀 AWS 시험용 HTTP 예외. 다른 외부 HTTP/운영 이벤트에는 적용하지 않습니다.
+_APCMS_AWS_TEST_HTTP_URL = "http://52.79.133.132:3000/admin-api/api/parking/ai/fire-alerts"
+
+
+def _allow_explicit_apcms_aws_test_http(url: str) -> bool:
+    """환경변수 명시 승인 + 시험 모드 + 정확한 목적지 URL 세 조건 모두 충족."""
+    return (
+        os.environ.get("SAFETY_TEST_AWS_HTTP", "").strip() == "1"
+        and os.environ.get("SAFETY_CAMERA_SEND_MODE", "test").strip().lower() == "test"
+        and url == _APCMS_AWS_TEST_HTTP_URL
+    )
+
+
 def validate_endpoint(url: str) -> str:
     """2-1. 기본 HTTPS만 허용하고 HTTP는 로컬 테스트 서버만 허용합니다."""
     parsed = urllib.parse.urlsplit(url)
@@ -197,7 +210,7 @@ def validate_endpoint(url: str) -> str:
         raise ValueError("유효한 HTTPS API 주소가 필요합니다.")
     if parsed.fragment or any(ch.isspace() for ch in url):
         raise ValueError("API 주소에 fragment나 공백을 포함할 수 없습니다.")
-    if parsed.scheme == "http" and parsed.hostname.lower() not in ("localhost", "127.0.0.1", "::1"):
+    if parsed.scheme == "http" and parsed.hostname.lower() not in ("localhost", "127.0.0.1", "::1") and not _allow_explicit_apcms_aws_test_http(url):
         raise ValueError("외부 HTTP는 허용하지 않습니다. HTTPS 또는 localhost HTTP를 사용하세요.")
     try:
         _ = parsed.port
