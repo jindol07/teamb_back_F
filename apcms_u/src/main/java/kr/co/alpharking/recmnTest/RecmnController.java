@@ -117,6 +117,10 @@ public class RecmnController {
                 .body(requestData)
                 .retrieve()
                 .body(new ParameterizedTypeReference<Map<String, Object>>() {});
+        
+        System.out.println("===== AI 추천 결과 =====");
+        System.out.println("officeId = " + officeId);
+        System.out.println("AI 응답 = " + aiResponse);
 
         Object rawRecommendations = aiResponse == null ? null : aiResponse.get("recommendations");
         if (!(rawRecommendations instanceof List<?> recommendationRows)) {
