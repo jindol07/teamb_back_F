@@ -37,7 +37,7 @@ def read_demo_phase(directory):
         return 'WAIT: SESSION STATUS UNAVAILABLE'
 
 
-def demo_guidance(phase):
+def demo_guidance(phase, *, auto_stop=False):
     """두 미리보기에서 공유하는 회차별 행동 안내(한글/글꼴 없을 때 영문)입니다."""
     cycle=re.match(r'^CYCLE ([12])/2 - (.*)$',phase)
     current=cycle.group(2) if cycle else phase
@@ -60,6 +60,15 @@ def demo_guidance(phase):
                if cycle and cycle.group(1)=='1' else '완료 안내가 나올 때까지 기다리세요. 아직 Q를 누르지 마세요.'),
               'Do NOT press Q after first exit. Wait for cycle 2.' if cycle and cycle.group(1)=='1'
               else 'Wait for DONE before pressing Q.')
+    elif current.startswith('AUTO:'):
+        action=('서버가 카메라와 빈자리를 확인 중입니다. SPACE를 누르지 마세요.',
+                'AUTO START: checking cameras and empty spaces. Do not press SPACE.')
+        stop=('두 화면을 비우고 입차 안내까지 기다리세요.',
+              'Keep both views empty until ENTRY instruction.')
+    elif current.startswith('4 DONE') and auto_stop:
+        action=('시험 완료입니다. 5초 뒤 서버와 두 카메라가 자동 종료됩니다.',
+                'DONE. Server and cameras will stop automatically in 5 seconds.')
+        stop=('Q를 누르지 말고 자동 종료를 기다리세요.', 'Wait for automatic shutdown. Do not press Q.')
     elif current.startswith('4 DONE'):
         action=('시험 완료입니다. 5초 기다린 뒤 두 창에서 각각 Q를 누르세요.',
                 'DONE. Wait 5 seconds, then press Q in EACH window.')

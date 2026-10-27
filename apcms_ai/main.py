@@ -47,3 +47,7 @@ def health_check():
         "service": "apcms-ai",
         "data_mode": settings()["mode"]
     }
+
+# 주차 자동 실행은 PARKING_RUNTIME_ENABLED=true일 때만 시작합니다.
+from ai_vision.parking.parking_runtime import install_parking_runtime
+install_parking_runtime(app)

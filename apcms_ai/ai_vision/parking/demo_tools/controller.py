@@ -30,6 +30,43 @@ def db(mode, usage=None):
         CAMERA_E2E_USAGE_ID='' if usage is None else str(usage)))
     if r.returncode:raise RuntimeError('DB '+mode+' failed: '+r.stderr[-2000:])
     return r.stdout.strip()
+
+def update_trial(report,prepared,started,*,automatic=False):
+    phase='AUTO: EMPTY CHECK / KEEP BOTH VIEWS EMPTY' if automatic else 'PREVIEW: PRESS SPACE IN EACH WINDOW / KEEP EMPTY'
+    if (not prepared and not (RUN/'stop_requested.flag').exists()
+                    and all((RUN/name).exists() for name in ('gate_started.flag','parking_started.flag','parking_ready.flag'))):
+        print(db('prepare'),flush=True);prepared=True;started=time.monotonic()
+        (RUN/'fixture_ready.flag').write_text('DB_FIXTURE_READY',encoding='utf-8')
+    if prepared:
+        try: rows=read_journal(RUN/'gate_http_journal.jsonl')
+        except OSError: rows=None
+        parking=read_snapshot(RUN/'parking/parking_camera_check.json')
+        if PROFILE['scenario']=='wrong_space_correction' and not report.get('wrong_space_unlinked_verified'):
+            deliveries=((parking or {}).get('vehicle_space') or {}).get('deliveries',[])
+            for row in deliveries:
+                usage=row.get('expected_parking_usage_id') if isinstance(row,dict) else None
+                if verified_demo_wrong_space(row,usage,PROFILE['plate_number']):
+                    inspection=db('inspect',usage)
+                    fields=dict(line.split('=',1) for line in inspection.splitlines() if '=' in line)
+                    if fields.get('TEST_USAGE_UNLINKED')!='1' or fields.get('WRONG_SPACE_LINKED_ROWS')!='0':
+                        raise RuntimeError('Wrong-space DB isolation failed')
+                    report['wrong_space_unlinked_verified']=True
+                    report['wrong_space_database_check']=inspection
+                    report['wrong_space_checked_event_id']=row['payload']['event_id']
+                    break
+        phase=('WAIT: HTTP JOURNAL UPDATE' if rows is None else
+               demo_phase(rows,parking,PROFILE['plate_number'],
+                          require_identity_verification=report['identity_verification_required'],
+                          correction_required=PROFILE['scenario']=='wrong_space_correction',
+                          wrong_space_unlinked=report.get('wrong_space_unlinked_verified',False),cycles=PROFILE.get('cycles',1)))
+        if phase.startswith('STOP:'):
+            report['stop_reason']=phase
+            (RUN/'stop_requested.flag').write_text(phase,encoding='utf-8')
+    if (RUN/'stop_requested.flag').exists() and not phase.startswith('STOP:'):phase='STOP: PRECHECK FAILED / NO RETRY'
+    (RUN/'phase.txt').write_text(phase,encoding='utf-8')
+    if started is not None and time.monotonic()-started>380:raise RuntimeError('Camera watchdog exceeded; inspect processes before cleanup')
+    return prepared,started,phase
+
 if __name__=='__main__':
     assert not MANIFEST.exists(),'Existing E2E manifest requires review'
     prepared=False
@@ -45,39 +82,7 @@ if __name__=='__main__':
                 (RUN/'stop_requested.flag').write_text('CHILD_FAILED',encoding='utf-8')
             if any(p.poll() is not None for p in children) and not prepared:
                 (RUN/'stop_requested.flag').write_text('PREPARATION_CANCELLED',encoding='utf-8')
-            phase='PREVIEW: PRESS SPACE IN EACH WINDOW / KEEP EMPTY'
-            if (not prepared and not (RUN/'stop_requested.flag').exists()
-                            and all((RUN/name).exists() for name in ('gate_started.flag','parking_started.flag','parking_ready.flag'))):
-                print(db('prepare'),flush=True);prepared=True;started=time.monotonic()
-                (RUN/'fixture_ready.flag').write_text('DB_FIXTURE_READY',encoding='utf-8')
-            if prepared:
-                try: rows=read_journal(RUN/'gate_http_journal.jsonl')
-                except OSError: rows=None
-                parking=read_snapshot(RUN/'parking/parking_camera_check.json')
-                if PROFILE['scenario']=='wrong_space_correction' and not report.get('wrong_space_unlinked_verified'):
-                    deliveries=((parking or {}).get('vehicle_space') or {}).get('deliveries',[])
-                    for row in deliveries:
-                        usage=row.get('expected_parking_usage_id') if isinstance(row,dict) else None
-                        if verified_demo_wrong_space(row,usage,PROFILE['plate_number']):
-                            inspection=db('inspect',usage)
-                            fields=dict(line.split('=',1) for line in inspection.splitlines() if '=' in line)
-                            if fields.get('TEST_USAGE_UNLINKED')!='1' or fields.get('WRONG_SPACE_LINKED_ROWS')!='0':
-                                raise RuntimeError('Wrong-space DB isolation failed')
-                            report['wrong_space_unlinked_verified']=True
-                            report['wrong_space_database_check']=inspection
-                            report['wrong_space_checked_event_id']=row['payload']['event_id']
-                            break
-                phase=('WAIT: HTTP JOURNAL UPDATE' if rows is None else
-                       demo_phase(rows,parking,PROFILE['plate_number'],
-                                  require_identity_verification=report['identity_verification_required'],
-                                  correction_required=PROFILE['scenario']=='wrong_space_correction',
-                                  wrong_space_unlinked=report.get('wrong_space_unlinked_verified',False),cycles=PROFILE.get('cycles',1)))
-                if phase.startswith('STOP:'):
-                    report['stop_reason']=phase
-                    (RUN/'stop_requested.flag').write_text(phase,encoding='utf-8')
-            if (RUN/'stop_requested.flag').exists() and not phase.startswith('STOP:'):phase='STOP: PRECHECK FAILED / NO RETRY'
-            (RUN/'phase.txt').write_text(phase,encoding='utf-8')
-            if started is not None and time.monotonic()-started>380:raise RuntimeError('Camera watchdog exceeded; inspect processes before cleanup')
+            prepared,started,phase=update_trial(report,prepared,started)
             time.sleep(.25)
         report['process_exit_codes']=[p.returncode for p in children]
     except BaseException as error:

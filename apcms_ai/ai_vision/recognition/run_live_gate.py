@@ -3,6 +3,7 @@
 """카메라 세션의 추적·OCR 루프. 명시적으로 설정한 경우에만 Boot로 전송합니다."""
 
 import argparse
+import itertools
 import os
 import time
 from datetime import datetime, timezone
@@ -43,7 +44,7 @@ def _create_http_client(enabled, context_url=None, env_file=None):
 
 
 def execute(capture, processor, session, seconds=20, max_frames=100000, monotonic_reader=None, performance_reader=None,
-            allow_source_end=False, deadline_reader=None, preview=None, start_cancelled=False):
+            allow_source_end=False, deadline_reader=None, preview=None, start_cancelled=False, stop_event=None, runtime_mode=False, on_frame=None):
     reader = time.monotonic if monotonic_reader is None else monotonic_reader
     metrics = LiveGateMetrics(performance_reader)
     stop_reason, status, results, cleanup_errors, error_type = "FRAME_LIMIT", "STOPPED", [], 0, None
@@ -59,6 +60,9 @@ def execute(capture, processor, session, seconds=20, max_frames=100000, monotoni
                         "crossing_elapsed_seconds": origin_stamp.elapsed_seconds,
                         "plate_consensus": passage["plate_consensus"], "sample_count": len(passage["samples"]),
                         "review_reasons": sample_review_reasons(passage["samples"])})
+        # 운영 중 전송 실패·처리 불명확 상태는 카메라만 정상처럼 계속 돌리지 않습니다.
+        if runtime_mode and decision.get("receipt_state") in ("DELIVERY_UNKNOWN", "AUTH_REQUIRED", "REJECTED"):
+            raise RuntimeError("입출차 전송 결과를 확인해야 합니다.")
         if preview is not None:
             summary = passage['plate_consensus']
             print(f"통과 차량 {passage['track_id']} / 화면 방향 {passage['screen_direction']} / 번호판 {summary['plate_number'] or '미확정'} / 합의 {summary['status']} / 전송 판단 {decision['decision']}", flush=True)
@@ -67,17 +71,21 @@ def execute(capture, processor, session, seconds=20, max_frames=100000, monotoni
                 type(max_frames) is not int or not 1 <= max_frames <= 100000 or type(allow_source_end) is not bool or
                 type(start_cancelled) is not bool):
             raise ValueError("실행 제한을 확인해 주세요.")
-        deadline = LiveGateDeadline(seconds, deadline_reader)
+        deadline = None if runtime_mode else LiveGateDeadline(seconds, deadline_reader)
         capture_failure = "CAMERA_OPEN_FAILED"
         if not capture.isOpened():
             raise ValueError("카메라를 열 수 없습니다.")
         capture_failure = None
         if start_cancelled:
             stop_reason = "USER_INTERRUPTED"
-        for index in range(0 if start_cancelled else max_frames):
+        for index in (() if start_cancelled else (itertools.count() if runtime_mode else range(max_frames))):
+            # 운영은 서버 종료 요청을 프레임 읽기 전에 확인합니다.
+            if stop_event is not None and stop_event.is_set():
+                stop_reason = "SERVER_SHUTDOWN"
+                break
             # 처리 중 제한을 넘겼다면 다음 프레임 수신을 시작하지 않습니다.
             # 별도 수집 모드의 물리 카메라는 finally에서 정리할 때까지 읽을 수 있습니다.
-            if deadline.before_read():
+            if deadline is not None and deadline.before_read():
                 stop_reason = "TIME_LIMIT"
                 break
             capture_failure = "CAMERA_READ_FAILED"
@@ -96,7 +104,7 @@ def execute(capture, processor, session, seconds=20, max_frames=100000, monotoni
             captured_time = capture.captured_monotonic if isinstance(capture, LatestFrameCapture) else reader()
             stamp = session.capture(index, captured_time)
             metrics.record_frame(stamp.elapsed_seconds)
-            if stamp.elapsed_seconds >= seconds:
+            if not runtime_mode and stamp.elapsed_seconds >= seconds:
                 stop_reason = "TIME_LIMIT"
                 break
             if preview is not None and not preview(frame):
@@ -118,6 +126,8 @@ def execute(capture, processor, session, seconds=20, max_frames=100000, monotoni
                 if not isinstance(processor, AsyncGateProcessor):
                     for passage in passages:
                         record_result(passage, stamp)
+            if on_frame is not None:
+                on_frame()
     except KeyboardInterrupt:
         stop_reason = "USER_INTERRUPTED"
     except Exception as error:
@@ -178,7 +188,7 @@ def _demo():
             "run_context": build_run_context(None, None, synthetic=True)}
 
 
-def main(argv=None):
+def main(argv=None, *, stop_event=None, runtime_mode=False, camera_backend="default", on_frame=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--demo", action="store_true")
     parser.add_argument("--enable-http", action="store_true", help="실제 카메라의 확정 후보를 Boot로 전송")
@@ -263,10 +273,11 @@ def main(argv=None):
         else:
             # 파일 경로·URL을 받지 않고 물리 카메라 정수 인덱스만 엽니다.
             import cv2
-            capture = cv2.VideoCapture(args.camera_index)
+            from ai_vision.camera_runtime import open_camera
+            capture = open_camera(args.camera_index, camera_backend) if runtime_mode else cv2.VideoCapture(args.camera_index)
             # 준비 화면은 별도 수집 스레드와 세션 시계보다 먼저 사용합니다.
             # 준비 프레임이 측정 세션에 섞이거나 오래된 시각으로 전달되지 않게 합니다.
-            ready = preview.wait_until_ready(capture) if preview is not None else True
+            ready = preview.wait_until_ready(capture) if preview is not None and not runtime_mode else True
             if args.buffered_capture:
                 capture = LatestFrameCapture(capture)
             # 카메라 생성에 걸린 시간도 촬영 시간과 프레임 시각에서 제외합니다.
@@ -275,9 +286,9 @@ def main(argv=None):
             options = {"preview": preview} if preview is not None else {}
             if not ready:
                 options["start_cancelled"] = True
-            report = {**execute(capture, processor, session, seconds=args.seconds, **options), "uses_synthetic_source": False}
+            report = {**execute(capture, processor, session, seconds=args.seconds, stop_event=stop_event, runtime_mode=runtime_mode, on_frame=on_frame, **options), "uses_synthetic_source": False}
         # 서버 주소·키는 결과에 남기지 않고 인식 위치만 구분합니다.
-        report = {**report, "run_context": context, "recognition_mode": "REMOTE_API" if args.vision_api_url else "LOCAL",
+        report = {**report, "runtime_mode": runtime_mode, "run_context": context, "recognition_mode": "REMOTE_API" if args.vision_api_url else "LOCAL",
                   "tracking_target": args.tracking_target,
                   "tracking_imgsz": args.tracking_imgsz if args.tracking_imgsz is not None else (1280 if args.tracking_target == "plate" else 640)}
         execution_finished = True

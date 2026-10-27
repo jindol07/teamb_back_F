@@ -1,7 +1,7 @@
 from pathlib import Path
 import cv2,time,os
 
-def main():
+def main(*, stop_event=None, on_frame=None, autostart=False):
     from ai_vision.parking.demo_session import load_demo_profile
     profile=load_demo_profile(os.environ['PARKING_DEMO_PROFILE_DIR'])
     backend=os.environ.get('PARKING_DEMO_CAMERA_BACKEND',profile['camera_backend'])
@@ -32,15 +32,15 @@ def main():
         guide_phase=read_demo_phase(root)
         if ((root/'parking_started.flag').exists() and not (root/'fixture_ready.flag').exists()
                 and not (root/'stop_requested.flag').exists()):
-            guide_phase='WAIT: BOTH WINDOWS START / KEEP EMPTY'
-        self.guidance=demo_guidance(guide_phase)
+            guide_phase='AUTO: EMPTY CHECK / KEEP EMPTY' if autostart else 'WAIT: BOTH WINDOWS START / KEEP EMPTY'
+        self.guidance=demo_guidance(guide_phase,auto_stop=autostart)
         return original_show(self,frame,*args,**kwargs)
     ParkingPreview.show=show
     native=camera.open_camera;state={'cap':None,'frame':None}
     class Capture:
         def __init__(self,native):self.native=native
         def read(self):
-            if (root/'stop_requested.flag').exists():raise RuntimeError('SAFETY_ABORT_REQUESTED')
+            if (root/'stop_requested.flag').exists():raise RuntimeError('TRIAL_ABORT_REQUESTED')
             ok,frame=self.native.read()
             if ok:state['frame']=frame.copy()
             return ok,frame
@@ -52,8 +52,8 @@ def main():
     camera.open_camera=capture
     original_ready=ParkingPreview.wait_until_ready
     def empty_start(self,capture,check_ready=None):
-        if original_ready(self,capture) is None:return None
-        (root/'parking_started.flag').write_text('SPACE_PRESSED',encoding='utf-8')
+        if not autostart and original_ready(self,capture) is None:return None
+        (root/'parking_started.flag').write_text('AUTO_STARTED' if autostart else 'SPACE_PRESSED',encoding='utf-8')
         from ai_vision.parking.parking_processor import ParkingOccupancyProcessor
         from ai_vision.parking.parking_realtime import detect_spaces
         reference=cv2.imread(str(profile['reference']))
@@ -75,6 +75,7 @@ def main():
                 (root/'parking_ready.flag').write_text('EMPTY_PREFLIGHT_PASSED',encoding='utf-8')
                 self.source_label='B READY / WAIT FOR BOTH START BUTTONS'
                 while not (root/'fixture_ready.flag').exists():
+                    if stop_event is not None and stop_event.is_set():return None
                     ok,frame=capture.read()
                     if not ok:raise RuntimeError('B preparation camera read failed')
                     if self.show(frame)==ord('q'):return None
@@ -86,7 +87,7 @@ def main():
                 handoff_path=root/'gate/single_vehicle_handoff.json',
                 verify_handoff_plate=os.environ.get('PARKING_DEMO_VERIFY_HANDOFF_PLATE')=='1',
                 enable_http=True,enable_space_http=True,
-                allowed_codes=list(mapping.values()),environment=env)
+                allowed_codes=list(mapping.values()),environment=env,stop_event=stop_event,on_frame=on_frame)
         if report['status'] in ('FAILED','INCOMPLETE'):
             raise RuntimeError('B camera did not complete safely: '+str(report.get('error_type')))
     finally:

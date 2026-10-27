@@ -25,6 +25,9 @@ def create_app():
     application.include_router(router)
     application.add_api_route("/health", health, methods=["GET"])
     application.add_api_route("/ready", ready, methods=["GET"])
+    # 3. 전용 서버도 같은 주차 수명주기를 사용하며 기본은 비활성입니다.
+    from ai_vision.parking.parking_runtime import install_parking_runtime
+    install_parking_runtime(application, check_safety=False)
     return application
 
 

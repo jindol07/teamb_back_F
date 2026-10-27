@@ -1,7 +1,15 @@
 from pathlib import Path
 import json,cv2,time,os
 
-def main():
+def automatic_gate_ready(view,capture):
+    # 자동 시작도 실제 첫 프레임 확인 전에는 DB 준비 신호를 만들지 않습니다.
+    if not capture.isOpened():raise RuntimeError('A camera open failed before fixture')
+    ok,frame=capture.read()
+    if not ok:raise RuntimeError('A first frame failed before fixture')
+    return view(frame)
+
+
+def main(*, stop_event=None, on_frame=None, autostart=False):
     from ai_vision.parking.demo_session import load_demo_profile
     profile=load_demo_profile(os.environ['PARKING_DEMO_PROFILE_DIR'])
     backend=os.environ.get('PARKING_DEMO_CAMERA_BACKEND',profile['camera_backend'])
@@ -41,7 +49,7 @@ def main():
         text=read_demo_phase(root)
         if ((root/'gate_started.flag').exists() and not (root/'fixture_ready.flag').exists()
                 and not (root/'stop_requested.flag').exists()):
-            text='WAIT: BOTH WINDOWS START / KEEP EMPTY'
+            text='AUTO: EMPTY CHECK / KEEP EMPTY' if autostart else 'WAIT: BOTH WINDOWS START / KEEP EMPTY'
         display=frame.copy();cv2.putText(display,text,(15,95),cv2.FONT_HERSHEY_SIMPLEX,.8,(0,255,255),2)
         gap=observed.get('gap_seconds',0)
         label=f"A inference {observed.get('inference_seconds',0):.2f}s / sample gap {gap:.2f}s"
@@ -56,7 +64,7 @@ def main():
             x1,y1,x2,y2=row['box'];cx=(x1+x2)//2;cy=(y1+y2)//2
             cv2.rectangle(display,(x1,y1),(x2,y2),(0,255,0),2);cv2.circle(display,(cx,cy),5,(0,255,255),-1)
             cv2.putText(display,f"ID {row['track_id']} / Y {cy}",(x1,max(20,y1-10)),cv2.FONT_HERSHEY_SIMPLEX,.6,(0,255,0),2)
-        display=draw_demo_guidance(display,demo_guidance(text))
+        display=draw_demo_guidance(display,demo_guidance(text,auto_stop=autostart))
         return original_show(self,display)
     LiveGatePreview.__call__=show
     native=cv2.VideoCapture;state={'cap':None,'frame':None}
@@ -75,7 +83,7 @@ def main():
             if index!=profile['gate_camera']:raise ValueError('Unexpected gate camera index')
             self.native=native(index,cv2.CAP_DSHOW if backend=='dshow' else cv2.CAP_MSMF);self.native.set(cv2.CAP_PROP_FRAME_WIDTH,1280);self.native.set(cv2.CAP_PROP_FRAME_HEIGHT,1024);state['cap']=self
         def read(self):
-            if (root/'stop_requested.flag').exists():raise RuntimeError('SAFETY_ABORT_REQUESTED')
+            if (root/'stop_requested.flag').exists():raise RuntimeError('TRIAL_ABORT_REQUESTED')
             ok,frame=self.native.read()
             if ok:(root/'gate_ready.flag').write_text('READY',encoding='utf-8')
             if ok:state['frame']=frame.copy()
@@ -84,16 +92,19 @@ def main():
         def __getattr__(self,k):return getattr(self.native,k)
     original_ready=LiveGatePreview.wait_until_ready
     def manual_start(self,capture):
-        if not original_ready(self,capture):return False
-        (root/'gate_started.flag').write_text('SPACE_PRESSED',encoding='utf-8')
+        if autostart:
+            if not automatic_gate_ready(self,capture):return False
+        elif not original_ready(self,capture):return False
+        (root/'gate_started.flag').write_text('AUTO_STARTED' if autostart else 'SPACE_PRESSED',encoding='utf-8')
         while not (root/'fixture_ready.flag').exists():
+            if stop_event is not None and stop_event.is_set():return False
             ok,frame=capture.read()
             if not ok:raise RuntimeError('A preparation camera read failed')
             if not self(frame):return False
         return True
     cv2.VideoCapture=Capture;LiveGatePreview.wait_until_ready=manual_start
     try:
-        execute(['--camera-index',str(profile['gate_camera']),'--camera-id',f"E2E_GATE_{profile['gate_camera']}",'--down-direction','ENTRY','--tracking-target','plate','--tracking-imgsz','960','--preview','--seconds',str(profile['seconds']),'--config',str(profile['gate_config']),'--output-dir',str(out),'--single-vehicle-handoff','--enable-http','--boot-context-url',profile['boot_context_url']])
+        execute(['--camera-index',str(profile['gate_camera']),'--camera-id',f"E2E_GATE_{profile['gate_camera']}",'--down-direction','ENTRY','--tracking-target','plate','--tracking-imgsz','960','--preview','--seconds',str(profile['seconds']),'--config',str(profile['gate_config']),'--output-dir',str(out),'--single-vehicle-handoff','--enable-http','--boot-context-url',profile['boot_context_url']],stop_event=stop_event,on_frame=on_frame)
     finally:
         if state['cap'] is not None:state['cap'].release()
         if state['frame'] is not None:
