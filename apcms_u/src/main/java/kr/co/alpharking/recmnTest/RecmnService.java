@@ -184,9 +184,8 @@ public class RecmnService {
             throw new IllegalStateException("AI 추천 구역에 예약 가능한 공간이 없습니다.");
         }
 
-        List<String> candidateZones = new ArrayList<>(candidatesByZone.keySet());
-        String selectedZoneCode = candidateZones.get(
-                ThreadLocalRandom.current().nextInt(candidateZones.size()));
+        // AI 추천 순위가 가장 높은 이용 가능한 구역 선택
+        String selectedZoneCode = candidatesByZone.keySet().iterator().next();
         List<Object[]> selectedZone = candidatesByZone.get(selectedZoneCode);
         Object[] selectedSpace = selectedZone.get(
                 ThreadLocalRandom.current().nextInt(selectedZone.size()));
