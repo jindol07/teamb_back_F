@@ -11,6 +11,34 @@ from ai_inquiry.mocks.repository import MockRepository
 from ai_inquiry.mocks.conversation_db import insert_exchange
 
 
+def mileage_history_answer(rows):
+    """개인 마일리지의 금액/내역은 생성 모델의 추측 없이 조회 값으로 안내합니다."""
+    if not rows:
+        return "조회된 마일리지 내역이 없습니다. 현재 잔액이 0이라는 의미는 아닙니다."
+    lines = [f"조회된 마일리지 내역은 총 {len(rows)}건입니다."]
+    if len(rows) > 20:
+        lines.append("최신순으로 받은 내역 중 앞의 20건을 표시합니다.")
+    for index, row in enumerate(rows[:20], 1):
+        amount = row.get("amount")
+        if isinstance(amount, str) and re.fullmatch(r"-?\d+", amount):
+            amount = int(amount)
+        if isinstance(amount, bool) or not isinstance(amount, int):
+            raise BackendError("마일리지 금액 응답 형식이 올바르지 않습니다.")
+        code = row.get("mileagetypecode")
+        # 기존 마일리지 화면과 동일하게 USE는 차감으로 표시합니다.
+        signed = -abs(amount) if code == "USE" else amount
+        kind = "사용/차감" if signed < 0 or code == "USE" else "적립" if signed > 0 else "변동 없음"
+        date = row.get("createdat")
+        description = row.get("description")
+        lines.extend([
+            "", f"{index}. {kind}: {signed:+,}점",
+            f"일시: {date if isinstance(date, str) and date else '정보 없음'}",
+            f"사유: {description if isinstance(description, str) and description else '정보 없음'}",
+        ])
+    lines.extend(["", "현재 보유 잔액은 별도 잔액 조회가 연결되지 않아 확인할 수 없습니다."])
+    return "\n".join(lines)
+
+
 async def generate_answer(question, context, history):
     if settings()["llm_mode"] == "STUB":
         # 테스트 전용: 모델 API 없이 파이프라인/DB/INSERT 검증
@@ -77,6 +105,7 @@ async def answer(
     category_list = cls["categories"]
     contexts = []
     sources = []
+    mileage_result = None
 
     # ====================================================
     # 개발용 예약 DB 조회 설정
@@ -179,10 +208,14 @@ async def answer(
 
             else:
                 # 기존 인증 기반 API 조회 기능 유지
-                if cat in ("MILEAGE", "FEE"):
+                if cat == "FEE":
                     contexts.append(f"[{cat}] 현재 본인 조회 API가 지원되지 않아 확인할 수 없습니다.")
                     continue
                 rows = await backend.get(cat, token)
+                if cat == "MILEAGE":
+                    mileage_result = mileage_history_answer(rows)
+                    sources.append({"source": "api:MILEAGE", "page": None})
+                    continue
                 data = {"scope": "최근 최대 50건, 기간 필터 미적용", "items": rows}
                 source = "api:" + cat
 
@@ -217,7 +250,12 @@ async def answer(
         # ====================================================
         # LLM 답변 생성
         # ====================================================
-        result = await generate_answer(question, "\n\n".join(contexts), history or "")
+        if mileage_result is not None and not contexts:
+            result = mileage_result
+        else:
+            result = await generate_answer(question, "\n\n".join(contexts), history or "")
+            if mileage_result is not None:
+                result += "\n\n" + mileage_result
 
     # ====================================================
     # 기존 대화 저장 기능 유지
