@@ -3,6 +3,7 @@ package kr.co.alpharking.controller.mileage;
 import java.util.List;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.RestController;
 
 import kr.co.alpharking.dto.mileage.MileagehistoryDto;
 import kr.co.alpharking.service.mileage.MileagehistoryService;
+import kr.co.alpharking.security.Office;
 
 @RestController
 @RequestMapping("/api/mileage/history")
@@ -27,8 +29,8 @@ public class MileageController {
     }
 
     @GetMapping
-    public List<MileagehistoryDto> findAll() {
-        return mileagehistoryService.findAll();
+    public List<MileagehistoryDto> findAll(@AuthenticationPrincipal Office office) {
+        return mileagehistoryService.findAll(office.getOffice_id());
     }
 
     @GetMapping("/{id}")
