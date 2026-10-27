@@ -40,7 +40,12 @@ def settings():
             "CHATBOT_SAVE_PATH", "api/chatbot/conversations/exchanges"
         ),
         "vehicle_path": os.getenv("CHATBOT_VEHICLES_PATH", "api/chatbot/me/vehicles"),
-        "mileage_path": os.getenv("MILEAGE_PATH", "/api/mileage"),
+        # 이전 기본값을 사용한 환경도 인증된 본인 내역 API로 연결합니다.
+        "mileage_path": (
+            "/api/mileage/history"
+            if os.getenv("MILEAGE_PATH", "/api/mileage/history").strip("/") == "api/mileage"
+            else os.getenv("MILEAGE_PATH", "/api/mileage/history")
+        ),
         "fee_path": os.getenv("FEES_PATH", "/api/maintenance"),
         "model": os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
         "embedding_model": os.getenv(
