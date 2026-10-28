@@ -1,7 +1,7 @@
 """실제 해제 이벤트를 보내지 않고 배포 API의 해제 기능 활성 여부를 확인합니다."""
 import requests
 from ai_vision.parking.parking_event_sender import _build_event_urls, _configured_api_key
-from ai_vision.parking.demo_tools.deployed_outcome import FixtureFailure
+from ai_vision.parking.demo_tools.deployed_sequence import FixtureFailure
 
 
 def require_release_enabled(context_url, environment, *, session_factory=None):

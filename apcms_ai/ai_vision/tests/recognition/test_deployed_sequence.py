@@ -86,7 +86,7 @@ class DeployedSequenceTests(unittest.TestCase):
 
 class TrialOutcomeTests(unittest.TestCase):
     def test_nonzero_worker_exit_and_delivery_stop_cannot_be_success(self):
-        from ai_vision.parking.demo_tools.deployed_outcome import final_completion_checks
+        from ai_vision.parking.demo_tools.deployed_sequence import final_completion_checks
         workers=[{'alive':False,'exit_code':0},{'alive':False,'exit_code':0}]
         report={'sequence_complete':True,'camera_continuity_verified':True,'parking_delivery_paused':True,
             'gate_fire_ack':True,'parking_fire_ack':True,'exit_db':{'USAGE_ROWS':'1','EXITED_ROWS':'1'},
@@ -101,37 +101,37 @@ class TrialOutcomeTests(unittest.TestCase):
         self.assertFalse(checks['parking_report_clean'])
         self.assertFalse(all(checks.values()))
     def test_known_backend_policy_mismatch_is_blocked_not_success(self):
-        from ai_vision.parking.demo_tools.deployed_outcome import result_exit_code,FixtureFailure
+        from ai_vision.parking.demo_tools.deployed_sequence import result_exit_code,FixtureFailure
         error=FixtureFailure('BACKEND_POLICY_CHANGED')
         report={'success':False,'error_code':error.code}
         self.assertEqual(result_exit_code(report),2)
         self.assertEqual(report['status'],'BLOCKED')
 
     def test_active_usage_message_is_safe_and_specific(self):
-        from ai_vision.parking.demo_tools.deployed_outcome import fixture_failure
+        from ai_vision.parking.demo_tools.deployed_sequence import fixture_failure
         error=fixture_failure('java.lang.IllegalStateException: Active usage exists; private-token')
         self.assertEqual(error.code,'ACTIVE_USAGE_EXISTS')
         self.assertIn('미출차',str(error));self.assertNotIn('private-token',str(error))
 
     def test_active_usage_ids_are_reported_without_raw_error(self):
-        from ai_vision.parking.demo_tools.deployed_outcome import fixture_failure
+        from ai_vision.parking.demo_tools.deployed_sequence import fixture_failure
         error=fixture_failure('ACTIVE_USAGE_IDS=37,38\nActive usage exists; password=hidden')
         self.assertIn('37,38',str(error));self.assertNotIn('hidden',str(error))
 
     def test_unknown_db_error_does_not_expose_stderr(self):
-        from ai_vision.parking.demo_tools.deployed_outcome import fixture_failure
+        from ai_vision.parking.demo_tools.deployed_sequence import fixture_failure
         error=fixture_failure('password=do-not-print')
         self.assertEqual(error.code,'DB_OPERATION_FAILED')
         self.assertNotIn('do-not-print',str(error))
 
     def test_user_cancel_is_incomplete_but_not_execution_failure(self):
-        from ai_vision.parking.demo_tools.deployed_outcome import result_exit_code
+        from ai_vision.parking.demo_tools.deployed_sequence import result_exit_code
         report={'success':False,'cancelled':True,'runtime_final':{'state':'STOPPED'}}
         self.assertEqual(result_exit_code(report),130)
         self.assertEqual(report['status'],'CANCELLED');self.assertFalse(report['success'])
 
     def test_cancel_with_cleanup_failure_remains_failure(self):
-        from ai_vision.parking.demo_tools.deployed_outcome import result_exit_code
+        from ai_vision.parking.demo_tools.deployed_sequence import result_exit_code
         for extra in ({'reservation_cleanup_error':'RuntimeError'},{'runtime_final':{'state':'FAILED'}},
                       {'fire_final':{'state':'FAILED'}}):
             report={'success':False,'cancelled':True,**extra}
@@ -139,7 +139,7 @@ class TrialOutcomeTests(unittest.TestCase):
             self.assertEqual(report['status'],'CANCELLED_WITH_CLEANUP_ERROR')
 
     def test_incomplete_execution_cannot_report_success(self):
-        from ai_vision.parking.demo_tools.deployed_outcome import result_exit_code
+        from ai_vision.parking.demo_tools.deployed_sequence import result_exit_code
         report={'success':False,'error_code':'ACTIVE_USAGE_EXISTS'}
         self.assertEqual(result_exit_code(report),2)
         self.assertEqual(report['status'],'BLOCKED')
