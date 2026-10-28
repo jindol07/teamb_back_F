@@ -621,3 +621,65 @@ REVIEW/OCR_FAILED 시 확대·그레이스케일·CLAHE 등의 전처리 후 재
 실행·검토·연동 내용은 해당 분야 설명서에 추가합니다. 기능별·커밋별 새 설명서를
 계속 만들지 않습니다. 과거 실험은 영상 분석 문서의 검증 기록에 남기고, 현재 상태와
 구분합니다. 코드 설명은 해당 Python 파일의 경로 주석과 한국어 설명 주석을 유지합니다.
+# 로컬 통합 서버에서 감지 결과를 배포 API에 전송
+
+현재 PC의 일반 실행 경로는 `.env`가 지정하는 `runtime.deployed.json`입니다.
+기존 `runtime.local.json`은 전송 없는 관찰 프로필로 보존합니다. 이름이 비슷하므로 구분해야 합니다.
+
+```powershell
+Set-Location 'D:\finalProjectB\back\apcms_ai'
+python -m uvicorn main:app --host 0.0.0.0 --port 8000
+```
+
+`main.py`가 다른 모듈보다 먼저 `.env`를 읽고, 이미 지정한 배포 환경변수는 덮어쓰지 않습니다.
+중복 카메라 사용을 막기 위해 서버는 하나만 실행하며 reload·복수 worker는 사용하지 않습니다.
+설정 변경은 현재 실행 중인 서버에 즉시 적용되지 않고 재시작 뒤 반영됩니다.
+
+| 설정 | 현재 로컬 값과 의미 |
+|---|---|
+| PARKING_RUNTIME_ENABLED | true |
+| PARKING_RUNTIME_CONFIG | 현재 보정 폴더의 runtime.deployed.json 전체 경로 |
+| VISION_REQUIRE_DEPLOYED_DELIVERY | true. 전송 계약이 빠지면 시작 전에 오류로 알림 |
+| SAFETY_CAMERA_AUTOSTART | false. 화재가 카메라를 직접 다시 열지 않음 |
+| SAFETY_SHARED_AUTOSTART | true |
+| SAFETY_SHARED_SEND_ENABLED / SEND_ROLE | true / both |
+| SAFETY_SHARED_ALLOW_TEST | true |
+| SAFETY_SHARED_ALERT_URL | 배포 관리자 API의 /api/parking/ai/fire-alerts |
+| SAFETY_TEST_AWS_HTTP / SAFETY_CAMERA_SEND_MODE | 1 / test. 기존의 정확한 시험 HTTP 주소 예외만 사용 |
+
+배포 프로필은 A=1번, B=0번, 미리보기·프레임 공유·주차 송신·구획 해제를 활성화하고,
+네 칸 A-01~A-04를 실제 지하3층 3F-A01~A04에 매핑합니다.
+현재 PC 기준 사진·좌표·모델과 인증 설정이 필요합니다. 다른 PC의 배포 준비를 자동으로 해결하는 파일은 아닙니다.
+인증키는 `.env`의 기존 AI_OCCUPANCY_API_KEY/PARKING_AI_API_KEY와 FIRE_ALERT_TOKEN을 사용하며 Git에 올리지 않습니다.
+
+## 실제로 저장되는 흐름
+
+배포 웹에서 사용자가 예약 → A 입차·OCR와 서버 이용 ID 확인 → B 점유·실제 위치 연결·예약 판정 →
+이동 시 이전 연결 해제·새 위치 연결 → A 출차·서버 이용 종료입니다.
+예약·차량·구획을 임의 생성하거나 예약을 자동 취소하는 시험 도우미는 호출하지 않습니다.
+실제 차량 번호와 예약·차량 등록·서버 업무 조건이 맞아야 처리되며, 현재 신원 전달은 한 대 조건입니다.
+
+화재는 A/B 원본 공유 입력을 동시에 분석해 사건 전이를 배포 API에 보내며 서버에 실제 저장됩니다.
+현재 주소는 HTTP이고 휴대전화 시험 영상을 사용하므로 is_test=true로 표시합니다.
+운영 FIRE 기록으로 위장하거나 외부 HTTP 보안 제한을 일반 해제하지 않습니다.
+이 상시 실행에는 통합 시험의 FIRE_A/FIRE_B 순서나 주차 송신 일시 중단이 없습니다.
+휴대전화가 주차 칸을 가리면 실제 점유로 전송될 수 있으므로 실제 주차 관찰과 구분해 배치해야 합니다.
+
+## 생존과 전송 성공을 구분해 확인
+
+- GET /health: 서버 UP과 vision.parking / vision.shared_safety 상태를 함께 반환.
+- GET /vision/parking/runtime: delivery=HTTP_ENABLED, space_release_enabled=true, gate/parking 두 작업자.
+- GET /vision/safety/shared-runtime: delivery=TEST_HTTP_ENABLED, send_role=both, records_are_test=true.
+- 설정 검사는 네트워크 성공·DB 저장을 보증하지 않습니다. 실행별 gate·parking 결과의 receipt와
+  shared_safety 각 역할의 fire_alert_sent_state.json을 확인하고 필요 시 서버 이력과 대조합니다.
+- 주차 송신은 처리 여부가 불명확하면 원본 근거를 보존하고 중단할 수 있습니다. 단순 HTTP 타임아웃을
+  미처리로 가정해 자동 재입차하지 않습니다. 중단된 이용을 임의 삭제하지 않습니다.
+
+2026-10-28 일반 main:app에서 실제 웹 예약29로 입차→A02 다른 자리→A01 정상 주차→출차를
+확인했습니다. 새 이용40과 각 단계의 응답을 AWS DB·관리자 화면으로 대조했고 예약은 유지했습니다.
+사용자 서버 종료 후 주차 A/B 종료코드0·공유 화재 중단 요청·미전송0건을 확인했습니다.
+기존 테스트 명령은 그대로 유지합니다. 이 실물 확인은 다중 차량·오탐 해결·장시간 복구 검증을 뜻하지 않습니다.
+
+현재 일반 전송 설정의 .env와 results 아래 보정 프로필은 Git 제외 대상입니다. 이 PC에서는 유지되지만
+다른 PC나 서버에는 모델·기준 이미지·구획 좌표·카메라 식별·인증 설정을 별도로 준비해야 합니다.
+Boot 화재 DAO의 한국 시간 저장 수정은 로컬 컴파일·검사만 통과했으며 배포 후 새 기록 확인이 남았습니다.

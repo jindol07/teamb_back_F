@@ -19,6 +19,7 @@ $settings=@{
     SAFETY_CAMERA_AUTOSTART='false'
     SAFETY_SHARED_AUTOSTART='true'
     SAFETY_SHARED_SEND_ENABLED='false'
+    VISION_REQUIRE_DEPLOYED_DELIVERY='false'
 }
 $previous=@{}
 foreach ($name in $settings.Keys) { $previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process') }

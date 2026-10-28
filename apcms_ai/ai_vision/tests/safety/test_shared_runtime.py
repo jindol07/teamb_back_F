@@ -10,6 +10,14 @@ def simulated_shared_worker(role,camera_id,shared_dir,output_dir,show,stop_event
 
 
 class SharedRuntimeTests(unittest.TestCase):
+    def test_nonzero_child_exit_is_not_hidden_by_normal_shutdown(self):
+        self.runtime.state='RUNNING'
+        child=Mock();child.is_alive.return_value=False;child.exitcode=1
+        self.runtime.processes=[child]
+        self.runtime.stop()
+        self.assertEqual(self.runtime.state,'FAILED')
+        self.assertEqual(self.runtime.reason,'SHARED_SAFETY_CHILD_EXITED')
+
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.config=dict(frame_export_dir=self.tmp.name,gate_id='GATE_A',parking_id='PARKING_B',preview=False)

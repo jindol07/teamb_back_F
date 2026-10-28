@@ -20,6 +20,61 @@ def _fake_camera_worker(role, config, run_dir, stop_event, heartbeat):
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_normal_workers_forward_live_http_handoff_and_release_without_fixture(self):
+        from ai_vision.parking.parking_runtime_worker import _run_worker
+        config=dict(delivery_enabled=True,enable_space_release_http=True,preview=True,
+                    gate_camera=1,parking_camera=0,gate_id='GATE_A',parking_id='PARKING_B',
+                    down_direction='ENTRY',gate_config='gate.json',reference='empty.png',
+                    spaces_config='spaces.json',allowed_codes=['3F-A01','3F-A02','3F-A03','3F-A04'],
+                    boot_context_url='https://example.test/admin-api')
+        with patch.dict('os.environ',{'SAFETY_SHARED_AUTOSTART':'true'}), \
+             patch('ai_vision.parking.parking_event_sender._configured_api_key',return_value='private-key'), \
+             patch('ai_vision.recognition.run_live_gate.main') as gate, \
+             patch('ai_vision.parking.run_parking_camera.run_camera',return_value={'status':'STOPPED'}) as parking:
+            for role in ('gate','parking'):
+                _run_worker(role,config,'run',threading.Event(),SimpleNamespace(value=0),None)
+            args=gate.call_args.args[0]
+            self.assertIn('--enable-http',args);self.assertIn('--single-vehicle-handoff',args)
+            self.assertEqual(args[args.index('--camera-index')+1],'1')
+            kwargs=parking.call_args.kwargs
+            self.assertTrue(kwargs['enable_http'] and kwargs['enable_space_http'] and kwargs['enable_space_release_http'])
+            self.assertEqual(kwargs['camera_index'],0)
+            self.assertEqual(kwargs['handoff_path'],Path('run/gate/single_vehicle_handoff.json'))
+            self.assertEqual(kwargs['allowed_codes'],config['allowed_codes'])
+
+    def test_live_server_rejects_disabled_delivery_before_existing_lifespan(self):
+        from contextlib import asynccontextmanager
+        events=[]
+        @asynccontextmanager
+        async def original(app):
+            events.append('started')
+            yield
+        app=FastAPI(lifespan=original)
+        with patch.dict('os.environ',{'VISION_REQUIRE_DEPLOYED_DELIVERY':'true'}), \
+             patch('ai_vision.safety.shared_monitor_preflight.check_deployed_monitor',side_effect=ValueError('전송 비활성')):
+            install_parking_runtime(app)
+            with self.assertRaisesRegex(ValueError,'전송 비활성'):
+                with TestClient(app):pass
+        self.assertEqual(events,[])
+
+    def test_live_server_exposes_parking_and_shared_delivery_status(self):
+        runtime=ParkingRuntime();runtime.start=Mock();runtime.stop=Mock();runtime.load_config=Mock(return_value=None)
+        runtime.delivery_enabled=True;runtime.space_release_enabled=True
+        runtime.configured_cameras={'gate':1,'parking':0}
+        with patch.dict('os.environ',{'VISION_REQUIRE_DEPLOYED_DELIVERY':'true'}), \
+             patch('ai_vision.safety.shared_monitor_preflight.check_deployed_monitor',return_value={'gate_camera':1,'parking_camera':0}), \
+             patch('ai_vision.safety.shared_runtime.SharedSafetyRuntime') as shared:
+            shared.return_value.snapshot=lambda:{'delivery':'TEST_HTTP_ENABLED','send_role':'both'}
+            app=FastAPI();install_parking_runtime(app,runtime=runtime)
+            with TestClient(app) as client:
+                status=client.get('/vision/parking/runtime').json()
+                self.assertEqual(status['delivery'],'HTTP_ENABLED')
+                self.assertTrue(status['space_release_enabled'])
+                self.assertEqual(status['camera_indices'],{'gate':1,'parking':0})
+                fire=client.get('/vision/safety/shared-runtime').json()
+                self.assertEqual(fire['send_role'],'both')
+        runtime.start.assert_called_once();runtime.stop.assert_called_once()
+
     def test_shutdown_with_nonzero_child_exit_is_failed(self):
         runtime=ParkingRuntime();runtime.state='RUNNING'
         child=Mock(exitcode=1);child.is_alive.return_value=False

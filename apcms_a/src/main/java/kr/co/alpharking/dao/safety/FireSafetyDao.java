@@ -10,6 +10,7 @@ import org.springframework.stereotype.Repository;
 /** Oracle 11g/21c JdbcTemplate DAO. 새 업무 테이블은 생성하지 않습니다. */
 @Repository
 public class FireSafetyDao {
+    // 1. 감지 시각과 같은 한국 시간으로 저장합니다. DB 서버의 UTC 설정에 의존하지 않습니다.
     private final JdbcTemplate jdbc;
     public FireSafetyDao(JdbcTemplate jdbc) { this.jdbc = jdbc; }
 
@@ -47,7 +48,7 @@ public class FireSafetyDao {
               AI_DETECTION_EVENT_ID, SOURCE_EVENT_HASH, DETECTED_AT, CREATED_AT,
               DETECTED_OBJECT_CODE, OBJECT_CONFIDENCE, RISK_LEVEL_CODE,
               DETECTED_X, DETECTED_Y, RAW_PAYLOAD
-            ) VALUES (?, ?, ?, SYSDATE, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, CAST(SYSTIMESTAMP AT TIME ZONE 'Asia/Seoul' AS DATE), ?, ?, ?, ?, ?, ?)
             """, eventId, eventHash, at, hazard, confidence, risk, x, y, raw);
     }
 
@@ -114,7 +115,7 @@ public class FireSafetyDao {
               INCIDENT_TYPE_CODE, RISK_LEVEL_CODE, INCIDENT_STATUS_CODE,
               DETECTION_COUNT, FIRST_DETECTED_AT, LAST_DETECTED_AT,
               CREATED_AT, UPDATED_AT
-            ) VALUES (?, ?, NULL, ?, ?, ?, ?, 'RECEIVED', 1, ?, ?, SYSDATE, SYSDATE)
+            ) VALUES (?, ?, NULL, ?, ?, ?, ?, 'RECEIVED', 1, ?, ?, CAST(SYSTIMESTAMP AT TIME ZONE 'Asia/Seoul' AS DATE), CAST(SYSTIMESTAMP AT TIME ZONE 'Asia/Seoul' AS DATE))
             """, id, groupHash, eventId, eventId, hazard, risk, at, at);
     }
     public void updateIncident(long id, long eventId, String risk, Timestamp at) {
@@ -126,7 +127,7 @@ public class FireSafetyDao {
                    RISK_LEVEL_CODE = CASE WHEN RISK_LEVEL_CODE='HIGH' OR ?='HIGH' THEN 'HIGH'
                                           WHEN RISK_LEVEL_CODE='MEDIUM' OR ?='MEDIUM' THEN 'MEDIUM'
                                           ELSE 'LOW' END,
-                   UPDATED_AT = SYSDATE
+                   UPDATED_AT = CAST(SYSTIMESTAMP AT TIME ZONE 'Asia/Seoul' AS DATE)
              WHERE SAFETY_INCIDENT_ID = ?
             """, eventId, at, risk, risk, id);
     }
@@ -136,7 +137,7 @@ public class FireSafetyDao {
             INSERT INTO NOTIFICATION (
               NOTIFICATION_ID, OFFICE_ID, ADMIN_ID, NOTIFICATION_TYPE_CODE,
               TITLE, CONTENT, READ_YN, CREATED_AT, SAFETY_INCIDENT_ID
-            ) SELECT SEQ_NOTIFICATION.NEXTVAL, NULL, a.ADMIN_ID, ?, ?, ?, 'N', SYSDATE, ?
+            ) SELECT SEQ_NOTIFICATION.NEXTVAL, NULL, a.ADMIN_ID, ?, ?, ?, 'N', CAST(SYSTIMESTAMP AT TIME ZONE 'Asia/Seoul' AS DATE), ?
                 FROM ADMIN a WHERE a.STATUS_CODE = ?
             """, notificationType, title, content, incidentId, adminStatus);
     }
