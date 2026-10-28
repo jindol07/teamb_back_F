@@ -1,0 +1,34 @@
+{
+  "checked_on": "2026-10-27",
+  "local_model": "ai_vision/models/fire_smoke.pt",
+  "size_bytes": 6229802,
+  "sha256": "b91633799ceb052c814b4f8b77a37efc9a40f002d528df97d74463585fa4f28f",
+  "repository": "rabahdev/fire-smoke-yolov8n",
+  "revision": "13017fe8af477c25f5298d168e2dfede4b000753",
+  "filename": "best.pt",
+  "file_url": "https://huggingface.co/rabahdev/fire-smoke-yolov8n/blob/13017fe8af477c25f5298d168e2dfede4b000753/best.pt",
+  "model_card_url": "https://huggingface.co/rabahdev/fire-smoke-yolov8n",
+  "match_method": "local SHA256 equals public LFS SHA256; no remote weight loaded",
+  "model_card_claims": {
+    "architecture": "YOLOv8n",
+    "dataset": "D-Fire",
+    "base": "COCO pretrained yolov8n.pt",
+    "epochs": 50,
+    "imgsz": 640,
+    "batch": 16,
+    "train_count": 14122,
+    "val_count": 3099,
+    "test_count": 4306,
+    "license": "AGPL-3.0"
+  },
+  "checkpoint_names": {
+    "0": "smoke",
+    "1": "fire"
+  },
+  "confirmed_download_channel": false,
+  "notes": [
+    "Identical bytes also found in nobita111222/fire-smoke-yolov8n/best.pt; its usage points to rabahdev.",
+    "The repository identification does not prove which site the user originally downloaded from.",
+    "Checkpoint validation metrics and published test metrics are not APCMS field accuracy."
+  ]
+}

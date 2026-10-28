@@ -64,7 +64,8 @@ def main(*, stop_event=None, on_frame=None, autostart=False):
             x1,y1,x2,y2=row['box'];cx=(x1+x2)//2;cy=(y1+y2)//2
             cv2.rectangle(display,(x1,y1),(x2,y2),(0,255,0),2);cv2.circle(display,(cx,cy),5,(0,255,255),-1)
             cv2.putText(display,f"ID {row['track_id']} / Y {cy}",(x1,max(20,y1-10)),cv2.FONT_HERSHEY_SIMPLEX,.6,(0,255,0),2)
-        display=draw_demo_guidance(display,demo_guidance(text,auto_stop=autostart))
+        if os.environ.get('PARKING_DEMO_HIDE_GUIDANCE')!='1':
+            display=draw_demo_guidance(display,demo_guidance(text,auto_stop=autostart))
         return original_show(self,display)
     LiveGatePreview.__call__=show
     native=cv2.VideoCapture;state={'cap':None,'frame':None}

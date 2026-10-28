@@ -8,6 +8,7 @@ param(
     [switch]$VerifyHandoffPlate,
     [switch]$ServerTrial,
     [switch]$Prepare,
+    [switch]$HideGuidance,
     [switch]$CheckOnly
 )
 $ErrorActionPreference = 'Stop'
@@ -35,11 +36,13 @@ $oldProfile = $env:PARKING_DEMO_PROFILE_DIR
 $oldRun = $env:PARKING_DEMO_RUN_DIR
 $oldVerifyIdentity = $env:PARKING_DEMO_VERIFY_HANDOFF_PLATE
 $oldCameraBackend = $env:PARKING_DEMO_CAMERA_BACKEND
+$oldHideGuidance = $env:PARKING_DEMO_HIDE_GUIDANCE
 try {
     try { $ownsMutex = $mutex.WaitOne(0) }
     catch [System.Threading.AbandonedMutexException] { $ownsMutex = $true }
     if (-not $ownsMutex) { throw 'Another demo is running. Close it before retrying.' }
     $env:PYTHONPATH = $aiRoot
+    $env:PARKING_DEMO_HIDE_GUIDANCE = if ($HideGuidance) { '1' } else { '0' }
     $env:PARKING_DEMO_PROFILE_DIR = $baseDir
     $env:PARKING_DEMO_VERIFY_HANDOFF_PLATE = if ($VerifyHandoffPlate) { '1' } else { '0' }
     $preflight = & $pythonExe -m ai_vision.parking.demo_session --status $baseDir --check-profile
@@ -121,6 +124,7 @@ finally {
     $env:PARKING_DEMO_RUN_DIR = $oldRun
     $env:PARKING_DEMO_VERIFY_HANDOFF_PLATE = $oldVerifyIdentity
     $env:PARKING_DEMO_CAMERA_BACKEND = $oldCameraBackend
+    $env:PARKING_DEMO_HIDE_GUIDANCE = $oldHideGuidance
     if ($ownsMutex) { $mutex.ReleaseMutex() }
     $mutex.Dispose()
 }

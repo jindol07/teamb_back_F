@@ -46,6 +46,7 @@ class LiveConfig:
     conf: float = 0.20                  # 기존 공통 임계값 (호환 유지)
     fire_conf: float | None = None      # 미지정 시 conf 사용
     smoke_conf: float | None = None     # 미지정 시 conf 사용
+    smoke_confirm_conf: float | None = None  # 새 사건·재발생의 연속 근거에만 적용
     candidate_conf: float = 0.20        # 후보 기록용 YOLO 최저 임계값
     save_candidates: bool = False       # 후보 기록은 명시적으로 켠 경우에만 저장
     iou: float = 0.45
@@ -107,9 +108,9 @@ class LiveConfig:
             value = getattr(self, name)
             if type(value) not in (int, float) or not math.isfinite(value) or (value <= 0 if name == "interval" else value < 0):
                 raise ValueError(f"{name} 설정은 유효한 시간(초)이어야 합니다.")
-        for name in ("conf", "fire_conf", "smoke_conf", "candidate_conf", "iou"):
+        for name in ("conf", "fire_conf", "smoke_conf", "smoke_confirm_conf", "candidate_conf", "iou"):
             value = getattr(self, name)
-            if value is None and name in ("fire_conf", "smoke_conf"):
+            if value is None and name in ("fire_conf", "smoke_conf", "smoke_confirm_conf"):
                 continue
             if type(value) not in (int, float) or not math.isfinite(value) or not 0 < value < 1:
                 raise ValueError(f"{name}은 0과 1 사이여야 합니다.")
@@ -315,7 +316,7 @@ def warmup_fire_smoke_model(model, config):
 
 
 # 4. 실시간 감지 실행기: 모델 한 번 로드, 주기적 추론, 기본 로컬 기록만 수행
-def run_live(config, *, model=None, capture=None, monotonic=None, capture_factory=None):
+def run_live(config, *, model=None, capture=None, monotonic=None, capture_factory=None, stop_event=None, on_detections=None):
     """영상 분석 및 원본 입력 연결 상태를 함께 관리합니다.
 
     capture_factory는 카메라 재연결 테스트를 위한 선택적 주입 지점입니다.
@@ -381,7 +382,8 @@ def run_live(config, *, model=None, capture=None, monotonic=None, capture_factor
     def new_state():
         return FireEventStateManager(config.window, config.min_hits, config.clear_after,
                                      config.cooldown, region_iou=config.region_iou,
-                                     heartbeat_seconds=config.heartbeat, max_regions=config.max_regions)
+                                     heartbeat_seconds=config.heartbeat, max_regions=config.max_regions,
+                                     smoke_confirm_conf=config.smoke_confirm_conf)
 
     state = new_state()
     session_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "_" + uuid.uuid4().hex[:8]
@@ -437,7 +439,8 @@ def run_live(config, *, model=None, capture=None, monotonic=None, capture_factor
             capture = SharedFrameCapture(config.shared_run_dir, config.shared_role,
                 config.shared_camera_id, max_age=config.shared_max_age,
                 max_silence=config.shared_max_silence,
-                on_wait=preview_wait if config.show else None)
+                on_wait=lambda: (False if stop_event is not None and stop_event.is_set()
+                                 else preview_wait() if config.show else True))
             return capture.isOpened()
         # 첫 번째 시도는 별도 연결 지연 없이 실행합니다.
         for attempt in range(config.camera_retries + 1 if config.video_path is None else 1):
@@ -489,6 +492,9 @@ def run_live(config, *, model=None, capture=None, monotonic=None, capture_factor
                 video_fps = fps_value if math.isfinite(fps_value) and fps_value > 0 else 25.0
 
             while True:
+                if stop_event is not None and stop_event.is_set():
+                    status = "STOP_REQUESTED"
+                    break
                 if config.max_frames and frame_count >= config.max_frames:
                     status = "MAX_FRAMES"
                     break
@@ -496,6 +502,9 @@ def run_live(config, *, model=None, capture=None, monotonic=None, capture_factor
                 # 기존 mock clock의 호출횟수를 바꾸지 않도록 정상 프레임에서는 기존 로직을 사용합니다.
                 success, frame = capture.read()
                 if not success or frame is None or getattr(frame, "size", 0) == 0:
+                    if stop_event is not None and stop_event.is_set():
+                        status = "STOP_REQUESTED"
+                        break
                     if config.video_path is not None:
                         # 프레임 메타데이터가 신뢰할 만한 경우에만 비정상 EOF를 구분합니다.
                         total = float(capture.get(cv2.CAP_PROP_FRAME_COUNT))
@@ -561,6 +570,8 @@ def run_live(config, *, model=None, capture=None, monotonic=None, capture_factor
                                                   fire_conf=config.fire_conf, smoke_conf=config.smoke_conf,
                                                   candidate_conf=config.candidate_conf if config.save_candidates else None,
                                                   candidates_out=candidates)
+                    if on_detections is not None:
+                        on_detections(frame,detections,getattr(capture,"last_metadata",None))
                     sample_count += 1
                     if candidates is not None:
                         candidate_samples += 1
@@ -670,6 +681,7 @@ def run_live(config, *, model=None, capture=None, monotonic=None, capture_factor
                 "saved_video_segments": saved_video_segments,
                 "conf": config.conf, "fire_conf": config.thresholds["FIRE"],
                 "smoke_conf": config.thresholds["SMOKE"], "iou": config.iou,
+                "smoke_confirm_conf": config.smoke_confirm_conf,
                 "interval_seconds": config.interval,
                 "saved_candidates": config.save_candidates,
                 "candidate_conf": config.candidate_conf if config.save_candidates else None,
@@ -709,6 +721,8 @@ def main(argv=None):
     parser.add_argument("--conf", type=float, default=0.20, help="공통 신뢰도 임계값 (기존 옵션; 기본 0.20)")
     parser.add_argument("--fire-conf", type=float, help="FIRE 신뢰도 기준 (미지정 시 --conf 사용)")
     parser.add_argument("--smoke-conf", type=float, help="SMOKE 신뢰도 기준 (미지정 시 --conf 사용)")
+    parser.add_argument("--smoke-confirm-conf", type=float,
+                        help="새 SMOKE 사건·재발생의 연속 확정 기준. 기존 사건 관찰 기준은 유지")
     parser.add_argument("--save-candidates", action="store_true", help="수용·제외된 탐지 후보를 JSONL로 저장")
     parser.add_argument("--candidate-conf", type=float, default=0.20,
                         help="후보 저장을 위한 최저 YOLO 신뢰도 (기본 0.20; 클래스 기준 이하여야 함)")
@@ -749,6 +763,7 @@ def main(argv=None):
                         shared_camera_id=args.shared_camera_id, shared_max_age=args.shared_max_age,
                         shared_max_silence=args.shared_max_silence,
                         conf=args.conf, fire_conf=args.fire_conf, smoke_conf=args.smoke_conf,
+                        smoke_confirm_conf=args.smoke_confirm_conf,
                         save_candidates=args.save_candidates, candidate_conf=args.candidate_conf,
                         iou=args.iou, image_size=args.imgsz, device=args.device,
                         window=args.window, min_hits=args.min_hits, clear_after=args.clear_after,

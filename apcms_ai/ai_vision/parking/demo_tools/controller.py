@@ -20,13 +20,18 @@ def read_journal(path):
 sys.path.insert(0,str(ROOT/'apcms_ai'))
 from ai_vision.parking.demo_session import finalize_trial
 
-children=[];logs=[];report={'scope':'REAL_TWO_CAMERAS_HTTP_SHARED_ORACLE','schema_changed':False,
+children=[];logs=[];tails=[];report={'scope':'REAL_TWO_CAMERAS_HTTP_SHARED_ORACLE','schema_changed':False,
     'scenario':PROFILE['scenario'],'cycles':PROFILE.get('cycles',1),'match_contract_version':2,'expected_plate_number':PROFILE['plate_number'],
     'camera_backend':os.environ.get('PARKING_DEMO_CAMERA_BACKEND',PROFILE['camera_backend']),
     'gate_camera':PROFILE['gate_camera'],'parking_camera':PROFILE['parking_camera'],
     'identity_verification_required':os.environ.get('PARKING_DEMO_VERIFY_HANDOFF_PLATE')=='1'}
 def db(mode, usage=None):
-    r=subprocess.run(['java','-cp',CP,'CameraE2EFixture',mode],cwd=ROOT,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=40,env=dict(os.environ,CAMERA_E2E_MANIFEST=str(MANIFEST),CAMERA_E2E_DB_URL=PROFILE['expected_db_url'],CAMERA_E2E_PLATE=PROFILE['plate_number'],CAMERA_E2E_SCENARIO=PROFILE['scenario'],CAMERA_E2E_CYCLES=str(PROFILE.get('cycles',1)),
+    # 1. 직접 접속 검사와 같은 로컬 인증 설정을 사용하고 대상 주소는 프로필로 고정합니다.
+    from dotenv import dotenv_values
+    credentials=dotenv_values(ROOT/'apcms_ai/.env',encoding='utf-8-sig',interpolate=False)
+    db_env={key:os.environ.get(key) or credentials.get(key) for key in ('DB_USERNAME','DB_PASSWORD')}
+    db_env={key:value for key,value in db_env.items() if value}
+    r=subprocess.run(['java','-cp',CP,'CameraE2EFixture',mode],cwd=ROOT,capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=40,env=dict(os.environ,**db_env,DB_URL=PROFILE['expected_db_url'],CAMERA_E2E_MANIFEST=str(MANIFEST),CAMERA_E2E_DB_URL=PROFILE['expected_db_url'],CAMERA_E2E_PLATE=PROFILE['plate_number'],CAMERA_E2E_SCENARIO=PROFILE['scenario'],CAMERA_E2E_CYCLES=str(PROFILE.get('cycles',1)),CAMERA_E2E_CREATE_VEHICLE=str(PROFILE.get('create_fixture_vehicle',False)).lower(),CAMERA_E2E_OFFICE_ID=str(PROFILE.get('fixture_office_id','')),
         CAMERA_E2E_USAGE_ID='' if usage is None else str(usage)))
     if r.returncode:raise RuntimeError('DB '+mode+' failed: '+r.stderr[-2000:])
     return r.stdout.strip()
@@ -71,11 +76,12 @@ if __name__=='__main__':
     assert not MANIFEST.exists(),'Existing E2E manifest requires review'
     prepared=False
     try:
-        env=os.environ.copy();env['PYTHONPATH']=str(ROOT/'apcms_ai');env['PYTHONIOENCODING']='utf-8'
+        from ai_vision.parking.demo_tools.live_logs import LiveLogTail
+        env=os.environ.copy();env['PYTHONUNBUFFERED']='1';env['PYTHONPATH']=str(ROOT/'apcms_ai');env['PYTHONIOENCODING']='utf-8'
         for name in ['gate','parking']:
             log=(RUN/(name+'_stdout.log')).open('w',encoding='utf-8');logs.append(log)
-            children.append(subprocess.Popen([sys.executable,str(Path(__file__).with_name(name+'_runner.py'))],cwd=ROOT,env=env,stdout=log,stderr=subprocess.STDOUT))
-        print('PREVIEW_ONLY: PRESS SPACE IN EACH WINDOW; NO DB WRITES YET',flush=True)
+            tails.append(LiveLogTail(RUN/(name+'_stdout.log'),name.upper(),concise=True))
+            children.append(subprocess.Popen([sys.executable,'-u',str(Path(__file__).with_name(name+'_runner.py'))],cwd=ROOT,env=env,stdout=log,stderr=subprocess.STDOUT))
         started=None
         while any(p.poll() is None for p in children):
             if any(p.poll() not in (None,0) for p in children):
@@ -83,6 +89,7 @@ if __name__=='__main__':
             if any(p.poll() is not None for p in children) and not prepared:
                 (RUN/'stop_requested.flag').write_text('PREPARATION_CANCELLED',encoding='utf-8')
             prepared,started,phase=update_trial(report,prepared,started)
+            for tail in tails:tail.drain()
             time.sleep(.25)
         report['process_exit_codes']=[p.returncode for p in children]
     except BaseException as error:
@@ -96,6 +103,9 @@ if __name__=='__main__':
         raise
     finally:
         for log in logs:log.close()
+        for tail in tails:
+            tail.drain(final=True)
+            tail.close()
         report['process_exit_codes']=[p.poll() for p in children]
         report=finalize_trial(RUN,report,children_stopped=all(p.poll() is not None for p in children),fixture_prepared=prepared,db=db,expected_plate=PROFILE['plate_number'])
         print('RESULT='+str(RUN/'http_e2e_result.json'),flush=True)
