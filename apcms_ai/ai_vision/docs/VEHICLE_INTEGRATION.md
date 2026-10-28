@@ -1,5 +1,30 @@
 # 입출차 연동과 중복 억제
 
+## 2026-10-28 AWS 주차 실제 전체 시험 성공 — 현재 확인 결과
+
+실제 카메라 A1/B0와 AWS 배포 API/Oracle로 수행한
+results/parking_demo/aws_20261028/e2e_manual_0e153185/http_e2e_result.json의
+success=true, completion_checks 전 항목 true, incomplete_reasons=[]를 확인했습니다.
+91소6408 입차→Z02 WRONG_SPACE(이용 미연결 DB 확인)→Z01 MATCHED→출차가
+동일 이용 ID32로 처리됐습니다. DB LINKED_ROWS1/EXITED_ROWS1/OPEN_ROWS0,
+LINK_VERSION2, B 신원 EMPTY/작업자 종료코드0·0 확인. B OCR 재인식 없이 A 신원
+전달 방식으로 수행했습니다. 실제 관리자 웹 화면 표시는 이번 실행에서 확인하지 않았습니다.
+시험 생성 행19개 삭제/잔여0/기존 해당 번호 이용0 보존. 별도 새 JDBC 읽기 전용 조회에서
+소유 매니페스트의 차량9/층9/구역18/구획64·65/예약18/이용32 및 구획 이벤트·이력
+모두0건 재확인했습니다. 기존 업무 데이터나 사무실은 수정하지 않았습니다.
+근거: results/deployment_audit_20261028/schema_apply/cleanup_recheck_0e153185.json.
+이번 성공으로 한국 시각 기준 시험 예약 수정의 실제 AWS 동작도 확인됐습니다.
+이는 한 대·두 시험 구획·수동 시작 경로의 성공입니다. 다중 차량 식별, 구획 이동 후
+연결 해제 API, 배포 AI 컨테이너 자동 카메라 기동, 공유 화재 실시간 AWS 전송까지
+검증됐다는 뜻은 아닙니다. 운영 모델의 회색 배경 SMOKE 오탐 개선도 여전히 남았습니다.
+
+> 2026-10-28 AWS 실제 적용 갱신: 사용자 승인 후 ALPHARKING(15.165.205.246)의
+> LINK_VERSION 컬럼·CK_PUSAGE_LINK_VERSION·TRG_PUSAGE_LINK_VERSION 생성 완료.
+> 새 JDBC 연결에서 컬럼18/0/DEFAULT0/NOTNULL,제약ENABLED/VALIDATED,
+> 트리거VALID/ENABLED·컴파일오류0 확인. 아래 AWS미적용 기록은 과거 상태입니다.
+> 실제 AWS 입출차·예약 연결·출차 업무 시험과 서버 해제 플래그 활성화는 별도입니다.
+> 자세한 근거는 AWS_PARKING_DEPLOYMENT_AUDIT.md를 따릅니다.
+
 > 현재 실행·검증 기준은 [HANDOFF](HANDOFF.md#현재-실행-기준-2026-10-27)에 통합합니다. 배포는 Docker Compose + Jenkins이며 Kubernetes는 사용하지 않습니다. 수동 시연은 SPACE/Q, 승인된 `-ServerTrial`은 자동 시작/종료입니다. 2026-10-27 사용자 직접 실행에서 다른 자리→예약 자리→출차 및 시험 기록 정리가 성공했습니다. 아래 10월 26일 확인은 과거 기록입니다.
 
 

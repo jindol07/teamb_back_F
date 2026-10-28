@@ -23,6 +23,14 @@ def run_worker(role, config, run_dir, stop_event, heartbeat):
 
 def _run_worker(role, config, run_dir, stop_event, heartbeat, publisher):
     # 1. 관찰 모드에서는 기존 환경변수에 키가 있어도 송신을 활성화하지 않습니다.
+    # 2. 통합 화면은 현재 작업자의 역할·카메라·실행에 맞는 결과만 읽습니다.
+    if os.environ.get('SAFETY_SHARED_AUTOSTART','false').lower() in ('true','1'):
+        os.environ.update(VISION_SAFETY_OVERLAY_PATH=str(Path(run_dir)/'shared_safety'/role/'preview_overlay.json'),
+            VISION_SAFETY_OVERLAY_ROLE=role,VISION_SAFETY_OVERLAY_CAMERA=config[role+'_id'],
+            VISION_SAFETY_OVERLAY_RUN=Path(run_dir).name)
+    else:
+        for key in ('VISION_SAFETY_OVERLAY_PATH','VISION_SAFETY_OVERLAY_ROLE','VISION_SAFETY_OVERLAY_CAMERA','VISION_SAFETY_OVERLAY_RUN'):
+            os.environ.pop(key,None)
     sending = config.get("delivery_enabled", False)
     if sending:
         from ai_vision.parking.parking_event_sender import _configured_api_key

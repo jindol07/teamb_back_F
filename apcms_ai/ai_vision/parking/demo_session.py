@@ -113,7 +113,7 @@ def load_demo_profile(directory):
     config = read_json(root/'demo.local.json')
     required = {'version', 'gate_camera', 'parking_camera', 'seconds', 'plate_number',
                 'expected_db_url', 'boot_context_url', 'gate_config', 'spaces_config', 'reference'}
-    if (not required <= set(config) or set(config) - required - {'camera_backend', 'scenario', 'cycles'}
+    if (not required <= set(config) or set(config) - required - {'camera_backend', 'scenario', 'cycles', 'create_fixture_vehicle', 'fixture_office_id'}
             or type(config['version']) is not int or config['version'] != 1):
         raise ValueError('Unsupported or incomplete demo profile')
     # 1. 기존 로컬 프로필에 저장한 읽기 방식도 검증합니다. 장치는 열지 않습니다.
@@ -129,6 +129,14 @@ def load_demo_profile(directory):
     if type(cycles) is not int or cycles not in (1, 2) or (cycles == 2 and scenario != 'normal'):
         raise ValueError('Repeat demo supports exactly two normal parking cycles')
     config['cycles'] = cycles
+    # 3. 승인된 시험 차량 생성은 명시한 프로필에서만 허용합니다.
+    create_vehicle = config.get('create_fixture_vehicle', False)
+    office = config.get('fixture_office_id')
+    if type(create_vehicle) is not bool or (create_vehicle and (type(office) is not int or office <= 0)):
+        raise ValueError('Explicit positive fixture office is required for synthetic vehicle')
+    if not create_vehicle and office is not None:
+        raise ValueError('Fixture office requires synthetic vehicle scope')
+    config['create_fixture_vehicle'] = create_vehicle
     for key in ('gate_camera', 'parking_camera'):
         if type(config[key]) is not int or not 0 <= config[key] <= 32:
             raise ValueError('Invalid camera index')
