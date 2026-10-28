@@ -94,12 +94,9 @@ public class SecurityConfig {
                         .requestMatchers("/user/**").hasAuthority("OFFICE")
                         .requestMatchers("/api/notice", "/api/notice/**").authenticated()
                         .anyRequest().authenticated())
-                .addFilterBefore(jwtTokenFilter, 
-                		BasicAuthenticationFilter.class)
-                .exceptionHandling(handler -> handler
-                		.authenticationEntryPoint(jwtAuthenticationEntryPoint))
-                .sessionManagement((session) -> session
-                		.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+                .addFilterBefore(jwtTokenFilter, BasicAuthenticationFilter.class)
+                .exceptionHandling(handler -> handler.authenticationEntryPoint(jwtAuthenticationEntryPoint))
+                .sessionManagement((session) -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .logout((logout) -> logout.disable());
         return http.build();
     }

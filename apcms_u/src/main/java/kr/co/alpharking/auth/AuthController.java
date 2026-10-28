@@ -188,7 +188,13 @@ public class AuthController {
     	boolean duplicated = userRepository.findByUsername(username).isPresent();
     	System.out.println(duplicated);
 		return ResponseEntity.ok(duplicated);
-    	
+    }
+    
+    @GetMapping("/check-email")
+    public ResponseEntity<Boolean> checkEmail(@RequestParam("email") String email) {
+        boolean duplicated = !userRepository.findByEmailIgnoreCase(email).isEmpty();
+
+        return ResponseEntity.ok(duplicated);
     }
 
     /** refresh 토큰을 Redis에서 삭제해 재발급을 막는다. */
