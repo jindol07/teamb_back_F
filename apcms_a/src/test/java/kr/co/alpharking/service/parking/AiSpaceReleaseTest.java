@@ -62,10 +62,10 @@ class AiSpaceReleaseTest {
             "2026-10-22T12:00:00+09:00","PARKING_1","91소6408","1F-A01",70L,version,reason);
     }
     AiVehicleEventService events(ParkingUsageService target,boolean enabled) {
-        var events=new AiVehicleEventService(dao, target, mock(AiParkingDecisionService.class)); ReflectionTestUtils.setField(events,"spaceReleaseEnabled",enabled); return events;
+        var events=new AiVehicleEventService(dao, target, mock(AiParkingDecisionService.class), mock(org.springframework.context.ApplicationEventPublisher.class)); ReflectionTestUtils.setField(events,"spaceReleaseEnabled",enabled); return events;
     }
     @Test void defaultDisabledDoesNotQueryNewColumn() {
-        var target=mock(ParkingUsageService.class); var events=new AiVehicleEventService(dao, target, mock(AiParkingDecisionService.class)); clearInvocations(dao);
+        var target=mock(ParkingUsageService.class); var events=new AiVehicleEventService(dao, target, mock(AiParkingDecisionService.class), mock(org.springframework.context.ApplicationEventPublisher.class)); clearInvocations(dao);
         var error=assertThrows(ResponseStatusException.class,()->events.release(request(4L,"CONFIRMED_EMPTY")));
         assertEquals(503,error.getStatusCode().value()); verifyNoInteractions(dao,target);
     }
@@ -133,7 +133,7 @@ class AiSpaceReleaseTest {
         try {
             for (String zone : new String[]{"UTC", "Asia/Seoul"}) {
                 java.util.TimeZone.setDefault(java.util.TimeZone.getTimeZone(zone));
-                var service = new AiVehicleEventService(dao, usage, mock(AiParkingDecisionService.class));
+                var service = new AiVehicleEventService(dao, usage, mock(AiParkingDecisionService.class), mock(org.springframework.context.ApplicationEventPublisher.class));
                 ReflectionTestUtils.setField(service, "spaceReleaseEnabled", true);
                 var now = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC);
                 var valid = new AiSpaceReleaseRequest(UUID.randomUUID().toString(), "VEHICLE_SPACE_RELEASE",
