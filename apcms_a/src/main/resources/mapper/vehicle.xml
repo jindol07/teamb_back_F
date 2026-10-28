@@ -27,7 +27,7 @@
 		#{vehicletypecode},
 		#{registrationtypecode},
 		#{registrationstatuscode},
-		#{registeredat},
+		TO_DATE(#{registeredat}, 'YYYY-MM-DD HH24:MI:SS'),
 		#{rejectedreason},
 		SYSDATE,
 		SYSDATE
