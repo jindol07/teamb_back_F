@@ -107,7 +107,7 @@ if __name__=='__main__':
             tail.drain(final=True)
             tail.close()
         report['process_exit_codes']=[p.poll() for p in children]
-        report=finalize_trial(RUN,report,children_stopped=all(p.poll() is not None for p in children),fixture_prepared=prepared,db=db,expected_plate=PROFILE['plate_number'])
+        report=finalize_trial(RUN,report,children_stopped=all(p.poll() is not None for p in children),fixture_prepared=prepared,db=db,expected_plate=PROFILE['plate_number'],retain_test_records=os.environ.get('PARKING_DEMO_RETAIN_RECORDS')=='1')
         print('RESULT='+str(RUN/'http_e2e_result.json'),flush=True)
         print('TEST_SUCCESS='+str(report.get('success',False)),flush=True)
         print('CLEANUP='+str(report['cleanup']),flush=True)

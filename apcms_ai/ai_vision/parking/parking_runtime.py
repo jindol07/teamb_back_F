@@ -136,6 +136,8 @@ class ParkingRuntime:
                 tree_confirmed = terminate_worker_tree(child) and tree_confirmed
         if forced:
             self.state, self.reason = "FAILED", "FORCED_STOP_REQUIRES_REVIEW"
+        elif any(type(child.exitcode) is int and child.exitcode != 0 for child in self.processes):
+            self.state, self.reason = "FAILED", self.reason or "CHILD_EXITED"
         elif self.state != "FAILED" and self.state != "DISABLED":
             self.state = "STOPPED"
         if forced and not tree_confirmed:

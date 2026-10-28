@@ -24,7 +24,7 @@ def mock_http(outcome="PROCESSED", status=200):
 
 class SpaceLifecycleLoopbackTests(unittest.TestCase):
     """합성 Boot 응답의 실제 HTTP 왕복 검사입니다. Oracle 검증이 아닙니다."""
-    def exercise(self, bad_release=False, missing_match_version=False):
+    def exercise(self, bad_release=False, missing_match_version=False, decisions=None):
         import threading
         import uuid
         from concurrent.futures import wait
@@ -46,7 +46,9 @@ class SpaceLifecycleLoopbackTests(unittest.TestCase):
                     version = None
                 body = json.dumps({'eventId': event['event_id'], 'eventType': event['event_type'],
                     'plateNumber': event['plate_number'], 'spaceCode': event['space_code'],
-                    'parkingUsageId': 70, 'linkVersion': version, 'outcome': 'PROCESSED'}).encode()
+                    'parkingUsageId': 70, 'linkVersion': version, 'outcome': 'PROCESSED',
+                    **({'parkingDecision':decisions[0 if event['space_code']=='1F-A01' else 1]}
+                       if decisions and not release else {})}).encode()
                 self.send_response(200)
                 self.send_header('Content-Type', 'application/json')
                 self.send_header('Content-Length', str(len(body)))
@@ -64,7 +66,7 @@ class SpaceLifecycleLoopbackTests(unittest.TestCase):
             self.assertFalse(pending)
             flow.poll(lambda: None)
         def candidate(space):
-            return {'origin': 'LIVE', 'status': 'CANDIDATE_ONLY', 'reasons': [], 'track_id': 1,
+            return {'origin': 'LIVE', 'status': 'CANDIDATE_ONLY', 'reasons': [], 'track_id': 1,'expected_parking_usage_id':70,
                     'payload': sample_space_event() | {'event_id': str(uuid.uuid4()), 'space_code': space}}
         try:
             self.assertEqual(flow.submit(candidate('1F-A01'), 'first', lambda: None), 'IN_FLIGHT')
@@ -91,6 +93,10 @@ class SpaceLifecycleLoopbackTests(unittest.TestCase):
                 complete()
                 self.assertEqual(flow.records[-1]['status'], 'APPLIED')
                 self.assertEqual([r[2]['space_code'] for r in requests_seen], ['1F-A01','1F-A01','1F-A02'])
+                if decisions:
+                    self.assertEqual(flow.records[0]['receipt']['parking_decision'],decisions[0])
+                    self.assertEqual(flow.records[-1]['receipt']['parking_decision'],decisions[1])
+                    self.assertEqual(requests_seen[-1][2]['expected_parking_usage_id'],70)
             self.assertTrue(all(key == 'TEST_KEY' for _, key, _ in requests_seen))
             self.assertTrue(requests_seen[0][0].endswith('/space-match-events'))
             self.assertTrue(requests_seen[1][0].endswith('/space-release-events'))
@@ -104,6 +110,12 @@ class SpaceLifecycleLoopbackTests(unittest.TestCase):
 
     def test_match_release_then_other_space_over_real_local_http(self):
         self.exercise()
+
+    def test_observed_wrong_space_release_then_reserved_space(self):
+        self.exercise(decisions=('WRONG_SPACE','MATCHED'))
+
+    def test_unreserved_position_release_then_next_position(self):
+        self.exercise(decisions=('NO_VALID_RESERVATION','NO_VALID_RESERVATION'))
 
     def test_wrong_release_version_blocks_reconnection_without_retry(self):
         self.exercise(bad_release=True)

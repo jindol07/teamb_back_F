@@ -21,7 +21,7 @@ recognize_upload_api recognition_admission ocr_image_policy run_checks runtime_e
 probe_runtime_imports deployment_runtime parking_deployment deployment_config deployment_readiness ocr_configuration
 aws_recognition_cases http_diagnostics upload_limits check_deployed_api check_deployed_api_cli check_deployed_cases
 remote_plate_reader camera_recognition latest_frame_capture async_gate_processor parking_delivery_worker
-vehicle_space_tracker parking_runtime parking_process_scope parking_server_trial frame_exchange fixture_version_compatibility live_demo_logs""".split()
+vehicle_space_tracker parking_runtime parking_process_scope parking_server_trial frame_exchange fixture_version_compatibility live_demo_logs deployed_sequence free_parking deployed_recovery release_capability""".split()
 MODULES = tuple("ai_vision.tests.recognition.test_" + name for name in NAMES)
 
 

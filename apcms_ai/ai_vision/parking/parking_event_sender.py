@@ -10,6 +10,7 @@ import math
 import os
 import uuid
 import requests
+from contextlib import contextmanager
 from urllib.parse import urlsplit
 
 from datetime import datetime
@@ -120,6 +121,25 @@ SPACE_CODE_MAP = {
     "A-03": "1F-A03",
     "A-04": "1F-A04"
 }
+
+
+@contextmanager
+def scoped_space_mapping(mapping=None):
+    """현재 카메라 작업에서만 구획을 연결하고 종료 시 기존 연결을 복원합니다."""
+    import re
+    mapping = {} if mapping is None else mapping
+    if (not isinstance(mapping, dict) or
+            any(not isinstance(k, str) or not isinstance(v, str) or
+                not re.fullmatch(r'[1-9][0-9]*F-[A-Z][0-9]{2}', v)
+                for k, v in mapping.items()) or len(set(mapping.values())) != len(mapping)):
+        raise ValueError('카메라 구획 매핑을 확인하세요.')
+    previous = SPACE_CODE_MAP.copy()
+    try:
+        SPACE_CODE_MAP.update(mapping)
+        yield
+    finally:
+        SPACE_CODE_MAP.clear()
+        SPACE_CODE_MAP.update(previous)
 
 
 # 1-8. 백엔드가 처리 완료로 사용하는 outcome 값

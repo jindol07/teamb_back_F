@@ -52,3 +52,22 @@ class ProcessScopeTests(unittest.TestCase):
         with patch("os.getpgid",return_value=999,create=True),patch("os.killpg",create=True) as group:
             self.assertFalse(terminate_worker_tree(child,platform="posix"))
         group.assert_not_called();child.terminate.assert_called_once()
+
+    def test_windows_worker_ignores_console_ctrl_c_without_touching_parent_group(self):
+        import signal
+        kernel=Mock();kernel.SetConsoleCtrlHandler.return_value=True
+        with patch('ctypes.WinDLL',return_value=kernel,create=True),patch('signal.signal') as signals:
+            isolate_worker(platform='nt')
+        kernel.SetConsoleCtrlHandler.assert_called_once_with(None,True)
+        signals.assert_called_once_with(signal.SIGINT,signal.SIG_IGN)
+
+    def test_windows_console_isolation_failure_is_not_hidden(self):
+        kernel=Mock();kernel.SetConsoleCtrlHandler.return_value=False
+        with patch('ctypes.WinDLL',return_value=kernel,create=True),patch('signal.signal') as signals:
+            with self.assertRaises(OSError):isolate_worker(platform='nt')
+        signals.assert_not_called()
+
+    def test_posix_worker_still_owns_separate_session(self):
+        with patch('os.setsid',create=True) as session:
+            isolate_worker(platform='posix')
+        session.assert_called_once()

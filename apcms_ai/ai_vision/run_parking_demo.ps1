@@ -9,6 +9,7 @@ param(
     [switch]$ServerTrial,
     [switch]$Prepare,
     [switch]$HideGuidance,
+    [switch]$RetainTestRecords,
     [switch]$CheckOnly
 )
 $ErrorActionPreference = 'Stop'
@@ -37,12 +38,15 @@ $oldRun = $env:PARKING_DEMO_RUN_DIR
 $oldVerifyIdentity = $env:PARKING_DEMO_VERIFY_HANDOFF_PLATE
 $oldCameraBackend = $env:PARKING_DEMO_CAMERA_BACKEND
 $oldHideGuidance = $env:PARKING_DEMO_HIDE_GUIDANCE
+$oldRetainRecords = $env:PARKING_DEMO_RETAIN_RECORDS
 try {
     try { $ownsMutex = $mutex.WaitOne(0) }
     catch [System.Threading.AbandonedMutexException] { $ownsMutex = $true }
     if (-not $ownsMutex) { throw 'Another demo is running. Close it before retrying.' }
     $env:PYTHONPATH = $aiRoot
     $env:PARKING_DEMO_HIDE_GUIDANCE = if ($HideGuidance) { '1' } else { '0' }
+    if ($RetainTestRecords -and $ServerTrial) { throw '기록 보존은 수동 시작 시험에서만 지원합니다.' }
+    $env:PARKING_DEMO_RETAIN_RECORDS = if ($RetainTestRecords) { '1' } else { '0' }
     $env:PARKING_DEMO_PROFILE_DIR = $baseDir
     $env:PARKING_DEMO_VERIFY_HANDOFF_PLATE = if ($VerifyHandoffPlate) { '1' } else { '0' }
     $preflight = & $pythonExe -m ai_vision.parking.demo_session --status $baseDir --check-profile
@@ -125,6 +129,7 @@ finally {
     $env:PARKING_DEMO_VERIFY_HANDOFF_PLATE = $oldVerifyIdentity
     $env:PARKING_DEMO_CAMERA_BACKEND = $oldCameraBackend
     $env:PARKING_DEMO_HIDE_GUIDANCE = $oldHideGuidance
+    $env:PARKING_DEMO_RETAIN_RECORDS = $oldRetainRecords
     if ($ownsMutex) { $mutex.ReleaseMutex() }
     $mutex.Dispose()
 }
