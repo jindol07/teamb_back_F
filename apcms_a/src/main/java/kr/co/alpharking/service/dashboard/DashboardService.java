@@ -1,3 +1,9 @@
+/** 파일 안내
+ * 용도: 대시보드 통계 기간을 검증하고 일별 집계·최근 입출차를 읽는다.
+ * 직접 사용처: DashboardController → DashboardDao → mapper/dashboard.xml.
+ * week는 오늘 포함 7일, month는 오늘 포함 30일이다. 달력상의 월 전체 조회는 아니다.
+ * 읽기 전용 트랜잭션이며 DAILY_PARKING_SUMMARY 집계를 새로 생성하거나 원본 이용 기록을 변경하지 않는다.
+ */
 package kr.co.alpharking.service.dashboard;
 
 import java.time.LocalDate;
@@ -19,6 +25,7 @@ public class DashboardService {
 
     public DashboardService(DashboardDao dao) { this.dao = dao; }
 
+    /** 한국 날짜 기준 시작일 포함·종료일 제외 범위를 만든다. 지원하지 않는 기간은 400으로 거절한다. */
     @Transactional(readOnly = true)
     public List<DailyParkingSummaryRow> recentDailySummary(String period) {
         final int days;
@@ -29,6 +36,7 @@ public class DashboardService {
         return dao.findDailySummary(today.minusDays(days - 1L).toString(), today.plusDays(1).toString());
     }
 
+    /** 입차·출차를 각각 이벤트로 펼친 최근 5건을 SQL의 정렬·제한 기준 그대로 반환한다. */
     @Transactional(readOnly = true)
     public List<DashboardParkingEventRow> recentParkingEvents() {
         return dao.findRecentParkingEvents();

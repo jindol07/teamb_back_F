@@ -1,9 +1,13 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!-- [1023_1010] 파일 안내: 입출차·구획 배정·관리자 보정용 이용 기록 SQL. ParkingUsageDao와 연결되며 호출 서비스가 트랜잭션·결과 건수를 검증한다. -->
+<!-- 파일 안내
+     용도: 입출차·구획 연결·관리자 보정용 이용 기록을 조회하고 변경한다.
+     직접 사용처: ParkingUsageDao. 트랜잭션 경계와 변경 건수 검증은 호출 서비스가 담당한다.
+     차량 PK는 REGISTERED 차량만 연결한다. 조회되지 않은 차량은 번호판 기반 방문 이용으로 저장한다.
+     최근 목록 200건과 전체 미출차 목록을 구분한다. AI 예약 연결·해제의 조건과 버전 검사는 유지한다. -->
 <!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
   "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
 <mapper namespace="kr.co.alpharking.dao.parking.ParkingUsageDao">
-    <!-- [1023_1010] 목록·단건 조회가 공유하는 컬럼과 ISO 형태 시간 문자열. 구획 미배정이면 spaceCode가 null일 수 있다. -->
+    <!-- 목록·단건 조회가 공유하는 컬럼과 ISO 형태 시간 문자열. 구획 미배정이면 spaceCode가 null일 수 있다. -->
     <sql id="usageCols">
         u.PARKING_USAGE_ID AS "parkingUsageId",
         u.VEHICLE_ID AS "vehicleId",
@@ -17,7 +21,7 @@
           ELSE TO_CHAR(f.FLOOR_NO) || 'F-' || z.ZONE_CODE || s.SPACE_NUMBER
         END AS "spaceCode"
     </sql>
-    <!-- [1023_1010] 삭제되지 않은 승인 등록 차량만 ID를 연결하고 해당 차량 행을 잠근다. 미등록 차량은 조회 결과가 없다. -->
+    <!-- 삭제되지 않은 REGISTERED 차량만 잠근다. APPROVED·REQUESTED·REJECTED는 사용 가능 차량으로 포함하지 않는다. -->
     <select id="lockRegisteredVehicle" resultType="long">
         SELECT VEHICLE_ID FROM VEHICLE
         WHERE VEHICLE_NUMBER = #{number}
@@ -25,7 +29,7 @@
           AND DELETED_AT IS NULL
         FOR UPDATE
     </select>
-    <!-- [1023_1010] 번호판에 대응하는 미출차 이용 기록 ID를 조회하여 현재 입차 여부를 확인한다. -->
+    <!-- 번호판에 대응하는 미출차 이용 기록 ID를 조회하여 현재 입차 여부를 확인한다. -->
     <select id="findOpenUsageByPlate" resultType="long">
         SELECT PARKING_USAGE_ID FROM PARKING_USAGE
         WHERE VEHICLE_NUMBER = #{number} AND EXIT_AT IS NULL
@@ -34,7 +38,7 @@
         SELECT CASE WHEN COUNT(*) = 1 THEN MAX(PARKING_USAGE_ID) ELSE NULL END
           FROM PARKING_USAGE WHERE VEHICLE_NUMBER = #{number} AND EXIT_AT IS NULL
     </select>
-    <!-- [1023_1010] 기존 시퀀스로 입차 기록을 생성한다. 방문 차량은 vehicleId가 null이고 번호판과 VISITOR 유형을 저장한다. -->
+    <!-- 기존 시퀀스로 입차 기록을 생성한다. 방문 차량은 vehicleId가 null이고 번호판과 VISITOR 유형을 저장한다. -->
     <insert id="insertEntry">
         INSERT INTO PARKING_USAGE (
             PARKING_USAGE_ID, OFFICE_ID, VEHICLE_ID, PARKING_SPACE_ID,
@@ -48,34 +52,34 @@
             #{eventTime}, NULL, 0, SYSDATE
         )
     </insert>
-    <!-- [1023_1010] 최근 출차 이전의 지연 입차 이벤트를 차단하기 위한 기준 시각 조회. -->
+    <!-- 최근 출차 이전의 지연 입차 이벤트를 차단하기 위한 기준 시각 조회. -->
     <select id="findLatestExitByPlate" resultType="java.sql.Timestamp">
         SELECT MAX(EXIT_AT) FROM PARKING_USAGE WHERE VEHICLE_NUMBER = #{number}
     </select>
-    <!-- [1023_1010] AI 공통 구획 코드(층F-구역번호)를 실제 PARKING_SPACE 숫자 PK로 변환한다. -->
+    <!-- AI 공통 구획 코드(층F-구역번호)를 실제 PARKING_SPACE 숫자 PK로 변환한다. -->
     <select id="findSpaceIdByCode" resultType="long">
         SELECT s.PARKING_SPACE_ID FROM PARKING_SPACE s
         JOIN PARKING_ZONE z ON z.PARKING_ZONE_ID = s.PARKING_ZONE_ID
         JOIN PARKING_FLOOR f ON f.PARKING_FLOOR_ID = z.PARKING_FLOOR_ID
         WHERE TO_CHAR(f.FLOOR_NO) || 'F-' || z.ZONE_CODE || s.SPACE_NUMBER = #{spaceCode}
     </select>
-    <!-- [1023_1010] 같은 DB 세션에서 방금 생성한 시퀀스 ID를 읽는다. 입차 INSERT와 같은 트랜잭션 연결이 필요하다. -->
+    <!-- 같은 DB 세션에서 방금 생성한 시퀀스 ID를 읽는다. 입차 INSERT와 같은 트랜잭션 연결이 필요하다. -->
     <select id="insertedUsageId" resultType="long">
         SELECT SEQ_PARKING_USAGE.CURRVAL FROM DUAL
     </select>
-    <!-- [1023_1010] 구획·구역·층을 LEFT JOIN해 미배정 이용 기록도 목록에서 누락하지 않는다. -->
+    <!-- 구획·구역·층을 LEFT JOIN해 미배정 이용 기록도 목록에서 누락하지 않는다. -->
     <sql id="usageFrom">
         FROM PARKING_USAGE u
         LEFT JOIN PARKING_SPACE s ON s.PARKING_SPACE_ID = u.PARKING_SPACE_ID
         LEFT JOIN PARKING_ZONE z ON z.PARKING_ZONE_ID = s.PARKING_ZONE_ID
         LEFT JOIN PARKING_FLOOR f ON f.PARKING_FLOOR_ID = z.PARKING_FLOOR_ID
     </sql>
-    <!-- [1023_1010] 처리 전 검증과 저장 결과 응답에 사용할 이용 기록 전체 조회. -->
+    <!-- 처리 전 검증과 저장 결과 응답에 사용할 이용 기록 전체 조회. -->
     <select id="findById" resultType="ParkingUsageRow">
         SELECT <include refid="usageCols" /> <include refid="usageFrom" />
         WHERE u.PARKING_USAGE_ID = #{id}
     </select>
-    <!-- [1023_1010] 요청한 기록이 아직 미출차일 때만 해당 이용 행을 잠근다. 출차·배정·보정에서 사용한다. -->
+    <!-- 요청한 기록이 아직 미출차일 때만 해당 이용 행을 잠근다. 출차·배정·보정에서 사용한다. -->
     <select id="lockOpenUsage" resultType="ParkingUsageRow">
         SELECT u.PARKING_USAGE_ID AS "parkingUsageId", u.VEHICLE_ID AS "vehicleId",
                u.VEHICLE_NUMBER AS "vehicleNumber", u.PARKING_SPACE_ID AS "parkingSpaceId",
@@ -84,28 +88,28 @@
           FROM PARKING_USAGE u
          WHERE u.PARKING_USAGE_ID = #{id} AND u.EXIT_AT IS NULL FOR UPDATE
     </select>
-    <!-- [1023_1010] 최근 200건 제한과 무관한 전체 미출차 조회. 현재 입차 집계에 사용한다. -->
+    <!-- 최근 200건 제한과 무관한 전체 미출차 조회. 현재 입차 집계에 사용한다. -->
     <select id="findActive" resultType="ParkingUsageRow">
         SELECT <include refid="usageCols" /> <include refid="usageFrom" />
         WHERE u.EXIT_AT IS NULL ORDER BY u.ENTRY_AT DESC, u.PARKING_USAGE_ID DESC
     </select>
-    <!-- [1023_1010] 관리자 입출차 목록의 최근 200건. 정렬을 먼저 적용한 뒤 행 수를 제한한다. -->
+    <!-- 관리자 입출차 목록의 최근 200건. 정렬을 먼저 적용한 뒤 행 수를 제한한다. -->
     <select id="findRecent" resultType="ParkingUsageRow">
         SELECT * FROM (
             SELECT <include refid="usageCols" /> <include refid="usageFrom" />
             ORDER BY u.ENTRY_AT DESC, u.PARKING_USAGE_ID DESC
         ) WHERE ROWNUM &lt;= 200
     </select>
-    <!-- [1023_1010] 구획 배정 전 대상 구획 상태를 읽고 잠근다. OCCUPIED 여부는 서비스에서 확인한다. -->
+    <!-- 구획 배정 전 대상 구획 상태를 읽고 잠근다. OCCUPIED 여부는 서비스에서 확인한다. -->
     <select id="lockSpaceStatus" resultType="string">
         SELECT SPACE_STATUS_CODE FROM PARKING_SPACE WHERE PARKING_SPACE_ID = #{spaceId} FOR UPDATE
     </select>
-    <!-- [1023_1010] 현재 대상 이용 기록을 제외하고 같은 구획에 다른 미출차 차량이 있는지 검사한다. -->
+    <!-- 현재 대상 이용 기록을 제외하고 같은 구획에 다른 미출차 차량이 있는지 검사한다. -->
     <select id="countOtherActiveOnSpace" resultType="int">
         SELECT COUNT(*) FROM PARKING_USAGE
          WHERE PARKING_SPACE_ID = #{spaceId} AND EXIT_AT IS NULL AND PARKING_USAGE_ID != #{usageId}
     </select>
-    <!-- [1023_1010] 아직 미출차인 이용 기록에만 구획을 연결한다. 서비스는 변경 건수가 1인지 검사한다. -->
+    <!-- 아직 미출차인 이용 기록에만 구획을 연결한다. 서비스는 변경 건수가 1인지 검사한다. -->
     <update id="assignSpace">
         UPDATE PARKING_USAGE
            SET PARKING_RESERVATION_ID = CASE WHEN PARKING_SPACE_ID = #{spaceId}
@@ -113,18 +117,18 @@
                PARKING_SPACE_ID = #{spaceId}
          WHERE PARKING_USAGE_ID = #{usageId} AND EXIT_AT IS NULL
     </update>
-    <!-- [1023_1010] 아직 출차하지 않은 기록의 출차 시각만 갱신하여 중복 출차를 방지한다. -->
+    <!-- 아직 출차하지 않은 기록의 출차 시각만 갱신하여 중복 출차를 방지한다. -->
     <update id="exitUsage">
         UPDATE PARKING_USAGE SET EXIT_AT = #{eventTime}
          WHERE PARKING_USAGE_ID = #{usageId} AND EXIT_AT IS NULL
     </update>
-    <!-- [1023_1010] 보정 패널에 현재 구획과 연결된 미출차 기록을 제공한다. -->
+    <!-- 보정 패널에 현재 구획과 연결된 미출차 기록을 제공한다. -->
     <select id="findActiveOnSpace" resultType="ParkingUsageRow">
         SELECT <include refid="usageCols" /> <include refid="usageFrom" />
          WHERE u.PARKING_SPACE_ID = #{spaceId} AND u.EXIT_AT IS NULL
          ORDER BY u.PARKING_USAGE_ID
     </select>
-    <!-- [1023_1010] 관리자 보정 저장 시 연결 기록을 ID 순으로 잠근다. NOWAIT 충돌은 재조회 대상으로 처리한다. -->
+    <!-- 관리자 보정 저장 시 연결 기록을 ID 순으로 잠근다. NOWAIT 충돌은 재조회 대상으로 처리한다. -->
     <select id="lockActiveOnSpace" resultType="ParkingUsageRow">
         SELECT PARKING_USAGE_ID AS "parkingUsageId", VEHICLE_NUMBER AS "vehicleNumber",
                PARKING_SPACE_ID AS "parkingSpaceId",
@@ -133,7 +137,7 @@
           FROM PARKING_USAGE WHERE PARKING_SPACE_ID = #{spaceId} AND EXIT_AT IS NULL
          ORDER BY PARKING_USAGE_ID FOR UPDATE NOWAIT
     </select>
-    <!-- [1023_1010] 번호판 일부가 일치하는 미출차 기록 최대 30건. 보정 시 기존 기록 선택에 사용한다. -->
+    <!-- 번호판 일부가 일치하는 미출차 기록 최대 30건. 보정 시 기존 기록 선택에 사용한다. -->
     <select id="searchActive" resultType="ParkingUsageRow">
         SELECT * FROM (
             SELECT <include refid="usageCols" /> <include refid="usageFrom" />
@@ -141,11 +145,11 @@
              ORDER BY u.ENTRY_AT DESC, u.PARKING_USAGE_ID DESC
         ) WHERE ROWNUM &lt;= 30
     </select>
-    <!-- [1023_1010] 동일 번호판의 여러 미출차 기록이 있으면 관리자 보정의 모호한 차량 선택을 막는다. -->
+    <!-- 동일 번호판의 여러 미출차 기록이 있으면 관리자 보정의 모호한 차량 선택을 막는다. -->
     <select id="countActiveByPlate" resultType="int">
         SELECT COUNT(*) FROM PARKING_USAGE WHERE VEHICLE_NUMBER = #{number} AND EXIT_AT IS NULL
     </select>
-    <!-- [1023_1010] 미출차 이용 기록은 유지하면서 현재 구획 연결만 해제한다. EXIT와 다른 보정 작업이다. -->
+    <!-- 미출차 이용 기록은 유지하면서 현재 구획 연결만 해제한다. EXIT와 다른 보정 작업이다. -->
     <update id="detachSpace">
         UPDATE PARKING_USAGE SET PARKING_SPACE_ID = NULL, PARKING_RESERVATION_ID = NULL
          WHERE PARKING_USAGE_ID = #{usageId} AND PARKING_SPACE_ID = #{spaceId} AND EXIT_AT IS NULL
