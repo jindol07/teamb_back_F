@@ -18,6 +18,7 @@ import org.springframework.security.core.AuthenticationException;
 import org.springframework.security.core.annotation.AuthenticationPrincipal;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.bind.annotation.CrossOrigin;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -104,6 +105,7 @@ public class AuthController {
     }
     
     // 회원가입
+    @Transactional(rollbackFor = Exception.class)
     @PostMapping("/signup")
     public ResponseEntity<SignupResponse> OfficeSignup(@RequestBody SignupRequest req) {
     	System.out.println(123123);
