@@ -83,11 +83,14 @@ class SharedSafetyRuntime:
             for child in self.processes:
                 if child.is_alive():
                     terminate_worker_tree(child);self.state='FAILED';self.reason='FORCED_STOP_REQUIRES_REVIEW'
+            if any(type(child.exitcode) is int and child.exitcode!=0 for child in self.processes):
+                self.state='FAILED';self.reason=self.reason or 'SHARED_SAFETY_CHILD_EXITED'
             if self.state not in ('DISABLED','FAILED'):self.state='STOPPED'
         if self.monitor is not None and self.monitor is not threading.current_thread():self.monitor.join(timeout=2)
 
     def snapshot(self):
         return {'state':self.state,'reason':self.reason,'delivery':'TEST_HTTP_ENABLED' if self.delivery else 'DRY_RUN_NO_HTTP',
                 'send_role':self.delivery['role'] if self.delivery else None,
+                'records_are_test':True if self.delivery else None,
                 'shared_run_id':self.shared_dir.name if self.shared_dir else None,
                 'processes':[{'role':p.name,'alive':p.is_alive(),'exit_code':p.exitcode} for p in self.processes]}

@@ -1,5 +1,62 @@
 # AI Vision 작업 인수인계 — 2026-10-23
 
+## 일반 서버 종료 확인 — 2026-10-28
+
+사용자가 FastAPI를 종료한 뒤 동일 실행의 주차 runtime STOPPED·A/B 종료코드0, A SERVER_SHUTDOWN·정리오류0, B STOPPED·error_type NULL을 확인했습니다. 8000 수신 포트와 이전 서버30580의 직접/스폰 자식은0개입니다. 공유 화재 A/B는 STOP_REQUESTED·error_type NULL·물리 카메라 개방0회이며, 전송 체크포인트 대조에서 A2/2·B4/4 ACK·미전송0입니다. 공유 화재 자식의 종료코드는 파일에 보존되지 않아0으로 단정하지 않습니다. 서버·카메라 재기동 또는 새 시험 이벤트 전송은 하지 않았습니다.
+근거: results/deployed_runtime_20261028/live_web_reservation/normal_server_shutdown.json. 앞선 ‘서버 유지’ 문구는 당시 상태이며 현재는 사용자 종료 상태입니다. Boot 시각 수정은 배포 대기, 연기 오탐은 미해결입니다.
+
+
+## 화재 알림 시각 보정 — 로컬 수정·배포 대기
+
+- AWS DB 시계는 UTC이며 SESSIONTIMEZONE은 Asia/Seoul이어도 SYSDATE는 UTC였습니다. 사건19의 감지20:37:01/알림생성11:37:01을 읽기 전용 확인했습니다.
+- 사용자 조건부 승인 후 Git 이력 확인: FireSafetyDao는3f8eed6a6, Workflow/AdminInteraction은4c071abdf에서 박규택 명의로 추가된 AI Vision·화재 파일입니다.
+- 세 DAO의 시각 저장11곳을 CAST(SYSTIMESTAMP AT TIME ZONE 'Asia/Seoul' AS DATE)로 통일했습니다. 최초 ACK 유지·본인 알림/미읽음 조건·바인딩 값은 유지합니다.
+- 화재 Boot 검사32개 실패0·오류0·건너뜀0 및 컴파일 통과. AWS Oracle에서 새 시간 식은 SELECT만 실행해 한국 시간 일치 확인했습니다.
+- 배포 전입니다. 기존 기록·DB 구조는 변경하지 않았고, 새 사건의 실제 저장 시각은 배포 후 확인해야 합니다. 정상 FastAPI는 계속 실행 중이며 Boot 재시작·커밋·푸시 없음.
+- 관련 검사: apcms_a/src/test/java/kr/co/alpharking/dao/safety/FireSafetyTimeZoneTest.java. 근거는 live_web_reservation/timezone_db_audit.json, boot_safety_timezone_tests.json.
+
+## 최신 실물 확인 — 일반 main:app과 실제 웹 예약
+
+- 2026-10-28 일반 FastAPI 8000에서 주차 A=1/B=0, 공유 화재 A/B 작업자가 모두 실행됨을 확인했습니다. 임시 예약 생성·취소 도구는 사용하지 않았습니다.
+- 사용자가 배포 웹에서 만든 예약29: 91소6408 / 지하3층 A01 / 10월28~29일 / CONFIRMED.
+- 실제 카메라 입차 → 이용40 생성(20:35:17) → A02 실제 위치 연결·WRONG_SPACE → A02 해제 → A01 연결·MATCHED·예약29 연결 → A01 해제 → 출차(20:38:05)를 API 응답과 AWS DB로 확인했습니다. 최종 LINK_VERSION=5, 연결 NULL, 활성 이용 없음, 예약29는 CONFIRMED 유지.
+- 출차 후 B 네 칸 EMPTY, A/B 신원 EMPTY·retained_identity NULL. 배포 관리자 dashboard에도 새 입차·출차 두 건 표시 확인.
+- 같은 일반 실행의 공유 SMOKE 전이159/160/183/186 네 건은 DB에서 IS_TEST=Y 확인. 양쪽 전송 경로는 동작하지만 증거 이미지의 쿠션·손 감지는 오탐입니다. FIRE 양성은 이번 일반 실행에서 다시 시험하지 않았습니다.
+- 아직 남은 항목: SMOKE 오탐·약한 연기 미탐, 화재 위치 미확인, 단일 차량 제한, 재시작 중 신원 복원·장시간 운영 검증. 이번 결과를 전체 운영 품질 완료로 해석하지 않습니다.
+- 근거: results/deployed_runtime_20261028/live_web_reservation/acceptance.json 및 단계별 카메라·DB JSON, deployed_usage_40.png. 서버는 사용자 실행 상태 그대로 유지했습니다.
+
+
+## 일반 사용 흐름 기준 최종 재점검
+
+이전 완료 판단의 오류는 시험 실행기의 성공과 일반 main:app 자동 실행을 혼동한 것입니다.
+이번 검사는 기존 시험 행 생성 없이 일반 진입점·작업자 전달·설정·API·DB·배포 웹을 구분했습니다.
+- 실제 .env를 사용한 main:app 전체 수명주기 검사 통과(카메라·업무POST 차단). 설정만 검사한 것과 실물 검증을 구분합니다.
+- 공유 화재 송신뿐 아니라 자동 시작도 true인지, 직접 카메라 사용 충돌과 매핑 구획 전송 누락까지 시작 전에 막습니다.
+- 일반 A 작업자에 실제HTTP·신원전달, B에 점유·매칭·해제·동일 handoff 경로가 전달되는지 검사했습니다.
+- 최신 Vision1089개/48.963초, 화재305개/17.634초, pip check 통과. 초기 모의검사 실패는 수정 후 재확인.
+- 현재 AWS DB 버전 컬럼·제약·트리거 활성 및3층 A01~A04를 읽기 전용 확인. 기존 이용39·화재151~154 보존 확인.
+- 배포 관리자 dashboard에서 기존 사건13의 시험 화재 알림 표시까지 이번에 확인. 과거 웹 미확인 기록보다 이 결과가 최신입니다.
+- 미완료: 알림 감지 위치가 위치 미확인. 카메라 source→업무 위치 연결의 Boot/프런트 협업 범위이며 임의 변경하지 않았습니다.
+- 당시 로컬8000 /health 미연결 상태는 위 최신 실물 확인으로 갱신됐습니다. 일반 실행의 실제 웹 예약29·이용40·새 DB 반영·웹 표시를 확인했습니다.
+- 실제 사용자 예약 기반 주차 업무 경로는 통과했습니다. 화재 정확도·위치·복구 한계는 별도 미완료로 유지합니다.
+- 세부19항목과 로그·화면 근거: results/deployed_runtime_20261028/acceptance_audit.json.
+
+
+## 일반 FastAPI 배포 전송 연결 작업
+
+사용자 요구는 시험 실행기가 아닌 main:app 일반 서버의 실제 예약 기반 입출차·점유·연결·출차·화재 송신입니다.
+로컬 .env는 runtime.deployed.json과 실제 송신 양쪽을 지정하고, 기존 관찰 프로필은 보존했습니다.
+VISION_REQUIRE_DEPLOYED_DELIVERY=true이면 주차·해제·양쪽 화재 전송·대상 일치를 시작 전 검사합니다.
+시험 행 생성·자동 예약 취소는 호출하지 않습니다. 화재는 현재 HTTP 시험 예외를 유지해 실제 저장하되 is_test=true입니다.
+한 대 신원 전달 조건은 유지합니다. 일반 상시 모드에는 시험 단계별 주차 송신 중단이 없으므로 가림도 실제 점유로 반영될 수 있습니다.
+main.py /health는 감시·송신 상태를 포함합니다. 변경은 기존 서버 재시작 전까지 반영되지 않습니다.
+빈 요청 API 확인: 입출차·점유·매칭·해제·화재 모두400 검증 응답. 유효 이벤트·DB 변경 없음.
+현재 설정·계약 검사 통과와 실제 일반 서버/사용자 예약 연동 실물 검증 완료를 구분해야 합니다.
+검증: 설정 preflight 실제 송신 양쪽·해제 true, API5개 빈 요청400. Vision1088개/52.678초, 화재304개/17.971초 통과. 관련98개 및 기존 실행기19개·CheckOnly 통과.
+근거는 results/deployed_runtime_20261028. 카메라·유효 업무 이벤트·DB 행을 새로 만들지 않았습니다.
+현재 로컬8000 상태 조회는 연결 불가였습니다. main:app 재시작과 실제 사용자 예약 기반 관찰은 미검증입니다.
+
+
 
 ## 2026-10-28 통폐합 후 검증
 

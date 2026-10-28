@@ -1,4 +1,11 @@
 """통합 FastAPI 진입점: 기존 /recognize 경로 유지."""
+from pathlib import Path
+from dotenv import load_dotenv
+
+# 1. 어떤 모듈이 먼저 불리더라도 프로젝트 .env의 자동감시 설정부터 읽습니다.
+# 배포 환경에서 이미 지정한 환경변수는 덮어쓰지 않습니다.
+load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 # 10/11 RAG
@@ -42,10 +49,17 @@ def root(): return {'message':'APCMS AI Server is running'}
 # Jenkins 배포 후 Health Check : 서버 가용성 확인 1025
 @app.get("/health", tags=["Health"])
 def health_check():
+    # 2. 서버 생존과 실제 감시·송신 설정을 구분해 보여줍니다.
+    parking = getattr(app.state, 'parking_runtime', None)
+    safety = getattr(app.state, 'shared_safety_runtime', None)
     return {
         "status": "UP",
         "service": "apcms-ai",
-        "data_mode": settings()["mode"]
+        "data_mode": settings()["mode"],
+        "vision": {
+            "parking": parking.snapshot() if parking else None,
+            "shared_safety": safety.snapshot() if safety else None,
+        },
     }
 
 # 주차 자동 실행은 PARKING_RUNTIME_ENABLED=true일 때만 시작합니다.
