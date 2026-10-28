@@ -16,6 +16,8 @@ import java.util.UUID;
 import java.util.regex.Pattern;
 import org.springframework.http.HttpStatus;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.ApplicationEventPublisher;
+import kr.co.alpharking.websocket.parking.ParkingSpaceChangedEvent;
 import kr.co.alpharking.dto.parking.AiSpaceReleaseRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -25,7 +27,7 @@ import kr.co.alpharking.dto.parking.AiVehicleEventRequest;
 import kr.co.alpharking.dto.parking.AiVehicleEventResponse;
 import kr.co.alpharking.dto.parking.ParkingUsageRow;
 
-/** No schema changes: matching validates existing reservations before updating PARKING_USAGE.
+/** No schema changes: actual location linking and reservation decisions are evaluated separately.
  * 판정 이력 저장은 입출차 이벤트의 영속 중복 처리 보장을 뜻하지 않습니다.
  */
 @Service
@@ -38,11 +40,14 @@ public class AiVehicleEventService {
     private final ParkingUsageDao usages;
     private final ParkingUsageService usageService;
     private final AiParkingDecisionService decisions;
+    private final ApplicationEventPublisher events;
 
-    public AiVehicleEventService(ParkingUsageDao usages, ParkingUsageService usageService, AiParkingDecisionService decisions) {
+    public AiVehicleEventService(ParkingUsageDao usages, ParkingUsageService usageService, AiParkingDecisionService decisions,
+            ApplicationEventPublisher events) {
         this.usages = usages;
         this.usageService = usageService;
         this.decisions = decisions;
+        this.events = events;
     }
 
     @Transactional
@@ -82,6 +87,7 @@ public class AiVehicleEventService {
         Long usageId = "VEHICLE_SPACE_MATCH".equals(expectedType)
             ? usages.findUniqueOpenUsageByPlate(plate) : usages.findOpenUsageByPlate(plate);
         Long decisionSpaceId = null;
+        boolean locationChanged = false;
         if ("VEHICLE_PASSAGE".equals(expectedType)) {
             if ("ENTRY".equals(req.direction())) {
                 if (usageId != null) { outcome = "UNCHANGED"; detail = "현재 입차 기록이 이미 존재합니다."; }
@@ -117,7 +123,14 @@ public class AiVehicleEventService {
                 if (result.conflictReason() != null) {
                     outcome = "PENDING"; detail = result.conflictReason();
                 } else if (result.unchanged()) {
-                    outcome = "UNCHANGED"; detail = "이미 동일 구획과 예약에 연결되어 있습니다.";
+                    outcome = "UNCHANGED"; detail = "이미 동일한 주차 위치와 예약 연결 상태입니다.";
+                } else {
+                    locationChanged = true;
+                }
+                if (result.conflictReason() == null && !"MATCHED".equals(parkingDecision)) {
+                    detail = (result.unchanged() ? "기존 주차 위치 유지" : "실제 주차 위치 연결 완료")
+                        + ("WRONG_SPACE".equals(parkingDecision)
+                            ? " / 예약한 구획과 다릅니다." : " / 현재 유효한 차량 예약이 없습니다.");
                 }
             }
         }
@@ -129,6 +142,8 @@ public class AiVehicleEventService {
         }
         var response = new AiVehicleEventResponse(req.eventId(), expectedType, outcome, plate, req.spaceCode(), usageId, detail, version, parkingDecision);
         if ("VEHICLE_SPACE_MATCH".equals(expectedType)) decisions.record(decisionSpaceId, at, req, response);
+        // 판정 이력 저장까지 성공한 변경만 커밋 후 전송한다. 보류·동일 연결은 전송하지 않는다.
+        if (locationChanged) events.publishEvent(new ParkingSpaceChangedEvent());
         return response;
     }
     @Transactional

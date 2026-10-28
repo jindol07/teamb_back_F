@@ -60,6 +60,9 @@ public interface ParkingUsageDao {
     int assignReservedSpace(@Param("usageId") Long usageId, @Param("spaceId") Long spaceId,
             @Param("reservationId") Long reservationId, @Param("number") String number,
             @Param("eventTime") Timestamp eventTime);
+    // 예약을 부여하지 않고 AI로 확인한 실제 주차 위치만 연결한다.
+    int assignObservedSpace(@Param("usageId") Long usageId, @Param("spaceId") Long spaceId,
+            @Param("number") String number, @Param("eventTime") Timestamp eventTime);
     Long lockLinkVersion(@Param("usageId") Long usageId);
     int releaseAiSpace(@Param("usageId") Long usageId, @Param("spaceId") Long spaceId,
                        @Param("number") String number, @Param("linkVersion") Long linkVersion);

@@ -55,7 +55,9 @@ public class AiParkingDecisionService {
     private static void validate(AiParkingDecisionRow row) {
         if (row == null || row.parkingDecision() == null || !DECISIONS.contains(row.parkingDecision())
             || !Set.of("PROCESSED", "UNCHANGED", "PENDING").contains(row.outcome())
-            || ("MATCHED".equals(row.parkingDecision()) == "PENDING".equals(row.outcome())))
+            // 과거 예약 불일치 PENDING 기록도 읽는다. 새 결과는 실제 연결 성공과 예약 판정을 분리한다.
+            || ("MATCHED".equals(row.parkingDecision()) && "PENDING".equals(row.outcome()))
+            || ("UNDETERMINED".equals(row.parkingDecision()) && !"PENDING".equals(row.outcome())))
             throw new IllegalStateException("주차 판정 기록 내용 오류");
     }
 }

@@ -96,7 +96,7 @@ public class ParkingUsageService {
         }
     }
 
-    /** AI 연결만 예약을 검증한다. 관리자 수동 연결의 기존 정책은 유지한다. */
+    /** 실제 차량 위치와 예약 판정을 분리한다. 예약 불일치만으로 위치 연결을 막지 않는다. */
     @Transactional
     public ReservedAssignmentResult assignReservedForAi(Long usageId, Long spaceId, String rawNumber, Timestamp eventTime) {
         String number = normalize(rawNumber);
@@ -126,10 +126,12 @@ public class ParkingUsageService {
                 || r.getParkingSpaceId() == null || !"CONFIRMED".equals(r.getStatusCode()))) {
             return held("예약 상태를 확인할 수 없습니다.");
         }
-        if (ownReservations.isEmpty()) return new ReservedAssignmentResult(null, "현재 유효한 차량 예약이 없습니다.", false, "NO_VALID_RESERVATION");
+        if (ownReservations.isEmpty()) {
+            return assignObservedSpace(current, usageId, spaceId, number, eventTime, "NO_VALID_RESERVATION");
+        }
         if (ownReservations.size() != 1) return held("차량의 유효 예약이 중복되어 판정할 수 없습니다.");
         if (!spaceId.equals(ownReservations.getFirst().getParkingSpaceId())) {
-            return new ReservedAssignmentResult(null, "예약한 구획과 실제 정차 구획이 다릅니다.", false, "WRONG_SPACE");
+            return assignObservedSpace(current, usageId, spaceId, number, eventTime, "WRONG_SPACE");
         }
         if (reservations.size() != 1) return held("일치하는 유효 예약을 유일하게 확인할 수 없습니다.");
         var reservation = reservations.getFirst();
@@ -152,6 +154,25 @@ public class ParkingUsageService {
             throw new IllegalStateException("구획·예약 연결 결과 재조회 실패");
         }
         return new ReservedAssignmentResult(saved, null, unchanged);
+    }
+
+    // 위의 구획·이용 잠금과 시각·중복 검사를 통과한 위치만 연결한다. 다른 차량의 예약은 수정하지 않는다.
+    private ReservedAssignmentResult assignObservedSpace(ParkingUsageRow current, Long usageId, Long spaceId,
+            String number, Timestamp eventTime, String decision) {
+        if (current.getParkingReservationId() != null) {
+            return held("기존 예약 연결이 있어 임의로 변경하지 않았습니다.");
+        }
+        boolean unchanged = spaceId.equals(current.getParkingSpaceId());
+        int updated = dao.assignObservedSpace(usageId, spaceId, number, eventTime);
+        if (updated == 0) return held("이용 또는 구획 연결 상태가 변경되어 연결하지 않았습니다.");
+        if (updated != 1) throw new IllegalStateException("관찰 구획 연결 반영 건수가 올바르지 않습니다.");
+        ParkingUsageRow saved = dao.findById(usageId);
+        if (saved == null || !usageId.equals(saved.getParkingUsageId())
+                || !number.equals(saved.getVehicleNumber()) || saved.getExitAt() != null
+                || !spaceId.equals(saved.getParkingSpaceId()) || saved.getParkingReservationId() != null) {
+            throw new IllegalStateException("관찰 구획 연결 결과 재조회 실패");
+        }
+        return new ReservedAssignmentResult(saved, null, unchanged, decision);
     }
 
     public record ReleaseResult(ParkingUsageRow usage, String conflictReason, Long linkVersion) {}

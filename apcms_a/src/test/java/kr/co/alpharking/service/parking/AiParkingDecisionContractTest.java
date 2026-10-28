@@ -60,6 +60,19 @@ class AiParkingDecisionContractTest {
         var r=request(); decisions.record(null,at,r,response(r,"UNDETERMINED","PENDING"));
         verifyNoInteractions(dao);
     }
+    @Test void observedLocationSuccessWithReservationWarningRoundTripsAndOldPendingStillReads() {
+        when(dao.insert(eq(16L),eq(at),anyString())).thenReturn(1);
+        for (String code : List.of("NO_VALID_RESERVATION", "WRONG_SPACE")) {
+            for (String outcome : List.of("PROCESSED", "UNCHANGED", "PENDING")) {
+                var r = request();
+                decisions.record(16L, at, r, response(r, code, outcome));
+                var raw = ArgumentCaptor.forClass(String.class);
+                verify(dao,atLeastOnce()).insert(eq(16L),eq(at),raw.capture());
+                when(dao.recent()).thenReturn(List.of(new AiParkingDecisionDao.Stored(100L,raw.getValue())));
+                assertEquals(outcome, decisions.recent().getFirst().outcome());
+            }
+        }
+    }
     @Test void globalPrettyPrintingCannotHideStoredDecisionsFromQuery() {
         var pretty = JsonMapper.builder().enable(tools.jackson.databind.SerializationFeature.INDENT_OUTPUT).build();
         var target = new AiParkingDecisionService(dao, pretty);
@@ -83,6 +96,7 @@ class AiParkingDecisionContractTest {
     @Test void contradictoryDecisionIsRejectedBeforeInsert() {
         var r=request();
         assertThrows(IllegalStateException.class,() -> decisions.record(16L,at,r,response(r,"MATCHED","PENDING")));
+        assertThrows(IllegalStateException.class,() -> decisions.record(16L,at,r,response(r,"UNDETERMINED","PROCESSED")));
         verifyNoInteractions(dao);
     }
     @Test void adminEndpointRejectsAnonymousAndNonAdminPrincipals() {
@@ -116,7 +130,7 @@ class AiParkingDecisionContractTest {
             .thenReturn(new ParkingUsageService.ReservedAssignmentResult(null,null,false));
         doThrow(new IllegalStateException("storage failed")).when(recorder).record(any(),any(),any(),any());
         var tx=new Transactions();
-        var proxy=new ProxyFactory(new AiVehicleEventService(usageDao,usages,recorder));
+        var proxy=new ProxyFactory(new AiVehicleEventService(usageDao,usages,recorder,mock(org.springframework.context.ApplicationEventPublisher.class)));
         proxy.addAdvice(new TransactionInterceptor(tx,new AnnotationTransactionAttributeSource()));
         assertThrows(IllegalStateException.class,() -> ((AiVehicleEventService)proxy.getProxy()).receive(r,"VEHICLE_SPACE_MATCH"));
         verify(usages).assignReservedForAi(eq(70L),eq(16L),anyString(),any());

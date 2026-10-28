@@ -187,6 +187,21 @@
                        AND r.RESERVATION_START_AT &lt;= #{eventTime} AND r.RESERVATION_END_AT &gt;= #{eventTime}
                        AND (r.VEHICLE_NUMBER = #{number} OR r.PARKING_SPACE_ID = #{spaceId}))
     </update>
+    <!-- 예약 없음·예약 구획 불일치는 실제 위치 연결과 별도 판정이다. 기존 예약 연결은 덮어쓰지 않는다.
+         서비스가 구획→이용 순으로 잠근 뒤 호출하며, UPDATE에서도 활성 이용과 연결 조건을 다시 검사한다. -->
+    <update id="assignObservedSpace">
+        UPDATE PARKING_USAGE u SET PARKING_SPACE_ID = #{spaceId}
+         WHERE u.PARKING_USAGE_ID = #{usageId} AND u.EXIT_AT IS NULL
+           AND u.VEHICLE_NUMBER = #{number} AND u.ENTRY_AT &lt;= #{eventTime}
+           AND u.PARKING_RESERVATION_ID IS NULL
+           AND (u.PARKING_SPACE_ID IS NULL OR u.PARKING_SPACE_ID = #{spaceId})
+           AND 1 = (SELECT COUNT(*) FROM PARKING_USAGE active
+                     WHERE active.VEHICLE_NUMBER = #{number} AND active.EXIT_AT IS NULL)
+           AND NOT EXISTS (SELECT 1 FROM PARKING_USAGE other_usage
+                            WHERE other_usage.PARKING_SPACE_ID = #{spaceId}
+                              AND other_usage.EXIT_AT IS NULL
+                              AND other_usage.PARKING_USAGE_ID != #{usageId})
+    </update>
     <!-- 비활성 상태에서는 새 컬럼을 조회하지 않아 기존 DB와 호환된다. -->
     <select id="lockLinkVersion" resultType="long">
         SELECT LINK_VERSION FROM PARKING_USAGE WHERE PARKING_USAGE_ID = #{usageId} FOR UPDATE
