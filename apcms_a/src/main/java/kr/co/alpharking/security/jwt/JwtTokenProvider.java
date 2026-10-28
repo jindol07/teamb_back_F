@@ -87,13 +87,13 @@ public class JwtTokenProvider {
 			   //-------------------------------------------------
 			   .claim("role", role)
 			   //-------------------------------------------------
-			   .setIssuedAt(new Date()) // 토큰을 발급 한 시점을 이 메서드가 실행되는 시점으로 설정
-			   .setExpiration(expiryDate)// 토큰 만료시간
-			   .signWith(key, SignatureAlgorithm.HS512)//서명 추가, 비밀키와 해싱 알고리즘을 설정 
-			   .compact();//JWT를 문자열로 압축해서 반환 
+			   .setIssuedAt(new Date())
+			   .setExpiration(expiryDate)
+			   .signWith(key, SignatureAlgorithm.HS512)
+			   .compact();
 		
 		System.out.println("JwtTokenProvider.jwtReslut:"+jwtReslut);
-		return jwtReslut;
+		return jwtReslut;	
 		
 	}
 	  //-------------------------------------------------
