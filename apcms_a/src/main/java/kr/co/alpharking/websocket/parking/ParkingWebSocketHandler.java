@@ -1,4 +1,4 @@
-/** [1023_1010] 파일 안내
+/** 파일 안내
  * 용도: 관리자 소켓 인증·만료·PING/PONG·공개 구획 스냅샷 전송.
  * 사용처·연결: A ParkingWebSocketConfig, ParkingSpaceBroadcastListener, 프론트 useParkingSpaceSync(admin).
  * 인증 직후·구획 변경 커밋 후 별도 읽기 트랜잭션으로 최신 목록을 조회한다. 예약 변경의 U 서버 이벤트를 직접 구독하지는 않는다.
@@ -62,17 +62,17 @@ public class ParkingWebSocketHandler extends TextWebSocketHandler {
         this.authService = authService;
         this.readTransaction = new TransactionTemplate(transactionManager);
         this.readTransaction.setReadOnly(true);
-        // [1023_1010] 커밋 이벤트의 이전 트랜잭션 자원에 기대지 않고 새 읽기 트랜잭션으로 조회한다.
+        // 커밋 이벤트의 이전 트랜잭션 자원에 기대지 않고 새 읽기 트랜잭션으로 조회한다.
         this.readTransaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
     }
 
-    // [1023_1010] 인증 직후 처리 훅. A는 최신 조회를 예약하고 U는 다음 공통 DB 확인 작업에서 최신 결과를 받는다.
+    // A의 인증 성공 직후 최신 공개 현황을 조회·전송하는 작업을 예약한다.
     private void onAuthenticated() {
         // 인증 성공 직후와 DB 변경 커밋 후에 최신 현황을 보낸다.
         broadcastLatest();
     }
 
-    // [1023_1010] 단일 전송 실행기에 작업을 예약한다. DB 저장 트랜잭션과 네트워크 전송의 실패를 분리한다.
+    // 단일 전송 실행기에 작업을 예약한다. DB 저장 트랜잭션과 네트워크 전송의 실패를 분리한다.
     public void broadcastLatest() {
         try {
             broadcasts.execute(this::sendLatest);
@@ -81,7 +81,7 @@ public class ParkingWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    // [1023_1010] 인증 연결이 있을 때만 별도 읽기 트랜잭션으로 최신 공개 목록을 읽어 동일 메시지를 전송한다.
+    // 인증 연결이 있을 때만 별도 읽기 트랜잭션으로 최신 공개 목록을 읽어 동일 메시지를 전송한다.
     private void sendLatest() {
         List<Client> targets = clients.values().stream().filter(this::isAuthenticated).toList();
         if (targets.isEmpty()) return;
@@ -97,7 +97,7 @@ public class ParkingWebSocketHandler extends TextWebSocketHandler {
     }
 
     @PreDestroy
-    // [1023_1010] Spring 종료 시 백그라운드 작업과 소켓을 정리한다.
+    // Spring 종료 시 백그라운드 작업과 소켓을 정리한다.
     public void shutdown() {
         authChecks.shutdownNow();
         broadcasts.shutdownNow();
@@ -105,13 +105,13 @@ public class ParkingWebSocketHandler extends TextWebSocketHandler {
     }
 
     @PostConstruct
-    // [1023_1010] 미인증 대기·만료 토큰 확인은 PING 수신 여부와 별개로 1초마다 수행한다.
+    // 미인증 대기·만료 토큰 확인은 PING 수신 여부와 별개로 1초마다 수행한다.
     public void startAuthChecks() {
         authChecks.scheduleWithFixedDelay(this::checkConnections, 1, 1, TimeUnit.SECONDS);
     }
 
     @Override
-    // [1023_1010] 연결 수 제한과 전송 동시성 장식을 적용한다. 접속만으로는 인증 완료가 아니다.
+    // 연결 수 제한과 전송 동시성 장식을 적용한다. 접속만으로는 인증 완료가 아니다.
     public void afterConnectionEstablished(WebSocketSession session) {
         session.setTextMessageSizeLimit(16384);
         boolean accepted;
@@ -125,7 +125,7 @@ public class ParkingWebSocketHandler extends TextWebSocketHandler {
     }
 
     @Override
-    // [1023_1010] 인증 전에는 AUTH만 처리하고 인증 후에는 PING에 PONG으로 응답한다. 나머지 메시지는 정책 위반으로 종료한다.
+    // 인증 전에는 AUTH만 처리하고 인증 후에는 PING에 PONG으로 응답한다. 나머지 메시지는 정책 위반으로 종료한다.
     protected void handleTextMessage(WebSocketSession session, TextMessage message) {
         Client client = clients.get(session.getId());
         if (client == null) return;
@@ -139,7 +139,7 @@ public class ParkingWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    // [1023_1010] 10초 안의 AUTH를 검증한다. AUTH_OK 전송 후 identity를 공개해 현황이 인증 응답보다 앞서지 않게 한다.
+    // 10초 안의 AUTH를 검증한다. AUTH_OK 전송 후 identity를 공개해 현황이 인증 응답보다 앞서지 않게 한다.
     private void authenticate(Client client, TextMessage message) {
         try {
             if (System.nanoTime() - client.connectedAt >= AUTH_TIMEOUT_NANOS) {
@@ -175,7 +175,7 @@ public class ParkingWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    // [1023_1010] 소켓 생존·등록된 세션·JWT 만료를 확인한다. 만료 연결은 종료한다.
+    // 소켓 생존·등록된 세션·JWT 만료를 확인한다. 만료 연결은 종료한다.
     private boolean isAuthenticated(Client client) {
         if (!client.session.isOpen() || clients.get(client.session.getId()) != client) {
             clients.remove(client.session.getId(), client);
@@ -190,7 +190,7 @@ public class ParkingWebSocketHandler extends TextWebSocketHandler {
         return true;
     }
 
-    // [1023_1010] 닫힌 연결·시간 초과된 미인증 연결·만료된 인증 연결을 정리한다.
+    // 닫힌 연결·시간 초과된 미인증 연결·만료된 인증 연결을 정리한다.
     private void checkConnections() {
         for (Client client : clients.values()) {
             if (!client.session.isOpen()) clients.remove(client.session.getId(), client);
@@ -203,19 +203,19 @@ public class ParkingWebSocketHandler extends TextWebSocketHandler {
     }
 
     @Override
-    // [1023_1010] 정상 또는 원격 연결 종료 후 세션 참조를 제거한다.
+    // 정상 또는 원격 연결 종료 후 세션 참조를 제거한다.
     public void afterConnectionClosed(WebSocketSession session, CloseStatus status) {
         clients.remove(session.getId());
     }
 
     @Override
-    // [1023_1010] 전송 오류 세션을 닫는다. 프론트는 일반 연결 장애 시 HTTP 대체 조회·재연결을 수행한다.
+    // 전송 오류 세션을 닫는다. 프론트는 일반 연결 장애 시 HTTP 대체 조회·재연결을 수행한다.
     public void handleTransportError(WebSocketSession session, Throwable exception) {
         log.warn("주차현황 웹소켓 연결 오류: {}", session.getId());
         disconnect(session, CloseStatus.SERVER_ERROR);
     }
 
-    // [1023_1010] 전송 직전 인증 상태를 확인한다. 실패한 세션은 유지하지 않고 정리한다.
+    // 전송 직전 인증 상태를 확인한다. 실패한 세션은 유지하지 않고 정리한다.
     private boolean send(Client client, TextMessage message) {
         if (!isAuthenticated(client)) return false;
         try {
@@ -228,7 +228,7 @@ public class ParkingWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    // [1023_1010] 클라이언트 목록에서 제거하고 종료 코드를 보내 소켓을 닫는다.
+    // 클라이언트 목록에서 제거하고 종료 코드를 보내 소켓을 닫는다.
     private void disconnect(WebSocketSession session, CloseStatus status) {
         clients.remove(session.getId());
         try {
@@ -238,7 +238,7 @@ public class ParkingWebSocketHandler extends TextWebSocketHandler {
         }
     }
 
-    // [1023_1010] 연결별 자원·인증 결과를 보관한다. 같은 연결의 인증/메시지 처리는 동기화된다.
+    // 연결별 자원·인증 결과를 보관한다. 같은 연결의 인증/메시지 처리는 동기화된다.
     private static class Client {
         private final WebSocketSession session;
         private final long connectedAt = System.nanoTime();
@@ -247,8 +247,8 @@ public class ParkingWebSocketHandler extends TextWebSocketHandler {
         private Client(WebSocketSession session) { this.session = session; }
     }
 
-    // [1023_1010] 첫 수신 JSON 계약: type=AUTH와 JWT token. URL 쿼리로 인증하지 않는다.
+    // 첫 수신 JSON 계약: type=AUTH와 JWT token. URL 쿼리로 인증하지 않는다.
     public record AuthRequest(String type, String token) {}
-    // [1023_1010] 프론트가 처리하는 메시지 계약: PARKING_SPACES_SNAPSHOT과 공개 구획 목록.
+    // 프론트가 처리하는 메시지 계약: PARKING_SPACES_SNAPSHOT과 공개 구획 목록.
     public record Snapshot(String type, List<ParkingSpacePublicRow> spaces) {}
 }

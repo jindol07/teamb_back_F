@@ -118,7 +118,13 @@ class FireEventStateManager:
     """
 
     def __init__(self, window=5, min_hits=3, clear_after=3, cooldown=30.0,
-                 region_iou=0.15, heartbeat_seconds=10.0, max_regions=16):
+                 region_iou=0.15, heartbeat_seconds=10.0, max_regions=16,
+                 smoke_confirm_conf=None):
+        # 1. 새 연기 사건의 확정 근거만 강화하며 기존 탐지·진행 관찰은 유지합니다.
+        if smoke_confirm_conf is not None and (type(smoke_confirm_conf) not in (int, float)
+                or not math.isfinite(smoke_confirm_conf) or not 0 <= smoke_confirm_conf <= 1):
+            raise ValueError("연기 사건 확정 신뢰도는 0~1이어야 합니다.")
+        self.smoke_confirm_conf = smoke_confirm_conf
         if type(window) is not int or window < 1 or type(min_hits) is not int or not 1 <= min_hits <= window:
             raise ValueError("관찰 창 크기와 최소 감지 횟수를 확인하세요.")
         if type(clear_after) is not int or clear_after < 1:
@@ -286,7 +292,9 @@ class FireEventStateManager:
                 region.bbox, region.confidence = box, score
                 region.last_seen = source_seconds
                 region.misses = 0
-                region.history.append(True)
+                confirm_hit = (region.kind != "SMOKE" or self.smoke_confirm_conf is None
+                               or score >= self.smoke_confirm_conf)
+                region.history.append(confirm_hit)
                 hits = sum(region.history)
                 if region.status != "SUSPECTED" and hits >= self.min_hits:
                     if (region.status == "CLEARED" and region.cleared_at is not None and

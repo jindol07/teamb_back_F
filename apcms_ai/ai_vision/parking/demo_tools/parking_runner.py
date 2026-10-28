@@ -33,7 +33,7 @@ def main(*, stop_event=None, on_frame=None, autostart=False):
         if ((root/'parking_started.flag').exists() and not (root/'fixture_ready.flag').exists()
                 and not (root/'stop_requested.flag').exists()):
             guide_phase='AUTO: EMPTY CHECK / KEEP EMPTY' if autostart else 'WAIT: BOTH WINDOWS START / KEEP EMPTY'
-        self.guidance=demo_guidance(guide_phase,auto_stop=autostart)
+        self.guidance=None if os.environ.get('PARKING_DEMO_HIDE_GUIDANCE')=='1' else demo_guidance(guide_phase,auto_stop=autostart)
         return original_show(self,frame,*args,**kwargs)
     ParkingPreview.show=show
     native=camera.open_camera;state={'cap':None,'frame':None}

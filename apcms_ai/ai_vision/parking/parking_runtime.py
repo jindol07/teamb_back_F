@@ -153,18 +153,25 @@ class ParkingRuntime:
 def install_parking_runtime(app, *, check_safety=True, runtime=None):
     runtime = ParkingRuntime(check_safety=check_safety) if runtime is None else runtime
     app.state.parking_runtime = runtime
+    from ai_vision.safety.shared_runtime import SharedSafetyRuntime
+    shared_safety = SharedSafetyRuntime(runtime)
+    app.state.shared_safety_runtime = shared_safety
     previous_lifespan = app.router.lifespan_context
     @asynccontextmanager
     async def lifespan(application):
         # 2. 기존 문의·추천·화재의 수명주기를 교체하지 않고 감쌉니다.
         # 장치 충돌은 다른 감시 기능이 시작되기 전에 검사합니다.
         runtime.load_config()
+        shared_safety.prepare()
         async with previous_lifespan(application) as state:
             try:
                 await asyncio.to_thread(runtime.start)
+                shared_safety.start()
                 yield state
             finally:
+                await asyncio.to_thread(shared_safety.stop)
                 await asyncio.to_thread(runtime.stop)
     app.router.lifespan_context = lifespan
     app.add_api_route("/vision/parking/runtime", runtime.snapshot, methods=["GET"], tags=["Vision"])
+    app.add_api_route("/vision/safety/shared-runtime", shared_safety.snapshot, methods=["GET"], tags=["Vision"])
     return runtime

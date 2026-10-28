@@ -6,6 +6,18 @@ public class CameraE2EFixture {
  static long scalar(Connection c,String sql,Object...a)throws Exception{try(var s=c.prepareStatement(sql)){s.setQueryTimeout(5);for(int i=0;i<a.length;i++)s.setObject(i+1,a[i]);try(var r=s.executeQuery()){r.next();return r.getLong(1);}}}
  static int update(Connection c,String sql,Object...a)throws Exception{try(var s=c.prepareStatement(sql)){s.setQueryTimeout(5);for(int i=0;i<a.length;i++)s.setObject(i+1,a[i]);return s.executeUpdate();}}
  static void require(boolean b,String message){if(!b)throw new IllegalStateException(message);}
+ // 1. 일반 입출차 시험과 선택 기능인 연결 버전 검증을 구분한다. SQL 오류는 숨기지 않는다.
+ static String inspectLinkVersion(Connection c,String plate)throws Exception{
+  long present=scalar(c,"SELECT COUNT(*) FROM USER_TAB_COLUMNS WHERE TABLE_NAME='PARKING_USAGE' AND COLUMN_NAME='LINK_VERSION'");
+  require(present==0||present==1,"Unexpected link version column metadata");
+  if(present==0)return "DB_LINK_VERSION=UNAVAILABLE\nDB_LINK_VERSION_CHECK=NOT_RUN_COLUMN_MISSING";
+  return "DB_LINK_VERSION="+scalar(c,"SELECT NVL(MAX(LINK_VERSION),-1) FROM PARKING_USAGE WHERE VEHICLE_NUMBER=?",plate)+"\nDB_LINK_VERSION_CHECK=AVAILABLE";
+ }
+ // 4. Boot가 Oracle DATE와 비교하는 한국 시각으로 시험 예약 기간을 만듭니다.
+ static Timestamp[] reservationWindow(java.time.Instant now){
+  var at=now.atZone(java.time.ZoneId.of("Asia/Seoul")).toLocalDateTime();
+  return new Timestamp[]{Timestamp.valueOf(at.minusMinutes(5)),Timestamp.valueOf(at.plusMinutes(10))};
+ }
  static long id(Properties p,String key){return Long.parseLong(p.getProperty(key));}
  static List<Long> spaces(Properties p){var result=new ArrayList<Long>();result.add(id(p,"space"));if(p.getProperty("wrong_space")!=null){long wrong=id(p,"wrong_space");require(wrong>0&&wrong!=id(p,"space"),"Invalid second space");result.add(wrong);}return result;}
  static List<Long> usages(Properties p){
@@ -32,20 +44,35 @@ public class CameraE2EFixture {
     var p=new Properties();if(Files.exists(FILE))try(var r=Files.newInputStream(FILE)){p.load(r);}
     if(args[0].equals("prepare")){
      require(p.isEmpty(),"Existing manifest requires inspection; do not overwrite");
-     require(scalar(c,"SELECT COUNT(*) FROM VEHICLE WHERE VEHICLE_NUMBER=?",PLATE)==1&&scalar(c,"SELECT COUNT(*) FROM PARKING_USAGE WHERE VEHICLE_NUMBER=? AND EXIT_AT IS NULL",PLATE)==0&&scalar(c,"SELECT COUNT(*) FROM PARKING_RESERVATION WHERE VEHICLE_NUMBER=?",PLATE)==0,"Printed vehicle is not isolated from active business; stop");
+     String createScope=System.getenv().getOrDefault("CAMERA_E2E_CREATE_VEHICLE","false");
+     require(Set.of("true","false").contains(createScope),"Invalid vehicle creation scope");
+     boolean createVehicle=createScope.equals("true");
+     require(scalar(c,"SELECT COUNT(*) FROM VEHICLE WHERE VEHICLE_NUMBER=?",PLATE)==(createVehicle?0:1)&&scalar(c,"SELECT COUNT(*) FROM PARKING_USAGE WHERE VEHICLE_NUMBER=? AND EXIT_AT IS NULL",PLATE)==0&&scalar(c,"SELECT COUNT(*) FROM PARKING_RESERVATION WHERE VEHICLE_NUMBER=?",PLATE)==0,"Printed vehicle is not isolated from active business; stop");
      p.setProperty("cycles",cycles);
      p.setProperty("baseline_usage_count",Long.toString(scalar(c,"SELECT COUNT(*) FROM PARKING_USAGE WHERE VEHICLE_NUMBER=?",PLATE)));
      require(scalar(c,"SELECT COUNT(*) FROM PARKING_FLOOR WHERE FLOOR_NO=999")==0,"Synthetic floor collision");
-     long office=scalar(c,"SELECT OFFICE_ID FROM VEHICLE WHERE VEHICLE_NUMBER=?",PLATE);require(office>0,"No office reference");
+     long office;
+     if(createVehicle){
+      String rawOffice=System.getenv("CAMERA_E2E_OFFICE_ID");
+      require(rawOffice!=null&&rawOffice.matches("[1-9][0-9]*"),"Explicit fixture office required");
+      office=Long.parseLong(rawOffice);
+      require(scalar(c,"SELECT COUNT(*) FROM OFFICE WHERE OFFICE_ID=?",office)==1,"Fixture office missing");
+      p.setProperty("vehicle",Long.toString(scalar(c,"SELECT SEQ_VEHICLE.NEXTVAL FROM DUAL")));
+      p.setProperty("vehicle_office",Long.toString(office));
+     }else{office=scalar(c,"SELECT OFFICE_ID FROM VEHICLE WHERE VEHICLE_NUMBER=?",PLATE);}
+     require(office>0,"No office reference");
      for(var a:List.of(new String[]{"floor","SEQ_PARKING_FLOOR"},new String[]{"zone","SEQ_PARKING_ZONE"},new String[]{"space","SEQ_PARKING_SPACE"},new String[]{"reservation","SEQ_PARKING_RESERVATION"}))p.setProperty(a[0],Long.toString(scalar(c,"SELECT "+a[1]+".NEXTVAL FROM DUAL")));
      if(scenario.equals("wrong_space_correction"))p.setProperty("wrong_space",Long.toString(scalar(c,"SELECT SEQ_PARKING_SPACE.NEXTVAL FROM DUAL")));
      p.setProperty("marker","AI_HTTP_TEST_"+UUID.randomUUID().toString().substring(0,8));save(p);
+     // 2. 시험 차량 소유 정보는 INSERT 전에 매니페스트에 저장합니다.
+     if(createVehicle)update(c,"INSERT INTO VEHICLE(VEHICLE_ID,OFFICE_ID,VEHICLE_NUMBER,VEHICLE_TYPE_CODE,REGISTRATION_TYPE_CODE,REGISTRATION_STATUS_CODE,OWNER_NAME,REGISTERED_AT) VALUES(?,?,?,'PERSONAL','INITIAL','REGISTERED',?,SYSDATE)",id(p,"vehicle"),office,PLATE,p.getProperty("marker"));
      update(c,"INSERT INTO PARKING_FLOOR(PARKING_FLOOR_ID,FLOOR_NO,FLOOR_NAME) VALUES(?,999,?)",id(p,"floor"),p.getProperty("marker"));
      update(c,"INSERT INTO PARKING_ZONE(PARKING_ZONE_ID,PARKING_FLOOR_ID,ZONE_CODE,ZONE_NAME) VALUES(?,?,'Z',?)",id(p,"zone"),id(p,"floor"),p.getProperty("marker"));
      update(c,"INSERT INTO PARKING_SPACE(PARKING_SPACE_ID,PARKING_ZONE_ID,SPACE_NUMBER,SPACE_TYPE_CODE,SPACE_STATUS_CODE,MEMO) VALUES(?,?,'01','NORMAL','AVAILABLE',?)",id(p,"space"),id(p,"zone"),p.getProperty("marker"));
      if(p.getProperty("wrong_space")!=null)update(c,"INSERT INTO PARKING_SPACE(PARKING_SPACE_ID,PARKING_ZONE_ID,SPACE_NUMBER,SPACE_TYPE_CODE,SPACE_STATUS_CODE,MEMO) VALUES(?,?,'02','NORMAL','AVAILABLE',?)",id(p,"wrong_space"),id(p,"zone"),p.getProperty("marker"));
-     update(c,"INSERT INTO PARKING_RESERVATION(PARKING_RESERVATION_ID,OFFICE_ID,PARKING_SPACE_ID,VEHICLE_NUMBER,RESERVATION_TYPE_CODE,RESERVATION_START_AT,RESERVATION_END_AT,STATUS_CODE) VALUES(?,?,?,?,'NORMAL',SYSDATE-5/1440,SYSDATE+10/1440,'CONFIRMED')",id(p,"reservation"),office,id(p,"space"),PLATE);
-     c.commit();p.setProperty("committed","true");save(p);System.out.println("FIXTURE_COMMITTED="+(p.getProperty("wrong_space")==null?4:5));
+     var window=reservationWindow(java.time.Instant.now());
+     update(c,"INSERT INTO PARKING_RESERVATION(PARKING_RESERVATION_ID,OFFICE_ID,PARKING_SPACE_ID,VEHICLE_NUMBER,RESERVATION_TYPE_CODE,RESERVATION_START_AT,RESERVATION_END_AT,STATUS_CODE) VALUES(?,?,?,?,'NORMAL',?,?,'CONFIRMED')",id(p,"reservation"),office,id(p,"space"),PLATE,window[0],window[1]);
+     c.commit();p.setProperty("committed","true");save(p);System.out.println("FIXTURE_COMMITTED="+((p.getProperty("wrong_space")==null?4:5)+(createVehicle?1:0)));
     } else if(args[0].equals("inspect")){
      try(var s=c.createStatement()){s.execute("SET TRANSACTION READ ONLY");}
      System.out.println("USAGE_ROWS="+scalar(c,"SELECT COUNT(*) FROM PARKING_USAGE WHERE VEHICLE_NUMBER=?",PLATE));
@@ -61,7 +88,7 @@ public class CameraE2EFixture {
       System.out.println("LINKED_ROWS="+scalar(c,"SELECT COUNT(*) FROM PARKING_USAGE WHERE VEHICLE_NUMBER=? AND PARKING_SPACE_ID=? AND PARKING_RESERVATION_ID=?",PLATE,id(p,"space"),id(p,"reservation")));
       System.out.println("EXITED_ROWS="+scalar(c,"SELECT COUNT(*) FROM PARKING_USAGE WHERE VEHICLE_NUMBER=? AND EXIT_AT IS NOT NULL",PLATE));
       System.out.println("OPEN_ROWS="+scalar(c,"SELECT COUNT(*) FROM PARKING_USAGE WHERE VEHICLE_NUMBER=? AND EXIT_AT IS NULL",PLATE));
-      System.out.println("DB_LINK_VERSION="+scalar(c,"SELECT NVL(MAX(LINK_VERSION),-1) FROM PARKING_USAGE WHERE VEHICLE_NUMBER=?",PLATE));
+      System.out.println(inspectLinkVersion(c,PLATE));
      }c.rollback();
     } else {
      require(!p.isEmpty(),"No manifest; do not delete");
@@ -85,6 +112,12 @@ public class CameraE2EFixture {
      require(scalar(c,"SELECT COUNT(*) FROM PARKING_FLOOR WHERE PARKING_FLOOR_ID=? AND (FLOOR_NO<>999 OR FLOOR_NAME<>?)",id(p,"floor"),p.getProperty("marker"))==0,"Floor ownership mismatch");
      require(scalar(c,"SELECT COUNT(*) FROM PARKING_SPACE WHERE PARKING_ZONE_ID=?",id(p,"zone"))==spaces(p).size(),"Unexpected space in fixture zone");
      require(scalar(c,"SELECT COUNT(*) FROM PARKING_ZONE WHERE PARKING_FLOOR_ID=?",id(p,"floor"))==1,"Unexpected zone in fixture floor");
+     // 3. 차량이 다른 업무에 참조되거나 소유 표식이 바뀌면 전체 정리를 중단합니다.
+     if(p.containsKey("vehicle")){
+      require(scalar(c,"SELECT COUNT(*) FROM VEHICLE WHERE VEHICLE_ID=? AND VEHICLE_NUMBER=? AND OFFICE_ID=? AND OWNER_NAME=?",id(p,"vehicle"),PLATE,id(p,"vehicle_office"),p.getProperty("marker"))==1,"Vehicle ownership mismatch");
+      require(scalar(c,"SELECT COUNT(*) FROM PARKING_USAGE WHERE VEHICLE_NUMBER=?",PLATE)==ownedUsages.size(),"Other usage references synthetic vehicle");
+      require(scalar(c,"SELECT COUNT(*) FROM PARKING_RESERVATION WHERE VEHICLE_NUMBER=? AND PARKING_RESERVATION_ID<>?",PLATE,id(p,"reservation"))==0,"Other reservation references synthetic vehicle");
+     }
      int n=0;
      for(long usage:ownedUsages)n+=update(c,"DELETE FROM PARKING_USAGE WHERE PARKING_USAGE_ID=? AND VEHICLE_NUMBER=?",usage,PLATE);
      for(long space:spaces(p)){
@@ -99,6 +132,10 @@ public class CameraE2EFixture {
      n+=update(c,"DELETE FROM PARKING_FLOOR WHERE PARKING_FLOOR_ID=? AND FLOOR_NO=999 AND FLOOR_NAME=?",id(p,"floor"),p.getProperty("marker"));
      for(long space:spaces(p))require(scalar(c,"SELECT COUNT(*) FROM PARKING_SPACE WHERE PARKING_SPACE_ID=?",space)==0,"Space cleanup failed");
      require(scalar(c,"SELECT COUNT(*) FROM PARKING_USAGE WHERE VEHICLE_NUMBER=?",PLATE)==id(p,"baseline_usage_count"),"Business usage preservation failed");
+     if(p.containsKey("vehicle")){
+      require(update(c,"DELETE FROM VEHICLE WHERE VEHICLE_ID=? AND VEHICLE_NUMBER=? AND OFFICE_ID=? AND OWNER_NAME=?",id(p,"vehicle"),PLATE,id(p,"vehicle_office"),p.getProperty("marker"))==1,"Synthetic vehicle cleanup failed");n++;
+      require(scalar(c,"SELECT COUNT(*) FROM VEHICLE WHERE VEHICLE_ID=?",id(p,"vehicle"))==0,"Synthetic vehicle remains");
+     }
      c.commit();System.out.println("OWNED_SYNTHETIC_ROWS_DELETED="+n);
      require(scalar(c,"SELECT COUNT(*) FROM PARKING_USAGE WHERE VEHICLE_NUMBER=?",PLATE)==id(p,"baseline_usage_count")&&scalar(c,"SELECT COUNT(*) FROM PARKING_RESERVATION WHERE VEHICLE_NUMBER=?",PLATE)==0&&scalar(c,"SELECT COUNT(*) FROM PARKING_SPACE WHERE PARKING_SPACE_ID=?",id(p,"space"))==0&&scalar(c,"SELECT COUNT(*) FROM PARKING_ZONE WHERE PARKING_ZONE_ID=?",id(p,"zone"))==0&&scalar(c,"SELECT COUNT(*) FROM PARKING_FLOOR WHERE PARKING_FLOOR_ID=?",id(p,"floor"))==0,"Cleanup verification failed");
      System.out.println("REMAINING_SYNTHETIC_ROWS=0");System.out.println("PRESERVED_EXISTING_USAGE_COUNT="+p.getProperty("baseline_usage_count"));c.rollback();p.setProperty("cleaned","true");save(p);

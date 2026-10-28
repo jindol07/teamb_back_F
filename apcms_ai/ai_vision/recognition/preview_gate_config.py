@@ -30,6 +30,8 @@ class LiveGatePreview:
     def __call__(self, frame):
         # 2. 원본 프레임 대신 복사본에 선을 그려 OCR 입력을 훼손하지 않습니다.
         rendered = render_preview(frame, self.config, self.direction)
+        from ai_vision.safety.preview_overlay import draw_configured_overlay
+        rendered=draw_configured_overlay(rendered)
         self._shown = True
         cv2.imshow(self._name, rendered)
         return (cv2.waitKey(1) & 0xFF) != ord('q')
