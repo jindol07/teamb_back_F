@@ -1,4 +1,4 @@
-/** [1023_1010] 파일 안내
+/** 파일 안내
  * 용도: AI 통과·매칭 이벤트 검증 및 PROCESSED/UNCHANGED/PENDING 결과 결정.
  * 사용처·연결: AiVehicleEventController → ParkingUsageDao와 ParkingUsageService.
  * 이벤트 UUID는 형식만 검사한다. 구획 판정 이력은 저장하지만 입출차 UUID 기반 중복 보장은 하지 않는다.
@@ -46,11 +46,11 @@ public class AiVehicleEventService {
     }
 
     @Transactional
-    // [1023_1010] 통과·매칭 이벤트를 한 처리 경로에서 검증하되 각 유형의 필수 필드 조합은 구분한다.
+    // 통과·매칭 이벤트를 한 처리 경로에서 검증하되 각 유형의 필수 필드 조합은 구분한다.
     public AiVehicleEventResponse receive(AiVehicleEventRequest req, String expectedType) {
         if (req == null || !expectedType.equals(req.eventType())) bad("이벤트 유형이 맞지 않습니다.");
         if (req.eventId() == null) bad("event_id가 필요합니다.");
-        // [1023_1010] UUID 형식 검사다. 판정 이력에 ID를 남겨도 재전송 중복 처리를 보장하는 것은 아니다.
+        // UUID 형식 검사다. 판정 이력에 ID를 남겨도 재전송 중복 처리를 보장하는 것은 아니다.
         try { UUID.fromString(req.eventId()); } catch (IllegalArgumentException ex) { bad("event_id는 UUID여야 합니다."); }
         String plate = req.plateNumber() == null ? "" : req.plateNumber().replaceAll("\\s+", "");
         if (!PLATE.matcher(plate).matches()) bad("차량번호 형식을 확인하세요.");
@@ -68,7 +68,7 @@ public class AiVehicleEventService {
                   || !("TRACKING".equals(req.method()) || "PLATE_OCR".equals(req.method())))
                 bad("주차구획 매칭 필드가 올바르지 않습니다.");
         }
-        // [1023_1010] 감지 시각의 오프셋을 유지해 읽는다. 실제 순간 비교와 DB 저장용 한국 시각 변환은 분리한다.
+        // 감지 시각의 오프셋을 유지해 읽는다. 실제 순간 비교와 DB 저장용 한국 시각 변환은 분리한다.
         final OffsetDateTime detectedAt;
         try { detectedAt = OffsetDateTime.parse(req.detectedAt()); }
         catch (DateTimeParseException | NullPointerException ex) { throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "detected_at은 타임존 포함 ISO-8601이어야 합니다."); }
@@ -77,7 +77,7 @@ public class AiVehicleEventService {
         String parkingDecision = "VEHICLE_SPACE_MATCH".equals(expectedType) ? "UNDETERMINED" : null;
         String outcome = "PROCESSED";
         String detail = "정상 처리";
-        // [1023_1010] 현재 열린 이용 기록으로 입차·출차·매칭의 적용 가능성을 판단한다.
+        // 현재 열린 이용 기록으로 입차·출차·매칭의 적용 가능성을 판단한다.
         // 구획 연결에서는 중복 입차를 임의 선택하거나 조회 예외로 처리하지 않는다.
         Long usageId = "VEHICLE_SPACE_MATCH".equals(expectedType)
             ? usages.findUniqueOpenUsageByPlate(plate) : usages.findOpenUsageByPlate(plate);
@@ -111,7 +111,7 @@ public class AiVehicleEventService {
             } else if (spaceId == null || usageId == null) {
                 outcome = "PENDING"; detail = "주차구획 또는 활성 입차 기록을 찾지 못했습니다.";
             } else {
-                    // [1023_1010] 예상 배정 충돌을 예외로 던지지 않고 PENDING으로 반환한다. 이 경계를 유지해야 롤백 전용 상태를 피할 수 있다.
+                    // 예상 배정 충돌을 예외로 던지지 않고 PENDING으로 반환한다. 이 경계를 유지해야 롤백 전용 상태를 피할 수 있다.
                 var result = usageService.assignReservedForAi(usageId, spaceId, plate, at);
                 parkingDecision = result.parkingDecision();
                 if (result.conflictReason() != null) {
@@ -121,7 +121,7 @@ public class AiVehicleEventService {
                 }
             }
         }
-        // [1023_1010] HTTP 성공 응답 안에서도 outcome을 확인해야 한다. PENDING은 작업 반영 완료를 뜻하지 않는다.
+        // HTTP 성공 응답 안에서도 outcome을 확인해야 한다. PENDING은 작업 반영 완료를 뜻하지 않는다.
         Long version = null;
         if (spaceReleaseEnabled && "VEHICLE_SPACE_MATCH".equals(expectedType) && !"PENDING".equals(outcome)) {
             version = usages.lockLinkVersion(usageId);
@@ -156,7 +156,7 @@ public class AiVehicleEventService {
             plate, req.spaceCode(), req.parkingUsageId(), result.conflictReason() == null ? "기존 구획·예약 연결 해제" : result.conflictReason(),
             result.linkVersion());
     }
-    // [1023_1010] 입력 계약 위반은 처리 보류와 구분하여 HTTP 400으로 반환한다.
+    // 입력 계약 위반은 처리 보류와 구분하여 HTTP 400으로 반환한다.
 
     private static void bad(String msg) { throw new ResponseStatusException(HttpStatus.BAD_REQUEST, msg); }
 }

@@ -1,4 +1,4 @@
-/** [1023_1010] 파일 안내
+/** 파일 안내
  * 용도: 로그인 사용자 주차 현황 HTTP 조회.
  * 사용처·연결: parkingSpaceApi의 user 조회 → GET /api/parking/spaces → ParkingSpaceQueryService.
  * 접근 인증은 U SecurityConfig가 적용하며 공개 DTO에는 메모·차량번호가 없다.
@@ -22,7 +22,7 @@ public class ParkingSpaceController {
         this.service = service;
     }
 
-    // [1023_1010] 사용자 HTTP 조회. 인증·접근 규칙은 U의 기존 SecurityFilterChain에서 처리한다.
+    // 사용자 HTTP 조회. 인증·접근 규칙은 U의 기존 SecurityFilterChain에서 처리한다.
     @GetMapping
     public List<ParkingSpacePublicRow> spaces() {
         return service.findAll();
