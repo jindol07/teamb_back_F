@@ -88,6 +88,7 @@ class SharedFrameCapture:
                 else:
                     token = (metadata["run_id"], metadata["role"], metadata["sequence"])
                     if token != self._last_token:
+                        self.last_metadata = metadata.copy()
                         self._last_token = token
                         self._last_reason = None
                         self._seen = True

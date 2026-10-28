@@ -2488,6 +2488,24 @@ class DemoProfileTests(unittest.TestCase):
         self.profile.update(cycles=2,scenario='wrong_space_correction')
         with self.assertRaises(ValueError):self.load()
 
+    def test_synthetic_vehicle_scope_requires_explicit_office(self):
+        self.assertFalse(self.load()['create_fixture_vehicle'])
+        self.profile.update(create_fixture_vehicle=True, fixture_office_id=1)
+        self.assertEqual(self.load()['fixture_office_id'], 1)
+        for value in (None, False, 0, -1, '1', 1.5):
+            self.profile['fixture_office_id'] = value
+            with self.subTest(office=value), self.assertRaises(ValueError):
+                self.load()
+
+    def test_synthetic_vehicle_scope_rejects_implicit_creation(self):
+        self.profile['fixture_office_id'] = 1
+        with self.assertRaises(ValueError):
+            self.load()
+        for value in (1, 'true', None):
+            self.profile['create_fixture_vehicle'] = value
+            with self.subTest(scope=value), self.assertRaises(ValueError):
+                self.load()
+
     def test_profile_is_independent_of_working_directory(self):
         result=self.load()
         self.assertEqual(result['reference'],(self.root/'reference.png').resolve())

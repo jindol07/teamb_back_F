@@ -20,8 +20,21 @@ class ServerTrialTests(unittest.TestCase):
         module=importlib.util.module_from_spec(spec)
         with patch.dict(os.environ,{"PARKING_DEMO_PROFILE_DIR":str(root),"PARKING_DEMO_RUN_DIR":str(root)}),patch("ai_vision.parking.demo_session.load_demo_profile",return_value=profile):
             spec.loader.exec_module(module)
+        module.original_db=module.db
         module.db=Mock(return_value="FIXTURE_COMMITTED=4")
         return module
+
+    def test_fixture_connection_uses_profile_target_instead_of_inherited_db(self):
+        with tempfile.TemporaryDirectory() as folder:
+            controller=self.controller(Path(folder))
+            controller.PROFILE['expected_db_url']='jdbc:oracle:thin:@example.test:1521:xe'
+            response=SimpleNamespace(returncode=0, stdout='OK', stderr='')
+            with patch.dict(os.environ, {'DB_URL':'jdbc:oracle:thin:@old.test:1521:xe'}), patch.object(controller.subprocess,'run',return_value=response) as run:
+                self.assertEqual(controller.original_db('inspect'),'OK')
+            env=run.call_args.kwargs['env']
+            self.assertEqual(env['DB_URL'],controller.PROFILE['expected_db_url'])
+            self.assertEqual(env['DB_URL'],env['CAMERA_E2E_DB_URL'])
+            self.assertEqual(env['CAMERA_E2E_CREATE_VEHICLE'],'false')
 
     def test_auto_start_still_requires_both_cameras_and_empty_check(self):
         with tempfile.TemporaryDirectory() as folder:

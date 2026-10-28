@@ -103,6 +103,8 @@ class ParkingPreview:
             image = self._draw_vehicles(image)
         if getattr(self,'guidance',None):
             image=draw_demo_guidance(image,self.guidance)
+        from ai_vision.safety.preview_overlay import draw_configured_overlay
+        image=draw_configured_overlay(image)
         cv2.imshow(self.name, image)
         key = cv2.waitKey(1) & 0xff
         if preparing and key == ord('r') and self.reference is not None:
