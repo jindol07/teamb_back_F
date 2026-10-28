@@ -17,7 +17,7 @@ def load_runtime_config(environment, *, check_safety=True):
     config = read_json(path, max_bytes=65536)
     required = {"gate_camera", "parking_camera", "gate_id", "parking_id", "down_direction",
                 "gate_config", "spaces_config", "reference", "allowed_codes", "boot_context_url", "output_dir"}
-    if not isinstance(config, dict) or not required <= set(config) <= required | {"delivery_enabled", "preview", "frame_export_dir", "frame_export_fps"}:
+    if not isinstance(config, dict) or not required <= set(config) <= required | {"delivery_enabled", "preview", "frame_export_dir", "frame_export_fps", "space_code_map", "enable_space_release_http"}:
         raise ValueError("운영 주차 설정 항목을 확인하세요.")
     # 3. 원본 전달은 경로를 명시한 경우에만 활성화합니다.
     if "frame_export_fps" in config and "frame_export_dir" not in config:
@@ -40,6 +40,10 @@ def load_runtime_config(environment, *, check_safety=True):
     config.setdefault("delivery_enabled", False)
     if type(config["delivery_enabled"]) is not bool:
         raise ValueError("delivery_enabled는 명시적인 true/false여야 합니다.")
+    if type(config.get('enable_space_release_http',False)) is not bool:
+        raise ValueError('구획 해제 전송 여부는 bool이어야 합니다.')
+    if config.get('enable_space_release_http') and not config['delivery_enabled']:
+        raise ValueError('구획 해제는 실제 주차 전송과 함께 활성화하세요.')
     for key in ("gate_camera", "parking_camera"):
         if type(config[key]) is not int or not 0 <= config[key] <= 32:
             raise ValueError("현재 운영 연결은 로컬 카메라 정수 번호 0~32를 지원합니다.")
@@ -71,6 +75,11 @@ def load_runtime_config(environment, *, check_safety=True):
     validate_config(read_json(config["gate_config"]))
     spaces = read_json(config["spaces_config"])
     load_reference(config["reference"], spaces)
+    from ai_vision.parking.parking_event_sender import scoped_space_mapping
+    mapping = config.get('space_code_map', {})
+    with scoped_space_mapping(mapping):
+        if not set(mapping) <= {row['id'] for row in spaces['spaces']}:
+            raise ValueError('매핑한 카메라 구획이 좌표 파일에 없습니다.')
     from ai_vision.parking.parking_delivery import delivery_settings
     if not isinstance(config["allowed_codes"], list) or not all(isinstance(c,str) for c in config["allowed_codes"]):
         raise ValueError("허용 구획 목록이 필요합니다.")
@@ -80,14 +89,16 @@ def load_runtime_config(environment, *, check_safety=True):
     # 4. 관찰 모드는 인증키를 요구하거나 실제 송신 객체를 만들지 않습니다.
     if not config["delivery_enabled"]:
         from ai_vision.parking.parking_event_sender import convert_space_code
-        configured = {convert_space_code(row['id']) for row in spaces['spaces']}
+        with scoped_space_mapping(mapping):
+            configured = {convert_space_code(row['id']) for row in spaces['spaces']}
         if not config["allowed_codes"] or not set(config["allowed_codes"]) <= configured:
             raise ValueError("허용 구획과 좌표가 일치하지 않습니다.")
         return config
     env = dict(environment, PARKING_AI_BASE_URL=config["boot_context_url"])
     if env.get("PARKING_AI_API_URL"):
         raise ValueError("운영 모드에서는 개별 점유 URL을 재정의하지 않습니다.")
-    delivery_settings(spaces, True, config["allowed_codes"], env)
+    with scoped_space_mapping(mapping):
+        delivery_settings(spaces, True, config["allowed_codes"], env)
     from ai_vision.parking.parking_event_sender import _configured_api_key
     from ai_vision.recognition.vehicle_http import VehicleHTTPClient
     VehicleHTTPClient(context_url=config["boot_context_url"], api_key=_configured_api_key(env), enabled=True)

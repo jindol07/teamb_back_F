@@ -72,7 +72,9 @@ def inspect_report(path):
     review = uncertain > 0 or (not report['dry_run'] and report['status'] in ('RUNNING', 'FAILED', 'DELIVERY_STOPPED'))
     review = review or (not report['dry_run'] and (unrecorded > 0 or attempts > len(deliveries)))
     review = review or any(counts.get(key, 0) for key in ('REJECTED', 'SKIPPED_PROTECTED', 'SKIPPED_BEFORE_CORRECTION'))
-    review = review or any(counts.get(key, 0) for key in ('QUEUED', 'CANCELLED_BEFORE_SEND', 'NOT_SENT_QUEUE_FULL'))
+    review = review or any(counts.get(key, 0) for key in ('QUEUED', 'NOT_SENT_QUEUE_FULL'))
+    review = review or any(row.get('status')=='CANCELLED_BEFORE_SEND' and
+                           row.get('reason')!='PARKING_PHASE_COMPLETE' for row in deliveries)
     # 3. 차량 연결 요청도 같은 보고서에서 재시작 전 확인합니다.
     vehicle = report.get('vehicle_space', {})
     if not isinstance(vehicle, dict):

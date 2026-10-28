@@ -24,10 +24,12 @@ class VehicleResponseTests(unittest.TestCase):
         base={'eventId':event['event_id'],'eventType':event['event_type'],'plateNumber':event['plate_number'],
               'spaceCode':event['space_code'],'parkingUsageId':70}
         for outcome,decision in [('PROCESSED','MATCHED'),('UNCHANGED','MATCHED'),
+                                 ('PROCESSED','WRONG_SPACE'),('UNCHANGED','WRONG_SPACE'),
+                                 ('PROCESSED','NO_VALID_RESERVATION'),('UNCHANGED','NO_VALID_RESERVATION'),
                                  ('PENDING','WRONG_SPACE'),('PENDING','NO_VALID_RESERVATION'),('PENDING','UNDETERMINED')]:
             result=assess_space_match_response(event,200,json.dumps(base|{'outcome':outcome,'parkingDecision':decision}))
             self.assertTrue(result['receipt_verified']);self.assertEqual(result['parking_decision'],decision)
-        for outcome,decision in [('PENDING','MATCHED'),('PROCESSED','WRONG_SPACE'),('PENDING','UNKNOWN'),('PENDING',[])]:
+        for outcome,decision in [('PENDING','MATCHED'),('PROCESSED','UNDETERMINED'),('PENDING','UNKNOWN'),('PENDING',[])]:
             result=assess_space_match_response(event,200,json.dumps(base|{'outcome':outcome,'parkingDecision':decision}))
             self.assertFalse(result['receipt_verified']);self.assertEqual(result['state'],'DELIVERY_UNKNOWN')
         result=assess_space_match_response(event,200,json.dumps(base|{'outcome':'PENDING'}))

@@ -1,132 +1,30 @@
 # APCMS FIRE/SMOKE 최종 검증 인수인계
 
-## 2026-10-28 최종 두 창·서버 자동 수명주기·AWS 선택 송신 실제 성공
+## 2026-10-28 자유 주차 실제 AWS 결과 및 종료 오류 수정
 
-사용자A송신60초준비/전송승인후 final_two_window_aws_lifecycle_20261028 실행.
-서버자동주차준비→공유화재A/B→통합두창→A시험전이송신→60초뒤전체정상종료.
-A수신93/추론89/의심5건/ACK10개,B수신85/추론69/의심2건/실제송신0.
-B양성영상제시는사용자가종료전충분히못했으며이번송신승인범위는A뿐입니다.
-네작업모두alive=false/exit_code0,양쪽STOP_REQUESTED/error_type=null/직접카메라개방0,
-주차OBSERVE_ONLY/HTTP0,공유TEST_HTTP_ENABLED/send_role=gate.
-실제AWS읽기전용대조:이벤트44~53 10개 모두IS_TEST=Y. 이번세션시간대알림22~26
-총5개확인. 신규사건12(SMOKE)·13(FIRE) 외 기존미해결사건9·10갱신도포함됩니다.
-같은source_group에연결된과거사건/누적알림수를이번신규개수로합산하지않았습니다.
-시험기록은DB보존,삭제/구조변경/업무기록임의수정없음. 감지정확도완료주장없음.
-테스트result.scope의이전DRY_RUN문구는실행기메타데이터잔재이며 aws_send=true 및
-실제ACK·DB근거를우선합니다. 최종요약verified_final_summary.json에명확한범위기록.
-코드회귀화재298개/18.797초·Vision1027개/53.643초통과후운영소스수정없음.
-근거 result.json,shared_runs/8f2e0cf4f0ab434bbc0530405937dc7b/shared_safety/
-gate/fire_alert_sent_state.json 및 results/deployment_audit_20261028/schema_apply/
-final_integrated_db_audit.json. 기존동일전이중복방지는직전실제시험에서검증완료.
-오늘기능검증의다음단계는실행구성고정/문서·PR준비이며불필요한전체촬영반복은중단합니다.
+- 실행: `results/deployed_integration/f9c98c287eaa44ab919de2163d9bf4c3`.
+- 예약 28 / 이용 39. A02→A04→A03→A01 실제 위치 연결 4회와 이전 칸 해제 4회 응답 검증. A01은 MATCHED, 나머지는 WRONG_SPACE.
+- AWS 읽기 전용 재조회: 이용 39 출차 완료·연결 NULL·LINK_VERSION=9, 예약 28 CANCELLED. 화재 시험 전이 151~154 네 건 저장, 관련 사건 6·13과 관리자 알림 존재(알림 총수는 이번 신규 생성 수를 의미하지 않음).
+- 카메라 PID와 공유 run_id는 주차부터 화재까지 유지. 화재 A/B 작업자는 종료 코드 0.
+- 전체 성공 아님: B 주차 작업자 종료 코드 1 / DELIVERY_STOPPED. 화재 단계에서 송신을 중단한 점유 이벤트가 큐에 남아 close에서 실패로 처리됨. 부모 성공 판정이 이를 놓쳤음.
+- 수정: 송신 중단 이후 점유 이벤트는 큐에 넣지 않고 PARKING_PHASE_COMPLETE로 기록. 정상 의도 취소는 검토 대상에서 제외. 런타임과 최종 결과는 작업자 종료 코드·개별 결과까지 검사.
+- 원본 결과는 result.before_shutdown_validation.json에 보존하고 result.json은 FAILED로 정정. DB 시험 기록 삭제·추가 변경 없음.
+- 수정 후 관련 검사 65개 통과, 전체 Vision 검사 1086개 / 56.963초 통과. 근거: results/verification_tmp/shutdown_validation_vision.log.
+- 수정된 종료 경로의 실제 카메라 재시험은 미실행. 따라서 정상 종료까지 최종 완료로 표시하지 않음. 실행 명령은 기존 run_deployed_free_parking.ps1 유지.
 
-## 2026-10-28 두 창 자동 수명주기 선택 송신 구현 — 실제 미검증
 
-기본SAFETY_SHARED_SEND_ENABLED=false로DRY-RUN유지. 기존직접화재송신플래그로는
-자동활성화되지않습니다. 활성화에는 SAFETY_SHARED_SEND_ENABLED=true,
-SAFETY_SHARED_ALLOW_TEST=true, SAFETY_SHARED_ALERT_URL,FIRE_ALERT_TOKEN 필요.
-SAFETY_SHARED_SEND_ROLE=gate(기본)/parking/both로역할제한. production입력전송은
-새경로에서지원하지않고LiveConfig시험모드만사용합니다. 외부HTTP는기존정확주소예외
-SAFETY_TEST_AWS_HTTP=1/SAFETY_CAMERA_SEND_MODE=test조건을그대로사용합니다.
-상태API는TEST_HTTP_ENABLED/송신role만표시하며토큰·주소는노출하지않습니다.
-공유알림스레드는기존delivery_cycle/ACK/체크포인트/중복코드를재사용합니다.
-통신오류는종류만출력하고2초재시도대기,감지는계속유지합니다. 종료직후최종전송이
-실패하면작업실패로남겨미전송을성공으로숨기지않습니다. 중단된송신의별도자동복구워커는없음.
-추가/수정Python7개: shared_delivery_config.py,shared_alert_loop.py,shared_runtime.py,
-shared_runtime_worker.py,test_shared_delivery_config.py,test_shared_alert_loop.py,test_shared_runtime.py.
-관련43개검사통과후역할/토큰노출검사추가. 전체회귀진행중. 실제카메라·AWS송신없음.
-사용자별도승인전실행금지. 준비실행기 final_two_window_aws_lifecycle_20261028은
-A만시험전송/두창/60초관찰/B전송없음/주차전송없음입니다.
+## 최신 상태 — 2026-10-28 PR121 주차 계약 반영
 
-## 2026-10-28 A/B 두 창 통합 표시 실제 확인 완료
-
-two_window_preview_20261028/result.json success=true,서버자동준비/90초관찰/자동종료.
-사용자가‘두 창에서 함께 보였어’라고주차정보·FIRE/SMOKE박스·표본경과시간표시를확인했습니다.
-화재별도창은preview_requested=false/preview_frames0으로비생성. 실제장치는A1/B0두대만소유.
-A수신143/추론122/SMOKE2·FIRE2, B수신140/추론112/SMOKE1.
-양쪽STOP_REQUESTED/error_type=null/직접카메라개방0,공유결과역할/카메라/현재run_id일치.
-로컬알림미리보기A8/B2,실제AWS/DB전송없음. 주차·화재4작업alive=false/종료0.
-두창은최근분석결과의비동기표시이며표본시간2초초과박스숨김. 모델오탐해결주장없음.
-직전전체회귀화재291개/21.006초·Vision1027개/57.309초통과,그후손상JSON안정성
-검사1개추가를포함한표시모듈5개/0.257초통과. 합산하거나최종전체292검사로추정하지않음.
-이후소스수정없이실제카메라검증만수행했습니다. 발표기본화면은이두창모드이며
-기존네창실행기는개별진단용입니다. 별도실행기의AWS전송성공과서버통합DRY-RUN을구분.
-남은범위는자동통합수명주기의AWS전송연결(현재DRY-RUN전용),연기오탐,
-배포Compose/Jenkins외부구성확인,프런트위험알림표시(타담당)입니다.
-
-## 2026-10-28 새 배경 시험 결과 및 두 창 통합 표시 구현
-
-gate_background_20261028_121547/live_background_test: 기존모델A1/DSHOW/70초,
-TIME_LIMIT/오류없음/프레임2059/추론137/평균28.86ms/읽기실패0.
-SMOKE사건1은 휴대전화영상 연기영역 일치(증거직접확인),FIRE3은혼합영상안의작은박스.
-배경만으로확정된사건은없지만3.063초SMOKE0.3233/61.469초0.4293의단발전체배경
-후보가남았습니다. 배경변경으로모델오탐해결이라고보고하지않습니다. AWS/DB없음.
-
-SAFETY_SHARED_AUTOSTART 경로의 화재전용미리보기는꺼두고주차A/B창에최근분석박스를
-표시하도록연결했습니다. 원본/추론/사건판정수정없음. 역할/카메라/run_id/해상도검증,
-표본시각2초초과/미래/다른실행/손상/파일잠금이면박스숨김,대기/만료상태표시.
-최근분석박스의비동기덧그림으로현재영상과완전동일프레임이라고표현하지않으며
-표본경과시간을표시합니다. 직접화재단독CLI의show옵션은유지합니다.
-관련60개검사통과(3.811초), 실제두창통합화면은미확인. 카메라추가실행없음.
-
-## 2026-10-28 서버 공유 화재 자동 수명주기 실제 검증 성공
-
-사용자 준비 승인 후 별도8002서버에서 자동주차A/B→현재run_id 공유화재A/B를 기동하고
-40초 관찰 뒤 서버종료로 화재→주차 정상정리했습니다. result.success=true.
-A53프레임/B54프레임,양쪽STOP_REQUESTED/error_type=null/물리카메라개방0.
-화재2개·주차2개 전부alive=false/exit_code0, runtime둘다STOPPED.
-AWS/DB전송없음. A정상배경SMOKE사건2건/B0건으로 기존오탐은미해결임도재확인.
-근거 results/safety/shared_runtime_lifecycle_20261028/result.json.
-기능코드회귀:화재287개/19.636초,Vision1027개/57.816초통과.
-이전‘서버단일기동 공유화재수명주기미완료’기록은이번DRY-RUN범위에서해결됐습니다.
-공유자동수명주기의실제AWS송신은연결하지않았고기본DRY-RUN입니다.
-앞서별도실행기의실시간AWS전송성공과새서버수명주기DRY-RUN성공을구분합니다.
-현재시험카메라·서버는모두종료상태이며사용자승인없이자동재시작하지않습니다.
-
-## 2026-10-28 서버 수명주기 공유 화재 DRY-RUN 연결 구현
-
-SAFETY_SHARED_AUTOSTART=true를 명시한 경우에만 주차 준비·현재run_id/역할/카메라ID·
-최신프레임을 확인하고 공유 화재A/B 별도프로세스를 시작합니다. 기본false.
-SAFETY_CAMERA_AUTOSTART=false 명시필수,활성주차/frame_export_dir필수,직접장치중복우회없음.
-상태GET /vision/safety/shared-runtime,delivery=DRY_RUN_NO_HTTP. 키나송신설정이있어도
-이 새경로는 실제전송하지 않습니다. 실제전송운영연결은 별도후속이며 기존승인시험과구분.
-서버종료시 화재stop_event→사건기록정리/알림미리보기정리→주차종료 순서.
-주차준비210초상한/준비식별불일치/작업자종료는FAILED. 자동재시작·신원복원없음.
-변경Python6개: safety/shared_runtime.py,shared_runtime_worker.py,live_fire_smoke.py,
-parking/parking_runtime.py,tests/safety/test_shared_runtime.py,test_shared_runtime_worker.py.
-실제spawn을사용한 모의작업시작/정상종료검사 포함. 실제카메라미실행.
-시험설정 results/safety/shared_runtime_lifecycle_20261028/check_lifecycle.py 준비.
-별도8002서버로 주차/화재자동준비후40초관찰·자동종료,전송없음,양성정확도시험아님.
-새기능실카메라검증전까지운영자동기동완료라고기록하지않습니다.
-
-## 2026-10-28 배포 정적 점검 — 자동 통합 기동 미완료
-
-확인한 현재 소스:
-- ai_vision/Dockerfile은 ai_vision.app:app(vision전용)을8000/worker1로 실행합니다.
-  ai_vision.app에는 주차 runtime 설치가 있으나 화재 자동감시 router는 없습니다.
-- 통합 main:app은 문의/추천/Vision/주차runtime/화재router를 포함합니다.
-- camera_monitor_router의 자동화재는 SAFETY_CAMERA_INDEX 한대 직접개방 방식이며
-  공유role/run_dir로 A/B화재 소비자를 자동기동하는 코드가 아닙니다.
-- 주차config는 이 직접화재장치와 A/B중복을 검증·차단합니다. 충돌검사를 우회하지 않습니다.
-- Linux운영에서는 화재자동시작 기본false, 주차도 명시활성설정 필요.
-- tracked/hidden 파일검색에서 Compose/Jenkins 정의를 찾지 못했으므로 실제팀배포와
-  저장소Vision용Dockerfile을 동일하다고 주장할 수 없습니다.
-- Docker빌드에서 models/results는 제외되므로 모델·기준사진·좌표·공유폴더/결과경로를
-  외부마운트 또는 별도배포로 제공해야 합니다. UID10001 쓰기권한도 확인해야 합니다.
-
-결론: 실제입출차/주차AWS와 공유화재AWS흐름은 검증됐지만 서버단일기동으로
-주차A/B+공유화재A/B가 자동연결되는 운영수명주기는 미완료입니다.
-오늘발표용은 검증된별도실행순서를 사용하며 자동운영완료라고 설명하지 않습니다.
-다음우리코드핵심은 주차runtime 준비/현재run_id에 맞춘 공유화재소비자 시작과
-정상종료/재시작 연결입니다. 배포팀은 수집PC와AWS위치·공유볼륨·모델배치를확정해야합니다.
-원격AWS는현장USB를직접볼수없습니다. 현재주차입력은정수카메라번호만지원하므로
-RTSP직접수집까지구현돼있다고설명하지않습니다. 오늘정적점검만수행/배포·카메라변경없음.
-
-기준일: 2026-10-28. 발표 전 검증 기준이며 모든 운영 품질의 완성 선언이 아닙니다.
-이전 상세 기록은 results/safety/final_document_snapshot_20261028/에 보존했습니다.
+AI와 세 통합 시험을 최신 실제 위치 연결 정책으로 수정했습니다.
+배포 해제 API 활성 응답(400 검증 단계 도달)을 확인했고 사용자가 설정 추가를 알렸습니다.
+최신 정책의 실제 카메라/AWS 업무 경로는 이용39로 확인했습니다. 종료 오류가 발견되어 수정 후 실제 종료 재확인이 남았습니다.
+기존 ‘A01만 연결하고 출차까지 유지’ 및 ‘다른 자리/무예약은 위치 미연결’ 설명은 현재 정책이 아닙니다.
+Boot Java·매퍼·DB 구조를 수정하지 않았습니다. 기존 해제 API 실행 옵션만 필요합니다.
+화재 모델과 화재 전송 코드는 이번 주차 계약 변경에서 수정하지 않았습니다.
 
 ## 1. 현재 결론
 
+- 주차는 최신 PR121 정책을 따릅니다. 실제 위치 연결과 예약 판정을 분리합니다.
 - 기존 fire_smoke.pt를 유지합니다. 후보 모델·이중 모델은 운영 적용하지 않습니다.
 - 주차 A/B 공유 입력 → 기존 YOLO → 사건 → 증거 → 실행 중 AWS 전송 → DB 사건·알림
   저장과 동일 전이 중복 방지를 실제 확인했습니다.
@@ -148,6 +46,9 @@ DRY-RUN 알림 미리보기, 선택적 HTTP 전송·응답 검증·재시도·�
 | live_fire_smoke.py | LiveConfig 검증, detect_frame 추론·박스 추출, run_live 입력/사건/화면/저장 |
 | fire_smoke_detector.py | 기본 모델 경로·이미지 분석 관련 기존 코드 |
 | fire_event_state.py | 영역 연결, 연속 근거, 사건 상태 전이와 이력 |
+| shared_runtime.py / shared_runtime_worker.py | 서버 수명주기에서 A/B 화재 작업자 시작·종료 |
+| shared_delivery_config.py / shared_alert_loop.py | 승인된 역할만 시험 송신·전송 상태 관리 |
+| preview_overlay.py | 신원·시각이 맞는 최신 감지 결과를 주차 두 창에 표시 |
 | shared_frame_source.py | 공유 프레임을 캡처 형태로 공급, 시각 만료·중복·입력 중단 처리 |
 | preroll_buffer.py | 사건 직전 원본 표본의 제한 버퍼 |
 | fire_alert_live.py | 감지 프로세스 실행 중 상태 전이 감시, 알림 미리보기/선택 송신 |
@@ -161,7 +62,8 @@ DRY-RUN 알림 미리보기, 선택적 HTTP 전송·응답 검증·재시도·�
 주차 runtime의 A/B 작업자만 물리 카메라를 엽니다. frame_exchange가 실행별 gate.frame/
 parking.frame을 발행하고 화재 SharedFrameCapture가 신원·순번·최신 시각을 확인합니다.
 run_live → detect_frame → FireEventStateManager.update → 후보/증거/이력 저장.
-fire_alert_live는 이력을 읽어 fire_alert_sender의 payload/정책/송신/ACK 처리를 호출합니다.
+서버 통합 모드는 shared_alert_loop가 이력을 읽어 fire_alert_sender의 payload/정책/송신/ACK 처리를 호출합니다.
+독립 실행 모드는 fire_alert_live를 사용합니다.
 Boot 수신부 → AI_DETECTION_EVENT → SAFETY_INCIDENT → NOTIFICATION으로 반영됩니다.
 알림은 SAFETY_INCIDENT_ID 기준으로 연결되므로 이벤트ID 직접 조인0건을 알림없음으로
 해석하면 안 됩니다.
@@ -176,42 +78,30 @@ smoke_confirm_conf 선택값은 기본None이며0.55 일괄 적용은 약한 연
 성공ACK 확인 후 체크포인트에 기록하며 같은 전이는 서버에서도 중복 방지합니다.
 CLEARED는 감지 해제 전이이며 관리자 업무의 사건 해결 처리와 같은 의미가 아닙니다.
 
-## 5. 실제 최종 시험 근거
+## 5. 실제 시험 근거와 현재 한계
 
-### 주차
+주차의 과거 임시 구획 시험과 실제 구획 이용34/예약22는 당시 구 계약에서 성공했습니다.
+최신 PR121 이후 이용38/예약26은 A02 WRONG_SPACE+PROCESSED로 실제 위치가 연결됐으나,
+구 AI 계약과 충돌해 중단됐습니다. 해당 이용은 소유 확인 후 출차 정리하고 예약 취소,
+구획 상태 복원을 확인했습니다. 이를 최신 정책 통합 성공으로 소개하지 않습니다.
+새 AI는 저장된 사건130의 응답 형태를 재구성한 오프라인 재현에서 APPLIED+WRONG_SPACE로 처리합니다.
+원본 HTTP 응답을 캡처한 자료는 아니며 실제 재전송은 하지 않았습니다.
+최신 정책의 카메라→AWS 전체 경로는 배포 해제 활성화 후 재시험해야 합니다.
 
-results/parking_demo/aws_20261028/e2e_manual_0e153185/http_e2e_result.json:
-입차 → Z02 WRONG_SPACE·DB미연결 → Z01 MATCHED → 출차, 동일 이용ID32,
-success=true/완료조건 전부true/LINK_VERSION2. 시험행19개정리·별도조회잔여0.
-주차는 한 대 신원전달 모드의 시험이며 다중차량Re-ID를 검증한 것이 아닙니다.
-
-### 화재 기존 모델 DRY-RUN
-
-results/safety/final_baseline_dryrun_20261028:
-A 수신209/추론171, SMOKE1·FIRE1; B 수신214/추론167, SMOKE1·FIRE1.
-실시간 알림미리보기 각4건. 증거4장 직접 확인, SMOKE 위치는 영상연기와 일치.
-불꽃전용 영상은 사용자가 제시 전에 종료돼 이번 신규 시험에서 미실행입니다.
-FIRE는 혼합영상 안의 작은 영역이며 모든 박스의 정밀 위치검증을 주장하지 않습니다.
-
-### 화재 실행 중 AWS 전송
-
-results/safety/final_shared_aws_live_20261028:
-사용자 승인 A만60초/is_test=true. A수신106/추론87/SUSPECTED7건/전이17건ACK.
-전이는 실제 화재17건이라는 뜻이 아니며 반복·해제·재발생·오탐이 포함될 수 있습니다.
-B 전송없음. 양쪽TIME_LIMIT/오류없음/직접카메라개방0, 주차STOPPED·작업자종료0.
-실제 DB 이벤트27~43 총17개, 연결사건7~11 총5개·관리자알림합계9개 확인.
-동일전이 재전송HTTP200/DUPLICATE/이벤트27/사건7/추가알림0/isTest=true 확인.
-시험기록은 승인 범위대로 DB에 보존했습니다. 구조·기존업무기록 변경없음.
-DB 근거 results/deployment_audit_20261028/schema_apply/fire_live_db_audit.json,
-fire_live_incident_audit.json. 중복 근거 duplicate_verification.json.
+화재의 기존 실제 A/B 통합 시험은 results/safety/aws_both_retained_20261028/result.json.
+A 전이14건·B6건 ACK와 AWS 이벤트62~81 총20행 IS_TEST=Y를 대조했습니다.
+연결 사건과 관리자 알림 존재 확인, 네 작업자 종료0, 공유 화재 물리 카메라 개방0회.
+이 기록은 보존되어 있습니다. 전이20건은 실제 화재20건이나 인식 정확도를 뜻하지 않습니다.
+과거 동일 전이 재전송은 DUPLICATE·추가 알림0으로 검증했습니다.
 
 ## 6. 회귀 검사
 
-최신 공식 Vision1027개/57.205초통과: final_vision_regression.log.
-최신 화재277개/20.309초통과: final_safety_regression.log.
-두 로그는 results/deployment_audit_20261028/에 있습니다. 검사 수를 합산하지 않습니다.
-이후 수행한 것은 결과조회·시험실행설정·문서 정리이며 운영소스 변경은 없습니다.
-과거 실제서버 호스트잠금과 검사 충돌은 서버 종료 후 별도 재검사로 통과했습니다.
+최신 전체 Vision1,083개(55.036초) 통과: observed_position_policy_complete_vision.log.
+추가 전용 검사와 세 실행기의 CheckOnly·Java컴파일도 통과했습니다.
+추가 근거: 실제 로컬 HTTP로 오주차 연결→해제→예약 자리 연결, 무예약 연결→해제→다음 위치,
+입차 신원 전달과 버전 보호 해제의 모의 카메라 결합을 검증했습니다.
+구형 실제 모델 실험 test_fire_smoke.py는 회귀 수집 대상이 아닙니다.
+카메라·AWS 실제 이벤트 전송 검증과 단위/로컬 HTTP 검증을 구분합니다.
 
 ## 7. 오탐 분석과 모델 개선 보류 이유
 
@@ -223,45 +113,57 @@ fire_live_incident_audit.json. 중복 근거 duplicate_verification.json.
 기준상향0.35부터 약한연기사건이 사라지고0.60에서도 손부근사건이 남아 채택하지 않음.
 같은 장면 반복검사·도구추가를 인식품질 개선으로 표현하지 않습니다.
 
-## 8. 실제 시연 준비와 검증된 명령
+## 8. 실제 시연 준비와 명령
 
-프로젝트 D:\finalProjectB\back\apcms_ai, 가상환경 .venv.
-A입출차1번/B주차면0번, USB 재연결 시 번호 재확인. 현재4칸도면 기준/좌표 유지.
-동일장치를 사용하는 다른 프로세스는 먼저 종료합니다. 기존시험모드·카메라준비 확인 필요.
-주차 AWS 수동시험은 아래 명령으로 실제검증됐습니다. 시험차량/예약/임시구획을
-생성·정리하므로 승인된 시험용 범위를 그대로 유지해야 합니다.
+A입출차1번/B주차면0번, 기존4칸종이의 기준사진·좌표 유지. 실제 매핑은 지하3층 A01~A04,
+서버 코드3F-A01~A04/DB ID46~49입니다. 세 시험 모두 네 칸 점유를 전송합니다.
+카메라는 이 PC에서 수집하며 주차·화재 이벤트를 배포 API로 전송합니다.
+다른 카메라 사용 창을 종료하고 두 화면을 빈 상태로 준비해야 합니다.
 
-```powershell
-& 'D:\finalProjectB\back\apcms_ai\ai_vision\run_parking_demo.ps1' `
-  -ProfileDir 'D:\finalProjectB\back\apcms_ai\ai_vision\results\parking_demo\aws_20261028' `
-  -CameraBackend dshow -HideGuidance
-```
-
-공유 프레임이 이미 실행 중인 경우 기존 화재 DRY-RUN 명령은 아래와 같습니다.
-현재 실행의 shared_frames/run_id를 입력해야 하며 과거 종료된 폴더를 재사용하지 않습니다.
-카메라준비승인 전 자동실행하지 마세요. 두번째 터미널은 role=parking/id=PARKING_B.
-
+필수 배포 설정: 관리자 Boot 실행 인자 --parking.ai.space-release-enabled=true 및 재시작.
+이 기능은 이전 구획 연결만 해제하며 입차는 유지합니다. 실제 출차·기록 삭제와 다릅니다.
+자동 실행 전 잘못된 형식 요청으로 기능 활성 여부를 확인합니다. 503/인증·연결 문제면
+예약·카메라 시작 전 BLOCKED로 보류합니다. 이 형식 검사 요청은 DB를 갱신할 수 없습니다.
+설정 확인만 할 때:
 ```powershell
 Set-Location 'D:\finalProjectB\back\apcms_ai'
-$run = Read-Host '현재 실행 중인 공유 run_id 폴더 전체 경로'
-$role = 'gate'
-$id = 'GATE_A'
-$out = Join-Path 'ai_vision\results\safety' ('demo_' + $role + '_' + [guid]::NewGuid().ToString('N'))
-& .\.venv\Scripts\python.exe -m ai_vision.safety.fire_alert_live --output $out -- `
-  --shared-run-dir $run --shared-role $role --shared-camera-id $id `
-  --show --fire-conf 0.30 --smoke-conf 0.30 --save-evidence --save-candidates --max-seconds 120
+& '.\.venv\Scripts\python.exe' -m ai_vision.parking.demo_tools.release_capability
 ```
 
-혼합영상을 A→B 순서로 보여주고 필요시 화재창Q 종료. 별도 주차 실행도 정상 종료합니다.
-기존 최종시험 run_compare.py는 결과폴더 고정의 일회성 실행기이므로 그대로 재실행해
-기록을 덮어쓰지 않습니다. 재시험은 신규 결과폴더를 준비해야 합니다.
+예약 A01·고정 순서(A02→A01):
+```powershell
+& 'D:\finalProjectB\back\apcms_ai\ai_vision\run_deployed_integration.ps1'
+```
+예약 없이 동일 이동:
+```powershell
+& 'D:\finalProjectB\back\apcms_ai\ai_vision\run_deployed_no_reservation.ps1'
+```
+예약 A01·네 칸 자유 순서:
+```powershell
+& 'D:\finalProjectB\back\apcms_ai\ai_vision\run_deployed_free_parking.ps1'
+```
+세 명령은 --check-only가 아닌 실제 실행에서 시험 차량/예약/이용/이력·알림을 AWS에 반영합니다.
+SPACE 없이 자동 준비 후 창 제목 PHASE를 따릅니다. 고정 순서는 입차→A02→A01→출차,
+자유 순서는 입차→네 칸 자유 관찰→원할 때 출차입니다. 칸마다 손을 치우고 정차 확정을 기다립니다.
+이동 시 이전 칸의 EMPTY·점유 전송 완료·연결 버전을 확인해 해제한 뒤 새 위치에 연결합니다.
+같은 입차 이용 ID를 유지하며 오주차는 WRONG_SPACE, 무예약은 NO_VALID_RESERVATION,
+예약 자리 일치는 MATCHED로 표시합니다. 위치 연결 성공을 정상 예약 주차와 혼동하지 않습니다.
+A01을 방문했어도 그 연결을 고정하지 않습니다. 다른 칸으로 이동하면 해제·재연결합니다.
+출차 후 두 카메라/창을 계속 유지하고 주차 송신만 멈춘 다음 FIRE_A→FIRE_B→DONE입니다.
+각 불꽃 단계는 새 FIRE SUSPECTED 전송 ACK가 있어야 진행하며 단계별120초 제한입니다.
+
+Ctrl+C는 시험 취소입니다. 소유 파일·검증 입차 근거가 맞는 시험 이용/예약/점유만 정리합니다.
+다른 업무 기록·관리자 변경은 자동 정리하지 않습니다. 정리 실패 시 다음 시작에서 복구하며
+소유 불명 충돌은 이용ID를 안내하고 보류합니다. 시험 이력 자체는 별도 삭제 요청 전까지 보존합니다.
+기본 설정은 results/parking_runtime/demo_current_20261028/runtime.local.json.
+results와 모델·인증키는 Git 제외이므로 다른 PC의 운영 준비에는 별도 파일 배치가 필요합니다.
 
 ## 9. AWS 조회와 프런트 전달
 
 배포주소 http://52.79.133.132:3000/admin-api.
 GET /api/admin/safety-notifications?limit=30: 관리자JWT로 본인알림조회.
 GET /api/admin/safety-incidents: 기존사건조회. 상세조회경로는 코드계약 참고.
-배포대시보드 RiskAlertPanel은 placeholder임을 첨부화면과 로컬소스로 확인했습니다.
+이전 확인 당시 배포대시보드 RiskAlertPanel은 placeholder였습니다. 현재 웹 표시 자체는 재검증하지 않았습니다.
 authFetch로 기존API연결·시험표시·시각·분류·내용·로딩/오류/빈목록 구분은 프런트담당에 전달.
 화면 성공으로 보고하지 않으며 프런트소스는 수정하지 않았습니다.
 

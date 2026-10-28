@@ -73,7 +73,7 @@ def apply_parking_decisions(observations, records):
                                              and receipt['parking_usage_id'] == expected))):
                 received = receipt.get('parking_decision')
                 if ((received == 'MATCHED' and record['status'] in ('APPLIED', 'UNCHANGED'))
-                        or (received in ('WRONG_SPACE', 'NO_VALID_RESERVATION') and record['status'] == 'HELD')):
+                        or (received in ('WRONG_SPACE', 'NO_VALID_RESERVATION') and record['status'] in ('APPLIED','UNCHANGED','HELD'))):
                     decision = received
             observation['parking_decision'] = decision
             break
@@ -98,8 +98,8 @@ def run_camera(reference_path, config_path, output_dir, camera_index=0, seconds=
         raise ValueError('구획 해제는 구획 연결 전송과 함께 활성화하세요.')
     if type(verify_handoff_plate) is not bool or (verify_handoff_plate and handoff_path is None):
         raise ValueError('동일 차량 재확인에는 입차 신원 전달 파일이 필요합니다.')
-    if handoff_path is not None and (not track_vehicles or (plate_reader is not None and not verify_handoff_plate) or enable_space_release_http):
-        raise ValueError('한 대 시연 신원 전달에는 추적이 필요하며 독립 OCR·중간 자동 해제는 함께 사용하지 않습니다.')
+    if handoff_path is not None and (not track_vehicles or (plate_reader is not None and not verify_handoff_plate)):
+        raise ValueError('한 대 시연 신원 전달에는 추적이 필요하며 독립 OCR은 재확인 옵션과 함께 사용하세요.')
     from ai_vision.parking.vehicle_space_tracker import validate_tracking_target, tracking_image_size
     validate_tracking_target(tracking_target)
     tracking_imgsz = tracking_image_size(tracking_target, tracking_imgsz)

@@ -289,7 +289,10 @@ def evaluate_success(report):
  # 이 테스트는 인쇄차량의 기존4건이 모두출차상태인 조건에서 새이용1건만 생성합니다.
  checks['database_exit_confirmed']=(all_entries and fields.get('USAGE_ROWS',0)>0
      and fields.get('OPEN_ROWS')==0 and fields.get('EXITED_ROWS')==fields.get('USAGE_ROWS'))
- checks['fixture_cleaned']='REMAINING_SYNTHETIC_ROWS=0' in report.get('cleanup','')
+ if report.get('retain_test_records') is True:
+  checks['fixture_retained']=report.get('cleanup')=='RETAINED_FOR_REVIEW' and report.get('database_inspection_verified') is True
+ else:
+  checks['fixture_cleaned']='REMAINING_SYNTHETIC_ROWS=0' in report.get('cleanup','')
  # 1. 새 실행은 명시적 정상 주차와 요청·입차 이용 ID의 일치를 확인합니다.
  # 기존 버전 기록은 당시 성공 조건으로 읽으며 새 실행과 구분합니다.
  if report.get('match_contract_version', 1) == 2:
@@ -548,7 +551,7 @@ def _repeat_demo_phase(rows, parking, plate, verify, cycles):
     return f'CYCLE {len(entries)}/2 - '+phase
 
 
-def finalize_trial(run_dir, report, *, children_stopped, fixture_prepared, db, expected_plate='91소6408'):
+def finalize_trial(run_dir, report, *, children_stopped, fixture_prepared, db, expected_plate='91소6408', retain_test_records=False):
     """중단·정리 오류도 결과에 남깁니다. 불명확한 이용은 추정해 삭제하지 않습니다."""
     run_dir = Path(run_dir)
     manifest = run_dir / 'camera_e2e_fixture.properties'
@@ -556,6 +559,7 @@ def finalize_trial(run_dir, report, *, children_stopped, fixture_prepared, db, e
     report['match_contract_version'] = 2
     report['expected_plate_number'] = expected_plate
     report['success'] = False
+    report['retain_test_records'] = retain_test_records
     report['cleanup'] = 'NOT_EXECUTED: recovery review required'
     try:
         if not children_stopped:
@@ -609,6 +613,7 @@ def finalize_trial(run_dir, report, *, children_stopped, fixture_prepared, db, e
         report['verified_exit_usage_ids'] = exits
         try:
             report['database_before_cleanup'] = db('inspect')
+            report['database_inspection_verified'] = True
         except Exception as error:
             report['inspection_error_type'] = type(error).__name__
         try:
@@ -616,8 +621,8 @@ def finalize_trial(run_dir, report, *, children_stopped, fixture_prepared, db, e
         except (OSError, ValueError, UnicodeError) as error:
             report['parking_snapshot_error_type'] = type(error).__name__
         # 선택적인 조회·결과파일 오류 때문에 소유권검증된 시험행 정리를 건너뛰지 않습니다.
-        report['cleanup'] = db('cleanup')
-        if 'REMAINING_SYNTHETIC_ROWS=0' not in report['cleanup']:
+        report['cleanup'] = 'RETAINED_FOR_REVIEW' if retain_test_records else db('cleanup')
+        if not retain_test_records and 'REMAINING_SYNTHETIC_ROWS=0' not in report['cleanup']:
             raise RuntimeError('Cleanup confirmation is missing')
         report['entry_exit_same_usage'] = len(entries) == cycles and len(owned) == cycles and exits == entries
         report['actual_match_same_usage'] = len(owned) == cycles and all(any(

@@ -79,6 +79,31 @@ class VehicleDeliveryFlowTests(unittest.TestCase):
 
 
 class SpaceMatchDeliveryTests(unittest.TestCase):
+    def test_explicit_unreserved_mode_allows_new_space_but_not_same_space(self):
+        from concurrent.futures import wait
+        from ai_vision.recognition.vehicle_delivery_flow import SpaceMatchDeliveryFlow
+        client=Mock(enabled=True)
+        client.send.side_effect=lambda event:{'event_id':event['event_id'],'event_type':event['event_type'],
+            'state':'HELD','receipt_verified':True,'request_attempted':True,
+            'parking_usage_id':83,'parking_decision':'NO_VALID_RESERVATION'}
+        flow=SpaceMatchDeliveryFlow(client,allow_unreserved_move=True)
+        self.addCleanup(flow.close,lambda:None)
+        first=self.candidate()|{'expected_parking_usage_id':83}
+        self.assertEqual(flow.submit(first,'first',lambda:None),'IN_FLIGHT')
+        wait([flow._future]);flow.poll(lambda:None)
+        self.assertEqual(flow.submit(self.candidate()|{'expected_parking_usage_id':83},'same',lambda:None),'HELD_RELEASE_REQUIRED')
+        second=self.candidate()|{'expected_parking_usage_id':83}
+        second['payload']['space_code']='1F-A02'
+        second['payload']['detected_at']='2020-01-01T00:00:01+00:00'
+        self.assertEqual(flow.submit(second,'new-space',lambda:None),'IN_FLIGHT')
+        wait([flow._future]);flow.poll(lambda:None)
+        self.assertEqual(flow.records[-1]['receipt']['parking_decision'],'NO_VALID_RESERVATION')
+        self.assertEqual(client.send.call_count,2)
+
+    def test_unreserved_mode_rejects_invalid_option(self):
+        from ai_vision.recognition.vehicle_delivery_flow import SpaceMatchDeliveryFlow
+        with self.assertRaises(ValueError):SpaceMatchDeliveryFlow(allow_unreserved_move='true')
+
     def candidate(self):
         from ai_vision.recognition.vehicle_live_candidate import create_space_match_candidate
         row = {'track_id': 3, 'space_id': 'A-01', 'plate_number': '91소6408'}
@@ -295,6 +320,18 @@ class SpaceMatchDeliveryTests(unittest.TestCase):
 
 class SpaceReleaseFlowTests(unittest.TestCase):
     candidate = SpaceMatchDeliveryTests.candidate
+    def test_confirmed_exit_clears_release_hold_without_claiming_release_success(self):
+        flow,client,release=self.setup_link()
+        release.send.side_effect=lambda event:{'event_id':event['event_id'],'event_type':event['event_type'],
+            'state':'HELD','request_attempted':True,'receipt_verified':True,'parking_usage_id':70}
+        self.assertTrue(flow.release_empty({'1F-A01'},'SIMULATION_ONLY','2020-01-01T00:00:01Z',lambda:None))
+        self.complete(flow)
+        self.assertEqual(flow.records[-1]['status'],'HELD')
+        self.assertFalse(flow.acknowledge_gate_exit('91소6408',71))
+        self.assertTrue(flow.acknowledge_gate_exit('91소6408',70))
+        self.assertEqual(flow._links,{})
+        self.assertEqual(flow.records[-1]['status'],'HELD')
+
     def test_handoff_different_usage_response_is_not_silently_accepted(self):
         from ai_vision.recognition.vehicle_delivery_flow import SpaceMatchDeliveryFlow
         client = Mock(enabled=True)

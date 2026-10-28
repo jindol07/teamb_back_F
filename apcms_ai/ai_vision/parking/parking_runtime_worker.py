@@ -15,7 +15,9 @@ def run_worker(role, config, run_dir, stop_event, heartbeat):
             publisher = FramePublisher(Path(config["frame_export_dir"])/Path(run_dir).name,
                 role, config["gate_id" if role == "gate" else "parking_id"],
                 Path(run_dir).name, config.get("frame_export_fps", 2))
-        return _run_worker(role, config, run_dir, stop_event, heartbeat, publisher)
+        from ai_vision.parking.parking_event_sender import scoped_space_mapping
+        with scoped_space_mapping(config.get('space_code_map')):
+            return _run_worker(role, config, run_dir, stop_event, heartbeat, publisher)
     finally:
         if publisher is not None:
             publisher.close()
@@ -51,10 +53,11 @@ def _run_worker(role, config, run_dir, stop_event, heartbeat, publisher):
         main(args, stop_event=stop_event, runtime_mode=True, on_frame=observed, on_raw_frame=publisher.submit if publisher is not None else None)
     else:
         from ai_vision.parking.run_parking_camera import run_camera
+        movement = {'enable_space_release_http': True} if sending and config.get('enable_space_release_http',False) else {}
         report = run_camera(config["reference"], config["spaces_config"], run/"parking",
             camera_index=config["parking_camera"], preview=config.get("preview", False), enable_http=sending,
             allowed_codes=config["allowed_codes"] if sending else (), track_vehicles=True, enable_space_http=sending,
             camera_id=config["parking_id"], tracking_target="plate", tracking_imgsz=1280,
-            handoff_path=run/"gate"/"single_vehicle_handoff.json" if sending else None, stop_event=stop_event, runtime_mode=True, on_frame=observed, on_raw_frame=publisher.submit if publisher is not None else None)
+            handoff_path=run/"gate"/"single_vehicle_handoff.json" if sending else None, stop_event=stop_event, runtime_mode=True, on_frame=observed, on_raw_frame=publisher.submit if publisher is not None else None, **movement)
         if report["status"] not in ("STOPPED",):
             raise RuntimeError("주차 관찰이 종료됐습니다.")

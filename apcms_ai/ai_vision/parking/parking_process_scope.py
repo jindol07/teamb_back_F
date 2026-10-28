@@ -4,9 +4,20 @@ import signal
 import subprocess
 
 
-def isolate_worker():
-    # 1. Linux에서는 OCR 하위 프로세스도 같은 전용 그룹을 상속합니다.
-    if os.name != "nt":
+def isolate_worker(*, platform=None):
+    # 1. Ctrl+C는 서버만 처리하고 작업자는 서버의 종료 이벤트로 정리합니다.
+    platform = os.name if platform is None else platform
+    if platform == "nt":
+        import ctypes
+        from ctypes import wintypes
+        handler = ctypes.WinDLL("kernel32", use_last_error=True).SetConsoleCtrlHandler
+        handler.argtypes = [ctypes.c_void_p, wintypes.BOOL]
+        handler.restype = wintypes.BOOL
+        if not handler(None, True):
+            raise OSError("작업자의 콘솔 인터럽트 분리에 실패했습니다.")
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    else:
+        # Linux에서는 OCR 하위 프로세스도 같은 전용 그룹을 상속합니다.
         os.setsid()
 
 

@@ -1,5 +1,360 @@
 # AI Vision 작업 인수인계 — 2026-10-23
 
+## 2026-10-28 자유 주차 실제 AWS 결과 및 종료 오류 수정
+
+- 실행: `results/deployed_integration/f9c98c287eaa44ab919de2163d9bf4c3`.
+- 예약 28 / 이용 39. A02→A04→A03→A01 실제 위치 연결 4회와 이전 칸 해제 4회 응답 검증. A01은 MATCHED, 나머지는 WRONG_SPACE.
+- AWS 읽기 전용 재조회: 이용 39 출차 완료·연결 NULL·LINK_VERSION=9, 예약 28 CANCELLED. 화재 시험 전이 151~154 네 건 저장, 관련 사건 6·13과 관리자 알림 존재(알림 총수는 이번 신규 생성 수를 의미하지 않음).
+- 카메라 PID와 공유 run_id는 주차부터 화재까지 유지. 화재 A/B 작업자는 종료 코드 0.
+- 전체 성공 아님: B 주차 작업자 종료 코드 1 / DELIVERY_STOPPED. 화재 단계에서 송신을 중단한 점유 이벤트가 큐에 남아 close에서 실패로 처리됨. 부모 성공 판정이 이를 놓쳤음.
+- 수정: 송신 중단 이후 점유 이벤트는 큐에 넣지 않고 PARKING_PHASE_COMPLETE로 기록. 정상 의도 취소는 검토 대상에서 제외. 런타임과 최종 결과는 작업자 종료 코드·개별 결과까지 검사.
+- 원본 결과는 result.before_shutdown_validation.json에 보존하고 result.json은 FAILED로 정정. DB 시험 기록 삭제·추가 변경 없음.
+- 수정 후 관련 검사 65개 통과, 전체 Vision 검사 1086개 / 56.963초 통과. 근거: results/verification_tmp/shutdown_validation_vision.log.
+- 수정된 종료 경로의 실제 카메라 재시험은 미실행. 따라서 정상 종료까지 최종 완료로 표시하지 않음. 실행 명령은 기존 run_deployed_free_parking.ps1 유지.
+
+
+## 2026-10-28 PR121 실제 위치 정책으로 AI·세 시험 정렬 완료
+
+사용자가 최신 정책으로 맞추도록 선택했습니다. 응답 파서는 PROCESSED/UNCHANGED와
+WRONG_SPACE/NO_VALID_RESERVATION을 실제 위치 연결 성공으로 받아들이고 예약 판정은 유지합니다.
+화면 판정도 동일하게 반영하며 HTTP200만으로 정상 예약 주차라고 표시하지 않습니다.
+세 시험은 네 구획 점유·동일 입차 신원 전달·빈자리 확정 후 버전 보호 해제·새 위치 연결을 사용합니다.
+run_camera의 신원 전달+중간 해제 금지를 제거하고 명시적 enable_space_release_http 설정으로 결합했습니다.
+기존 A01 연결 고정/parking_match_complete.flag 방식은 사용하지 않습니다.
+자유 순서 결과에는 확인된 위치 이벤트·현재 연결 칸·예약 판정을 따로 저장합니다.
+고정 예약 시험 A02는 구획47/예약NULL 연결, A01은 구획46/예약ID 연결을 실제 DB로 검사합니다.
+무예약 시험도 위치는 연결하되 예약은NULL이며 NO_VALID_RESERVATION으로 검사합니다.
+
+배포 해제 API 형식검사 초기503→최종400 확인, 사용자가 --parking.ai.space-release-enabled=true 추가를 알렸습니다.
+backend_contract.json은 AI_ALIGNED_RELEASE_ENABLED. 실행마다 활성검사를 다시 하며
+비활성·인증·연결 문제는 예약·카메라 시작 전 BLOCKED로 보류합니다.
+이 형식검사 요청에는 차량·이용·구획·UUID가 없으며 실제 DB 해제를 수행할 수 없습니다.
+Java Boot/매퍼/DB 구조 수정 없이 기존 API 사용. 로컬에 최신 develop을 병합하지 않았습니다.
+
+최신 전체 Vision1,083개(55.036초) 통과: observed_position_policy_complete_vision.log.
+실제 로컬HTTP로 오주차 연결→해제→예약 연결 및 무예약 연결→해제→다음 위치를 검증했습니다.
+모의 카메라에서 신원 전달+해제의 동일 이용ID 유지, 출차와 해제 보류 경합도 검사했습니다.
+실패38 DB기록 기반의 응답 형태 재구성도 APPLIED+WRONG_SPACE로 처리함을 확인했으나,
+이는 캡처한 원본 HTTP 재생이나 실제 AWS 재시험은 아닙니다.
+사용자가 준비 완료 후 직접 실행을 선택했습니다. 여기서 카메라나 실제 AWS 이벤트는 새로 실행하지 않았습니다.
+명령: & 'D:\finalProjectB\back\apcms_ai\ai_vision\run_deployed_free_parking.ps1'
+실제 실행 후 결과·DB 및 카메라 연속성을 확인해야 최종 통합 성공으로 기록할 수 있습니다.
+
+## 2026-10-28 A02 중단 원인 확정 — 배포 PR121 계약 변경
+
+실패 실행 b133cb16117c4656962790bedf880fc0/예약26/이용38을 확인했습니다.
+A02 점유 전송은 UPDATED/DB이벤트129로 성공했습니다. 매칭 UUID f400ef41-7654-48bc-83c4-446229a5c89e의
+DB이벤트130은 WRONG_SPACE+PROCESSED이며 실제 PARKING_USAGE38은 구획47에 연결됐습니다.
+AI는 기존 WRONG_SPACE=PENDING/HELD 계약만 허용하여 INVALID_RESPONSE/DELIVERY_UNKNOWN으로 중단됐습니다.
+카메라 고장이나 A02 좌표 오류가 원인이 아닙니다.
+
+fetch 후 origin/develop=59a035af3, PR121/0f29430c6(feature/parking-unreserved-match)을 확인했습니다.
+Boot ParkingUsageService.assignReservedForAi는 예약 없음/다른 자리에서도 assignObservedSpace로
+현재 위치를 저장하도록 변경됐고, 원격 AI vehicle_response.py는 여전히 구 계약입니다.
+로컬 병합·체크아웃·Boot/프런트 수정은 하지 않았습니다.
+사용자에게 최신 위치 연결 정책으로 AI·시험을 맞출지, 기존 A01만 연결 정책의 Boot 변경안을 볼지 질문했습니다.
+정책 결정 전 세 통합 시험은 backend_contract.json의 PENDING_POLICY_ALIGNMENT로
+카메라·예약 생성 전 BACKEND_POLICY_CHANGED/BLOCKED 상태로 보류합니다.
+실제 진입점에서 보류 동작을 확인했으며 카메라·DB 작업은 없었습니다.
+
+이용37은 최신 읽기 전용 조회에서 제거된 것을 확인했습니다. 정상 이용34/36은 유지했습니다.
+이번 이용38은 소유 실행·입차시각 확인 후 출차 정리했고 예약26 취소, 네 구획AVAILABLE 복원 확인.
+자동 정리에서 발견한 구획이력 제약 CK_PSHIST_SOURCE는 원본 이벤트 참조를 남기도록 수정했습니다.
+다른 구획으로 실제 연결된 시험도 구획46~49와 동일 소유 입차 근거가 맞을 때만 정리합니다.
+미출차 충돌0건, A01~A04AVAILABLE, 자동 정리 실제 함수 실행 및 관련37개검사 통과.
+원인 근거 failure38_db_audit.log, 현재 상태 active_demo_usage_audit.json/floor_three_mapping_audit.json,
+시험 자동 정리 근거 해당 실행 automatic_cleanup.json. 전체 회귀는 이번 소규모 수정 후 미실행입니다.
+
+## 2026-10-28 이용37 승인 정리·소유 시험 중단 자동 정리
+
+사용자 승인으로 이용37만 차량·입차시각·미연결·미출차 조건을 대조해 출차 처리했습니다.
+입차16:18:23→출차16:27:18, 행은 보존. 새 DB 연결의 대상 차량/네 구획 미출차 조회는0건.
+근거 results/deployment_audit_20261028/schema_apply/approved_usage37_close.log 및 active_demo_usage_audit.json.
+
+새 deployed_recovery.py는 정상 중단 finally와 다음 실행 전 동기 복구에서만 호출합니다.
+별도 상주 워커는 추가하지 않습니다. AI_SITE_TEST 소유 매니페스트·현재 실행 폴더의
+검증된 SINGLE_VEHICLE_HANDOFF/세션/차량/이용ID/입차시각이 일치할 때만 미출차를 닫습니다.
+이번 예약만 취소하며 이용·감지 원본은 삭제하지 않습니다. 실제 카메라 출차 성공으로 위장하지 않습니다.
+새 시험은 시작 전 네 구획의 기준 상태를 소유 파일에 저장합니다. 점유 응답의 실제 DB 이벤트ID와
+원본 UUID가 일치하고 여전히 최신 점유 이벤트이며 다른 활성 이용·관리자 변경이 없을 때만
+중단된 시험 상태를 기준 상태로 복원합니다. 복원 이력의 이유는 TEST_ABORTED_CLEANUP입니다.
+DB 행 잠금은 NOWAIT이며 변경된 기록은 복원하지 않습니다. 성공 완료한 이전 실행은 건드리지 않습니다.
+
+깨진 과거 파일은 REVIEW_REQUIRED로 남기고 시작 조건을 별도로 확인합니다.
+미출차/예약/구획 충돌은 BLOCKED/종료코드2로 표시하고 PowerShell 일반 예외 스택을 출력하지 않습니다.
+미출차 원인에는 안전하게 추출한 이용 ID를 표시합니다. 소유 불명 기록은 임의 정리하거나 무시하지 않습니다.
+Ctrl+C 취소는 CANCELLED, 정리 실패는 CANCELLED_WITH_CLEANUP_ERROR로 구분합니다.
+강제 종료·DB 단절로 정리하지 못하면 소유 근거가 있는 실행만 다음 시작 때 재정리합니다.
+관련36개검사·Java컴파일·CheckOnly 통과. 최신 전체 Vision1,073개(53.732초) 통과.
+전체 로그: results/deployment_audit_20261028/owned_recovery_vision_regression.log. 자동 복구 자체의 실제 Ctrl+C/강제종료 DB 통합 재시험은 아직 미실행입니다.
+현재 카메라나 실제 AWS 이벤트 송신은 실행하지 않았습니다.
+
+## 2026-10-28 미출차 충돌 원인과 Ctrl+C 취소 표시 수정
+
+사용자가 전달한 cd284941850a4c7fb34ca28faa787295 폴더는 현재 디스크에서 찾지 못했습니다.
+남아 있는 최근 자유 시험 f3da1534413f4bc78379339385d0d2b8 및 dc340ce35be74780b62b0679db0763d0은
+모두 DB prepare에서 Active usage exists로 실패했으며 카메라 작업자는 생성되지 않았습니다.
+AWS 읽기 전용 조회: 이용37/차량91소6408/입차2026-10-28 16:18:23/미출차,
+구획·예약 연결 모두NULL. 근거 active_demo_usage_audit.json. 현재 소유 실행파일을 찾지 못해
+임의 출차·삭제하지 않고 사용자에게 이용37만 출차 정리 허용 여부를 요청했습니다.
+
+카메라 Ctrl+C 종료는 DB 차량 EXIT 또는 전체 시나리오 완료와 다릅니다.
+DB 작업 오류는 제한된 원인 코드·한국어 메시지로 출력하고 원문/인증정보는 콘솔에 복사하지 않습니다.
+사용자 Ctrl+C는 CANCELLED/종료코드130으로 구분하며 PowerShell은 일반 오류로 throw하지 않습니다.
+취소 후 자원·예약 정리가 실패한 경우는 CANCELLED_WITH_CLEANUP_ERROR/종료1로 유지합니다.
+전체 DONE까지 완료한 경우만 COMPLETED/TEST_SUCCESS=True입니다.
+관련27개 검사·실행기CheckOnly·diff 공백검사 통과. 이번 수정 후 실제 Ctrl+C 재시험은 미실행입니다.
+신규 카메라·실제 AWS 전송·DB DML 없음. 미출차37 처리는 사용자 답변 후 진행해야 합니다.
+
+## 2026-10-28 사용자 확인 규칙의 자유 순서 시험 추가
+
+명령: & 'D:\finalProjectB\back\apcms_ai\ai_vision\run_deployed_free_parking.ps1'
+기존 예약 고정 순서·예약 없는 고정 순서 실행기는 유지합니다. 세 실행기 모두 지하3층 A01~A04
+점유를 전송하며 실제 구획46~49의 코드·공실·예약/이용 충돌을 사전 검사합니다.
+새 진입점은 -FreeParking/--free-parking 옵션으로 공통 실행기를 사용합니다.
+
+사용자가 지정한 규칙: A01을 예약하고 네 칸을 임의 순서·횟수로 점유한 뒤 출차합니다.
+A01을 방문하지 않아도 시험은 가능하며, 네 칸 전체 방문이나 A02→A01 순서를 강제하지 않습니다.
+서버의 확인된 MATCHED와 DB 연결이 있을 때만 A01 예약 연결 확정으로 기록합니다.
+A01 연결 확정 뒤에는 그 관계를 출차까지 유지하고 다른 칸으로 재연결하지 않습니다.
+parking_match_complete.flag는 매칭 HTTP만 비활성화합니다. 점유 HTTP와 입출차 HTTP는 계속됩니다.
+이후 다른 칸의 점유를 새 WRONG_SPACE 서버 응답으로 꾸미지 않습니다.
+observed_occupied_codes는 픽셀 점유 확인이며 동일 차량의 모든 이동을 식별했다는 근거가 아닙니다.
+창 제목에 A01 LINK KEPT TO EXIT를 표시하여 예약 연결과 현재 점유를 구분합니다.
+따라서 이번 시험 규칙에는 중간 연결 해제 API나 배포 해제 옵션 활성화가 필요하지 않습니다.
+실제 현재 위치로 차량 연결을 이전하는 기능은 별도 범위이며 이번 작업에서 구현했다고 주장하지 않습니다.
+
+입차 확인 후 FREE_PARKING 동안 자유롭게 배치하고 사진을 치워 A 카메라에서 출차합니다.
+동일 이용 출차·DB 연결 정책·네 칸 빈자리 확인 뒤 주차 송신만 중지하고,
+카메라/두 창을 유지한 채 A FIRE→B FIRE로 이어집니다. Ctrl+C 중단 시 시험 예약만 취소합니다.
+관련54개검사 통과, 세 실행기CheckOnly·Java컴파일 통과. 실제 새 자유 순서 시험은 미실행입니다.
+최신 전체 Vision 회귀1,059개(54.871초) 통과. 로그: results/deployment_audit_20261028/free_parking_vision_regression.log.
+
+## 2026-10-28 기존 두 통합 시험의 네 구획 점유 전송 반영
+
+공통 trial_config로 예약·예약없음 두 진입점 모두 3F-A01~A04를 실제 전송 허용합니다.
+기존 allowed_codes=[A01,A02] 하드코딩이 A03/A04 미반영 원인이었습니다.
+구획46~49의 실제 코드·공실·미출차·예약충돌을 네 칸 모두 사전검사하도록 확대했습니다.
+관련47개 검사 통과(0.079초), 두 실행기의 CheckOnly·Java 컴파일·diff 공백검사 통과.
+실제 카메라/AWS 전송은 이번 수정 확인에서 실행하지 않았습니다.
+
+점유 전송과 차량-예약 연결을 구분해야 합니다. A02→A01은 거절 후 최초 연결 경로로 검증됐지만,
+A01 정상 연결 후 A03으로 이동하는 일반 자유 이동은 현재 완료되지 않았습니다.
+해제 API·버전 보호 코드는 있으나 한 대 신원 전달과 중간 해제의 결합은 run_camera에서 제한됩니다.
+배포의 해제 활성 설정과 함께 AI 결합·회귀를 구현해야 하며 네 칸 허용 변경만으로 완료라 표현하지 않습니다.
+자유 이동용 새 실행기는 아직 미완성입니다. 기존 두 시험의 진행 순서와 기본 예약 정책은 유지합니다.
+
+## 2026-10-28 예약 없는 별도 통합 시험 추가·미완료 실행 삭제
+
+새 명령: & 'D:\finalProjectB\back\apcms_ai\ai_vision\run_deployed_no_reservation.ps1'
+기존 run_deployed_integration.ps1의 기본 예약 시험은 유지합니다.
+새 진입점은 기존 실행기에 -NoReservation/--no-reservation을 명시하고,
+DeployedSpaceFixture는 예약 시퀀스 발급·INSERT를 수행하지 않는 별도 분기를 사용합니다.
+차량91소6408이 없으면 시험 차량만 생성하며 다른 예약·미출차가 있으면 중단합니다.
+
+새 순서: 입차→A02 NO_VALID_RESERVATION/DB미연결→A01 NO_VALID_RESERVATION/DB미연결→
+동일 이용 출차→주차 송신 중지(카메라 유지)→A FIRE 신규 전송→B FIRE 신규 전송→종료.
+예약 없는 상태를 MATCHED나 정상 예약 주차로 표시하지 않습니다.
+동일 차량의 예약 없음 판정 후 다른 구획 재관찰은 시험 작업자에만 명시 옵션으로 허용합니다.
+기존 운영·예약 시험은 allow_unreserved_move=False 유지. 같은 구획 재시도·다른 이용·
+미확인 응답·과거 시각을 이용한 이동 허용은 기존 제한을 유지합니다.
+두 진입점의 CheckOnly(모델 추론·카메라·DB 접속 없음)·Java 컴파일 및 관련46개검사 통과.
+최신 전체 Vision 회귀1,051개(51.428초) 통과: no_reservation_vision_regression.log.
+새 예약 없는 실제 카메라/AWS 통합 시험은 아직 실행하지 않았습니다.
+
+사용자 삭제 요청으로 실패 실행07406d974e9d41448ac1b1e5e5dafb2b를 정리했습니다.
+해당 이용35·예약24·실행 UUID에 연결된 감지14행·구획 이력12행 삭제, 대상 잔여0.
+동일 실행에서 화재 전이 이력은 A/B 모두0이며 화재 송신 체크포인트가 없었습니다.
+해당 로컬 실행 폴더와 continuous_20261028_153734의 stdout/stderr도 삭제했습니다.
+이전 성공 이용34·시험22·실제 구획46/47·다른 화재 시험은 유지했습니다.
+현재 구획을 삭제하거나 좌표를 변경하지 않았습니다. 삭제된 이력 뒤 마지막 기존 상태와
+현재 구획 상태가 일치하고 열린 이력이 없을 때만 기존 최신 이력의 유효 종료를 복원했습니다.
+최소 정리 감사 근거: results/deployment_audit_20261028/schema_apply/failed_run_07406_cleanup.log.
+
+## 2026-10-28 통합 시험의 카메라 재시작 제거
+
+직전 실제 실행343e317355da406ca7eb06316e3ff31e는 예약22·이용34의 A02 DB미연결,
+A01 DB예약연결·동일이용출차, A/B FIRE 전송ACK를 확인했습니다. 그러나 주차 단계와 화재 단계의
+카메라 run_id가 달라 창이 닫혔다 다시 열렸으므로 연속 카메라 통합 성공으로 주장하지 않습니다.
+
+같은 run_deployed_integration.ps1 명령의 내부 흐름을 수정했습니다.
+주차 종료 시 ParkingRuntime.stop/start를 호출하지 않고 parking_delivery_paused.flag를 기록합니다.
+시험 전용 deployed_delivery_gate.py가 입출차·매칭 클라이언트를 비활성으로 판단하게 하고,
+점유 전송은 CANCELLED_BEFORE_SEND/PARKING_PHASE_COMPLETE로 기록합니다. 성공 응답으로 위장하지 않습니다.
+이미 진행 중인 주차 요청을 회수하고 A/B의 전송 중지 확인 후 현재 run_id의 공유 프레임으로 화재만 시작합니다.
+카메라와 두 창은 계속 유지하며 주차 로컬 분석도 계속됩니다. 물리 카메라를 화재가 직접 열지 않습니다.
+마지막 B FIRE 시험 뒤에만 화재→주차 순서로 종료합니다. 시험 예약은 출차 후 해당 예약 ID만 취소합니다.
+
+결과에 camera_pids_at_start/camera_pids_at_fire, 동일 parking_run/fire_run,
+camera_continuity_verified, parking_delivery_paused를 기록하며 연속성이 확인되지 않으면 성공으로 처리하지 않습니다.
+시험 단계·전송 차단 관련12개 검사와 실제 CheckOnly 통과. 최신 실제 연속 카메라 재시험은 아직 미실행입니다.
+기존 재시작 설명은 이 수정으로 대체합니다. 실제 카메라 실행은 준비 확인 후 진행합니다.
+
+## 2026-10-28 실제 지하 3층 주차→A/B 불꽃 통합 시험 실행기
+
+run_deployed_integration.ps1 → parking/demo_tools/run_deployed_integration.py.
+카메라는 현장 PC에서 수집하고 주차·화재 이벤트는 배포 API/AWS DB로 전송합니다.
+이 실행기는 별도 로컬 FastAPI를 띄우지 않고 기존 ParkingRuntime/SharedSafetyRuntime를 사용합니다.
+DeployedSpaceFixture.java + deployed_fixture.py가 기존 구획46(A01)/47(A02)의 충돌을 확인하고
+차량91소6408이 없을 때만 표식 있는 시험 차량을 만들며 A01 예약을 생성합니다.
+층·구역·구획은 생성하거나 삭제하지 않습니다. DB/Boot 시간대 차이를 포괄하는 시험 예약이며
+종료·중단 시 본 실행의 예약 ID만 취소합니다. 이용·감지 이력과 시험 차량은 보존합니다.
+정상 종료/오류에서만 취소하므로 PC 강제 종료 시 reservation.properties로 수동 점검이 필요합니다.
+
+단계: 빈4칸확인 → 입차 → A02 WRONG_SPACE/DB미연결 → A01 MATCHED/DB예약연결 →
+동일이용출차/DB확인 → 주차 송신 중지·예약취소 → 관찰 전용 두 창 재시작 →
+A 공유 FIRE 신규 SUSPECTED 전송ACK → B 공유 FIRE 신규 SUSPECTED 전송ACK → 종료.
+주차 단계 후 공유 화재 모델을 준비하므로 잠시 창이 닫혔다 다시 열리는 것이 정상입니다.
+화재 단계에서는 주차 전송을 꺼 휴대전화에 의한 실제 구획 점유 변경을 막습니다.
+창 제목과 터미널 PHASE에 단계 표시, SPACE 없이 자동 시작, Ctrl+C로 종료.
+불꽃 단계별120초 제한이며 과거에 전송된 전이를 다음 단계 성공으로 재사용하지 않습니다.
+명령: & 'D:\finalProjectB\back\apcms_ai\ai_vision\run_deployed_integration.ps1'
+사전검사만 할 때 -CheckOnly. 설정 기본값은 demo_current_20261028/runtime.local.json.
+모든 실행은 results/deployed_integration/<새UUID>에 분리되며 결과·예약소유·증거를 보존합니다.
+다른 카메라 사용 서버와 동시 실행하지 않습니다. 재실행은 실제 업무 구획에 기록을 추가합니다.
+단계/런타임/종료/공유화재 관련60개 검사 통과. 최종 단계 함수8개 재확인 및 컴파일·사전점검 통과.
+실제 A01/A02 공실·예약충돌 없음 읽기전용 확인 후 사용자 요청으로 최초 통합 시험을 시작했습니다.
+예약22 생성 확인. 실제 통합 성공 여부는 시험 완료 후 result.json 및 DB 대조가 필요합니다.
+
+## 2026-10-28 기존 도면을 배포 지하 3층 A01~A04로 매핑
+
+배포 DB 읽기 전용 조회로 FLOOR_NO=3(지하 3층), A01~A04의
+PARKING_SPACE_ID 46,47,48,49와 정상 도면 좌표를 확인했습니다.
+기존 카메라 도면 A-01/A-02/A-03/A-04는 각각 3F-A01/3F-A02/3F-A03/3F-A04로 연결합니다.
+현재 설정: results/parking_runtime/demo_current_20261028/runtime.local.json의
+space_code_map 및 allowed_codes. 카메라 좌표·빈 기준 이미지는 변경하지 않았습니다.
+대상 Boot는 http://52.79.133.132:3000/admin-api이며 delivery_enabled=false 유지.
+이번 변경은 매핑 설정만이며 실제 업무 구획의 점유·입출차 DB 변경은 실행하지 않았습니다.
+실제 송신을 켜면 기존 구획46~49에 영향을 주므로 촬영 준비·기록 범위를 확인한 후 실행합니다.
+런타임의 선택 매핑은 작업 프로세스에서만 적용하고 종료 시 기존 기본값을 복원합니다.
+기존 합성 데이터 생성용 run_parking_demo.ps1은 별도 시험용이며 이 프로필을 사용하지 않습니다.
+매핑·런타임·사전점검 관련34개검사(2.784초), 실제 CheckOnly, diff 공백 검사 통과.
+이후 전체 회귀는 아직 재실행하지 않았습니다. 카메라·DB DML·Boot·프런트 수정 없음.
+
+## 2026-10-28 보존 주차 시험 데이터 사용자 요청으로 삭제 완료
+
+좌표 없는 임시 구획 999F-Z01/Z02가 일반 구획 조회에 포함되어 웹 좌표 검증을 실패시켰습니다.
+사용자 삭제 승인 후 소유 표식 AI_HTTP_TEST_0e4099f6 및 참조 관계를 검증하여
+시험 데이터 19행을 삭제했습니다. 대상 이용33·차량10·예약21·구획66/67·구역19·층10과 관련 주차 이력입니다.
+새 DB 연결에서 대상 차량·층·구역·구획·예약·이용·감지 이력·구획 이력 모두 0행 확인.
+화재 시험 이력62~81과 관련 알림은 이번 삭제 대상에 포함하지 않았습니다.
+매퍼·프런트·DB 구조는 변경하지 않았습니다. 주차 성공 결과 파일은 유지합니다.
+이전 '주차 이용33 보존/재실행 차단' 설명은 이 삭제 결과로 대체합니다.
+웹 새로고침 후 표시 복구 자체는 사용자 화면에서 추가 확인이 필요합니다.
+근거: e2e_manual_902aa14f/approved_cleanup.log 및
+results/deployment_audit_20261028/schema_apply/cleanup_recheck_902aa14f.json.
+
+## 2026-10-28 최신 회귀·최종 문서 정리 완료
+
+최신 운영 코드 기준 Vision 1,032개(49.720초), 화재 회귀 301개(18.491초) 통과.
+최초 제한 환경 검사는 지연으로 중단했고 정상 권한 순차 재실행 결과를 사용합니다.
+로그는 results/deployment_audit_20261028/final_retained_{vision,safety}_verified.log.
+실제 모델 실험 test_fire_smoke.py는 회귀 수집에서 제외했습니다.
+카메라·AWS 추가 전송·DB 변경 없이 실행. git diff --check 통과, 스테이징·커밋·푸시 없음.
+최종 인수인계는 FIRE_SMOKE_FINAL_HANDOFF.md에 최신 사실 중심으로 통합했습니다.
+혼동되는 과거 본문은 results/safety/final_document_snapshot_20261028/
+FIRE_SMOKE_FINAL_HANDOFF_before_retained_cleanup.md에 보존했습니다.
+AWS 주차 이용 ID 33과 화재 이력 62~81은 보존 상태입니다. 임의 삭제하지 마세요.
+주차 프로필은 미정리 매니페스트로 재실행 차단 상태이며 소유 확인·정리 승인이 먼저입니다.
+남은 한계: SMOKE 손·배경 오탐, 프런트 알림 표시 미확인(타 담당),
+현장 카메라 수집과 Compose/Jenkins 운영 구성 및 장시간 시험 미검증.
+
+## 2026-10-28 AWS 기록 보존 최종 시험
+
+주차 실행 e2e_manual_902aa14f: 성공, 이용 ID 33으로 입차·예약 자리 연결·출차 완료.
+A-02 WRONG_SPACE 및 DB 미연결, A-01 MATCHED, DB LINK_VERSION=2,
+OPEN_ROWS=0. RetainTestRecords 옵션으로 시험 행·이력을 삭제하지 않았습니다.
+소유 매니페스트는 미정리로 유지하여 같은 프로필의 중복 재실행을 차단합니다.
+보존 기능 관련 47개 검사 통과. 자동 서버 시험의 기록 보존 옵션은 지원하지 않습니다.
+
+화재 실행 aws_both_retained_20261028/shared_runs/44869e9f67634bb2aaf35b244ccc4d71:
+두 분석 결과 준비 후 120초 관찰, A 220프레임·B 208프레임,
+공유 화재의 물리 카메라 개방 0회, 네 작업자 모두 종료 코드 0.
+A 전이 14건·B 전이 6건 전송 성공 기록과 AWS DB 20행을 ID로 대조했습니다.
+AI_DETECTION_EVENT_ID 62~81은 모두 IS_TEST=Y이며 삭제하지 않았습니다.
+연결된 안전 사건 ID는 5,8,9,11,14,15,16이며 관련 관리자 알림 존재도 조회했습니다.
+기존 사건으로 병합된 기록이 있어 관련 전체 알림 수를 이번 신규 알림 수로 계산하지 않습니다.
+이 검증은 전송·저장·종료 성공이며 각 감지의 정확도 성공을 뜻하지 않습니다.
+손·배경 SMOKE 오탐 한계는 유지하며 관리자 웹 표시 자체는 확인하지 않았습니다.
+근거: results/safety/aws_both_retained_20261028/result.json 및
+results/deployment_audit_20261028/schema_apply/retained_both_db_audit.json.
+
+## 2026-10-28 Ctrl+C 실제 종료 재검증 완료
+
+사용자가 두 창 실행 후 터미널에서 Ctrl+C로 종료한 실행
+`51468bd8a4e84037845921020ebb8110`의 저장 기록을 확인했습니다.
+- 주차 런타임: STOPPED, reason=null, A/B 작업자 모두 alive=false·exit_code=0.
+- 입출차: 165프레임, SERVER_SHUTDOWN, cleanup_errors=0, HTTP 요청 0회.
+- 주차면: STOPPED, error=null.
+- 공유 화재 A/B: 각각 2프레임 분석 후 STOP_REQUESTED, error_type=null,
+  물리 카메라 직접 개방 0회. 이 요약에는 화재 작업자의 OS 종료 코드는 기록되지 않습니다.
+- 사용자 터미널: Application shutdown complete 및 서버 PID 25712 종료 확인.
+
+이전 주차 B의 0xC000013A 종료 문제는 이번 실제 재시험에서 재현되지 않았습니다.
+이번은 종료 처리 확인이며 감지 정확도·AWS 송신 재시험이 아닙니다.
+이전 절의 '실제 Ctrl+C 재시험 미실행' 기록은 이 결과로 대체합니다.
+
+## 2026-10-28 사용자 녹화 검토·Windows Ctrl+C 작업자 종료 보완
+
+사용자영상‘입출차 + 점유율 + 화재감지 통합 테스트.mp4’219.13초의대표16장과
+실행45b785a101554daf88f535c8bb2c8744기록을대조. 입차/출차91소6408,
+A02점유→A01이동→해제,두창FIRE표시확인. 이번관찰모드HTTP0/DB반영없음.
+FIRE증거A0.8462/B0.3156은화면속불꽃위치. A SMOKE0.4992는손영역오탐임을
+증거직접확인. SMOKE정확도성공자료로소개하지않습니다. 배경변경으로손오탐미해결.
+
+사용자터미널에는정상종료처럼보였으나실제runtime_state는FAILED/CHILD_EXITED,
+주차B종료코드3221225786(0xC000013A),다른요약STOPPED. 전부정상종료로기록하지않음.
+parking_process_scope.isolate_worker에서Windows작업자의직접Ctrl+C를무시하도록
+SetConsoleCtrlHandler(None,True)/SIGINT무시를추가하고공유화재도네이티브모듈
+로드전격리합니다. 서버가Ctrl+C를처리해stop_event로작업정리하는방식.
+기존POSIXsetsid와실패시강제종료검증유지. 관련49개검사통과(3.561초).
+실제WindowsCtrl+C재시험은미실행이며사용자준비없이카메라재실행하지않음.
+영상/JSON근거 results/verification_recording_20261028/,원본은사용자Videos폴더보존.
+새녹화로전체기능재검증필요없고향후짧은시작→Ctrl+C종료만확인하면됩니다.
+
+## 두 창 관찰 실행기 — 2026-10-28
+
+시험 결과 폴더의 일회성 check_lifecycle.py 대신 run_shared_monitor.ps1을 추가했습니다.
+이 실행기는 Vision 전용 API·주차A/B·공유화재A/B를 로컬8002에서 실행합니다.
+문의·추천을 포함한 main:app 전체 서버와는 구분합니다. 직접화재자동감시는 끄고
+공유감시만활성화,실제주차/화재HTTP송신은허용하지않습니다. 기존키설정은변경하지않음.
+SAFETY_SHARED_SEND_ENABLED는실행동안false로고정하고종료후기존값을복원합니다.
+기본시간제한없음/Ctrl+C서버정상종료,동일카메라사용다른서버동시실행금지.
+현재검증된B도면기준/좌표를 results/parking_runtime/demo_current_20261028에복사했습니다.
+기존파일이있으면덮어쓰지않으며배치가변하면재보정해야합니다.
+
+먼저카메라없이점검:
+```powershell
+& 'D:\finalProjectB\back\apcms_ai\ai_vision\run_shared_monitor.ps1' `
+  -Config 'D:\finalProjectB\back\apcms_ai\ai_vision\results\parking_runtime\demo_current_20261028\runtime.local.json' `
+  -CheckOnly
+```
+준비된상태에서관찰시작(이명령은실제카메라를엽니다):
+```powershell
+& 'D:\finalProjectB\back\apcms_ai\ai_vision\run_shared_monitor.ps1' `
+  -Config 'D:\finalProjectB\back\apcms_ai\ai_vision\results\parking_runtime\demo_current_20261028\runtime.local.json'
+```
+상태GET http://127.0.0.1:8002/vision/parking/runtime 및 /vision/safety/shared-runtime.
+사전점검모듈3개검사/실제CheckOnly/환경변수복원통과,새실행기로카메라재시험은미실행.
+results의로컬설정/기준이미지는Git제외이므로다른PC에필요시별도전달해야합니다.
+관찰전용이라웹DB입출차변경시연용명령과동일하지않습니다. AWS시험은별도승인범위로진행합니다.
+
+## 2026-10-28 PR118 병합 이후 실제 배포 반영 확인
+
+최신 origin/develop=23ffe135d(PR118병합), 로컬2ef9eccc8과트리동일을확인했습니다.
+배포웹공개JS에서AI프록시/ai-api를확인하고읽기전용GET실행:
+- http://52.79.133.132:3000/ai-api/health HTTP200/statusUP/serviceapcms-ai
+- /ai-api/openapi.json HTTP200/통합AI앱,주차·공유화재상태경로둘다존재
+- /ai-api/vision/parking/runtime HTTP200/stateDISABLED/OBSERVE_ONLY/processes[]
+- /ai-api/vision/safety/shared-runtime HTTP200/stateDISABLED/DRY_RUN_NO_HTTP/
+  send_role=null/shared_run_id=null/processes[]
+새공유화재기능의배포API제공은확인됐지만AWS자동카메라감시는실행중이아닙니다.
+이PC의USB는AWS에서직접열수없으므로임의활성화하지않았습니다. 현장수집주체와
+공유파일이같은호스트라는계약을유지해야하며원격파일전달/RTSP가자동지원되는것은아닙니다.
+실제배포커밋해시/Compose파일자체를조회한것은아니므로그내용까지확정하지않습니다.
+근거 results/deployment_audit_20261028/after_pr118_deployed_ai_check.json.
+카메라/서비스기동·설정변경·이벤트POST·DB변경·Git커밋/푸시없음.
+
 ## 2026-10-28 최종 두 창·서버 자동 수명주기·AWS 선택 송신 실제 성공
 
 사용자A송신60초준비/전송승인후 final_two_window_aws_lifecycle_20261028 실행.

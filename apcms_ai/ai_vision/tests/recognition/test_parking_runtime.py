@@ -20,6 +20,42 @@ def _fake_camera_worker(role, config, run_dir, stop_event, heartbeat):
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_shutdown_with_nonzero_child_exit_is_failed(self):
+        runtime=ParkingRuntime();runtime.state='RUNNING'
+        child=Mock(exitcode=1);child.is_alive.return_value=False
+        runtime.processes=[child]
+        runtime.stop()
+        self.assertEqual(runtime.state,'FAILED')
+        self.assertEqual(runtime.reason,'CHILD_EXITED')
+
+    def test_profile_mapping_is_scoped_and_restored_on_error(self):
+        from ai_vision.parking.parking_event_sender import scoped_space_mapping, convert_space_code
+        before=convert_space_code('A-01')
+        with self.assertRaises(RuntimeError):
+            with scoped_space_mapping({'A-01':'3F-A01'}):
+                self.assertEqual(convert_space_code('A-01'),'3F-A01')
+                raise RuntimeError('시험 중단')
+        self.assertEqual(convert_space_code('A-01'),before)
+
+    def test_invalid_or_duplicate_profile_mapping_is_rejected(self):
+        from ai_vision.parking.parking_event_sender import scoped_space_mapping
+        for mapping in ([], {'A-01':'A01'}, {'A-01':'3F-A01','A-02':'3F-A01'}):
+            with self.subTest(mapping=mapping), self.assertRaises(ValueError):
+                with scoped_space_mapping(mapping):pass
+
+    def test_worker_uses_selected_floor_without_changing_default_mapping(self):
+        from ai_vision.parking.parking_runtime_worker import run_worker
+        from ai_vision.parking.parking_event_sender import convert_space_code
+        config=dict(parking_camera=0,parking_id='PARK',reference='empty.png',spaces_config='spaces.json',
+                    allowed_codes=['3F-A01'],boot_context_url='http://localhost:81',space_code_map={'A-01':'3F-A01'})
+        before=convert_space_code('A-01')
+        def observed(*args,**kwargs):
+            self.assertEqual(convert_space_code('A-01'),'3F-A01')
+            return {'status':'STOPPED'}
+        with patch('ai_vision.parking.run_parking_camera.run_camera',side_effect=observed):
+            run_worker('parking',config,'run',threading.Event(),SimpleNamespace(value=0))
+        self.assertEqual(convert_space_code('A-01'),before)
+
     def setUp(self):
         # 단위 검사는 현재 테스트 프로세스의 세션을 바꾸지 않습니다.
         isolation=patch("ai_vision.parking.parking_process_scope.isolate_worker")
@@ -162,6 +198,11 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(kw["runtime_mode"])
         self.assertEqual(kw["handoff_path"],Path("run/gate/single_vehicle_handoff.json"))
         self.assertNotIn("enable_space_release_http",kw)
+        config['enable_space_release_http']=True
+        with patch.dict('os.environ',{'AI_OCCUPANCY_API_KEY':'test-key'},clear=True),patch('ai_vision.parking.run_parking_camera.run_camera',return_value={'status':'STOPPED'}) as moving:
+            run_worker('parking',config,'run',threading.Event(),SimpleNamespace(value=0))
+        self.assertTrue(moving.call_args.kwargs['enable_space_release_http'])
+        self.assertEqual(moving.call_args.kwargs['handoff_path'],Path('run/gate/single_vehicle_handoff.json'))
 
     def test_valid_config_checks_assets_without_http_or_camera(self):
         import json

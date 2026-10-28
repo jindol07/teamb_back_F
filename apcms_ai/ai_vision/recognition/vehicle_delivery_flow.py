@@ -80,7 +80,10 @@ class VehicleDeliveryFlow:
 class SpaceMatchDeliveryFlow:
     """대기열 없이 현재 후보 한 건을 비동기로 보내고 결과를 회수합니다."""
 
-    def __init__(self, client=None, release_client=None):
+    def __init__(self, client=None, release_client=None, *, allow_unreserved_move=False):
+        if type(allow_unreserved_move) is not bool:
+            raise ValueError('예약 없는 차량 이동 허용 여부는 bool이어야 합니다.')
+        self.allow_unreserved_move = allow_unreserved_move
         from concurrent.futures import ThreadPoolExecutor
         from ai_vision.recognition.vehicle_http import SpaceMatchHTTPClient
         self.client = SpaceMatchHTTPClient() if client is None else client
@@ -188,7 +191,8 @@ class SpaceMatchDeliveryFlow:
                     previous['status'] == 'HELD' and not previous.get('blocking_reason')
                     and receipt.get('state') == 'HELD' and receipt.get('receipt_verified') is True
                     and receipt.get('request_attempted') is True
-                    and receipt.get('parking_decision') == 'WRONG_SPACE'
+                    and (receipt.get('parking_decision') == 'WRONG_SPACE' or
+                         (self.allow_unreserved_move and receipt.get('parking_decision') == 'NO_VALID_RESERVATION'))
                     and type(receipt.get('parking_usage_id')) is int
                     and receipt['parking_usage_id'] == expected_usage
                     and previous.get('expected_parking_usage_id') == expected_usage
@@ -242,7 +246,9 @@ class SpaceMatchDeliveryFlow:
             receipt = record.get('receipt') or {}
             allowed = record['status'] in ('APPLIED', 'UNCHANGED') or (
                 record['status'] == 'HELD' and record.get('expected_parking_usage_id') == usage_id
-                and receipt.get('parking_decision') in ('WRONG_SPACE', 'NO_VALID_RESERVATION', 'UNDETERMINED'))
+                and receipt.get('parking_decision') in ('WRONG_SPACE', 'NO_VALID_RESERVATION', 'UNDETERMINED')) or (
+                record['status']=='HELD' and record['payload'].get('event_type')=='VEHICLE_SPACE_RELEASE'
+                and record['payload'].get('parking_usage_id')==usage_id)
             if (not allowed or record.get('blocking_reason')
                     or receipt.get('receipt_verified') is not True or receipt.get('request_attempted') is not True
                     or type(receipt.get('parking_usage_id')) is not int or receipt['parking_usage_id'] != usage_id

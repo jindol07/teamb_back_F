@@ -65,7 +65,8 @@ def execute(capture, processor, session, seconds=20, max_frames=100000, monotoni
             raise RuntimeError("입출차 전송 결과를 확인해야 합니다.")
         if preview is not None:
             summary = passage['plate_consensus']
-            print(f"통과 차량 {passage['track_id']} / 화면 방향 {passage['screen_direction']} / 번호판 {summary['plate_number'] or '미확정'} / 합의 {summary['status']} / 전송 판단 {decision['decision']}", flush=True)
+            passage_label = {'DOWN': '입차', 'UP': '출차'}.get(passage['screen_direction'], '방향 미확정')
+            print(f"통과 차량 {passage['track_id']} / {passage_label} / 번호판 {summary['plate_number'] or '미확정'} / 합의 {summary['status']} / 전송 판단 {decision['decision']}", flush=True)
     try:
         if (isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not 0 < seconds <= 300 or
                 type(max_frames) is not int or not 1 <= max_frames <= 100000 or type(allow_source_end) is not bool or
