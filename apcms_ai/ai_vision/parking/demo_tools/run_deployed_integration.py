@@ -88,7 +88,7 @@ def main(argv=None):
     try:
         contract_marker=source.parent/'backend_contract.json'
         if contract_marker.is_file() and read_json(contract_marker).get('status')=='PENDING_POLICY_ALIGNMENT':
-            from ai_vision.parking.demo_tools.deployed_outcome import FixtureFailure
+            from ai_vision.parking.demo_tools.deployed_sequence import FixtureFailure
             raise FixtureFailure('BACKEND_POLICY_CHANGED')
         # 기존 카메라 런타임의 잠금도 검사하여 중복 실행 전 DB 변경을 막습니다.
         check_lease=socket.socket()
@@ -135,7 +135,7 @@ def main(argv=None):
         print('TEST_CANCELLED: 사용자가 Ctrl+C로 중단했습니다. 시험 완료와는 다릅니다.',flush=True)
     except Exception as error:
         report['error_type']=type(error).__name__
-        from ai_vision.parking.demo_tools.deployed_outcome import FixtureFailure
+        from ai_vision.parking.demo_tools.deployed_sequence import FixtureFailure
         if isinstance(error,FixtureFailure):
             report.update(error_code=error.code,error_message=str(error))
         else:
@@ -149,7 +149,7 @@ def main(argv=None):
             try:report['automatic_cleanup']=cleanup_owned_run(root,fixture=fixture)
             except Exception as error:report['automatic_cleanup_error']=type(error).__name__
         lease.close()
-        from ai_vision.parking.demo_tools.deployed_outcome import result_exit_code, final_completion_checks
+        from ai_vision.parking.demo_tools.deployed_sequence import result_exit_code, final_completion_checks
         parked=Path(report['parking_run']) if report.get('parking_run') else None
         report['completion_checks']=final_completion_checks(report,
             snapshot(parked/'parking/parking_camera_check.json') if parked else {},

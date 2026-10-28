@@ -36,6 +36,6 @@ class DeployedFixture:
         (self.run/(mode+'_db.log')).write_text(result.stdout+'\n'+result.stderr,encoding='utf-8')
         if result.returncode:
             if result.returncode in (130,-1073741510,3221225786):raise KeyboardInterrupt()
-            from ai_vision.parking.demo_tools.deployed_outcome import fixture_failure
+            from ai_vision.parking.demo_tools.deployed_sequence import fixture_failure
             raise fixture_failure(result.stderr)
         return dict(line.split('=',1) for line in result.stdout.splitlines() if '=' in line)

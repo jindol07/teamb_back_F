@@ -2,7 +2,7 @@
 import unittest
 from unittest.mock import Mock
 from ai_vision.parking.demo_tools.release_capability import require_release_enabled
-from ai_vision.parking.demo_tools.deployed_outcome import FixtureFailure
+from ai_vision.parking.demo_tools.deployed_sequence import FixtureFailure
 
 
 class ReleaseCapabilityTests(unittest.TestCase):
