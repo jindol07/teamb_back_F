@@ -28,6 +28,11 @@ app.include_router(recmn_router)
 from ai_vision.main import router as vision_router
 app.include_router(vision_router)
 
+# 10/27 화재·연기 감지 자동감시: 라우터 lifespan에서 시작하고 종료 시 정리.
+# Windows 개발환경에서는 기본 켜짐, AWS/Linux·운영환경은 기본 꺼짐.
+from ai_vision.safety.camera_monitor_router import router as safety_camera_router
+app.include_router(safety_camera_router)
+
 @app.get('/')
 def root(): return {'message':'APCMS AI Server is running'}
 
@@ -42,3 +47,7 @@ def health_check():
         "service": "apcms-ai",
         "data_mode": settings()["mode"]
     }
+
+# 주차 자동 실행은 PARKING_RUNTIME_ENABLED=true일 때만 시작합니다.
+from ai_vision.parking.parking_runtime import install_parking_runtime
+install_parking_runtime(app)

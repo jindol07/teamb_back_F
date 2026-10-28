@@ -95,15 +95,21 @@ class BackendClient:
         return str(office)
 
     async def get(self, category, token):
-        if category in ("MILEAGE", "FEE"):
+        if category == "FEE":
             raise BackendError(
-                "마일리지·청구 정보의 본인 조회 API는 아직 지원하지 않습니다."
+                "청구 정보의 본인 조회 API는 아직 지원하지 않습니다."
             )
         if category not in self.PATH:
             raise BackendError("지원하지 않는 조회 유형")
         data = await self.request("GET", self.cfg[self.PATH[category]], token)
         if not isinstance(data, list):
             raise BackendError("본인 조회 API 응답이 목록 형식이 아닙니다.")
+        if category == "MILEAGE":
+            # 연관 Office 객체 등 불필요한 사용자 정보는 모델/대화 저장에 전달하지 않습니다.
+            fields = ("mileagetypecode", "amount", "description", "createdat")
+            if any(not isinstance(row, dict) for row in data):
+                raise BackendError("마일리지 조회 응답 형식이 올바르지 않습니다.")
+            return [{field: row.get(field) for field in fields} for row in data]
         return data
 
     async def add_conversation(self, token, payload):

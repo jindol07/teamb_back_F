@@ -1,5 +1,11 @@
 # 입출차 연동과 중복 억제
 
+> 현재 실행·검증 기준은 [HANDOFF](HANDOFF.md#현재-실행-기준-2026-10-27)에 통합합니다. 배포는 Docker Compose + Jenkins이며 Kubernetes는 사용하지 않습니다. 수동 시연은 SPACE/Q, 승인된 `-ServerTrial`은 자동 시작/종료입니다. 2026-10-27 사용자 직접 실행에서 다른 자리→예약 자리→출차 및 시험 기록 정리가 성공했습니다. 아래 10월 26일 확인은 과거 기록입니다.
+
+
+> 2026-10-26 통합 확인: PR #104 반영 후 Redis 실행으로 관리자 로그인에 성공했고, 기존 입출차 기록과 AI 판정 빈 목록을 화면에서 확인했습니다. 이후 인증 만료가 발생해 지속 조회 검증은 미완료입니다. 토큰 자동 갱신은 로그인 담당 영역으로 분리하며 AI 기능 오류로 단정하거나 인증 코드를 우회하지 않습니다. 현재 새 판정 행을 만들기 위한 카메라/DB 시험은 하지 않았습니다. 배포 시 AWS11g 버전 컬럼·트리거 적용 여부와 장치/파일 공유 설정은 별도 확인이 필요합니다.
+
+
 [시작 안내](../readme.md) · [영상 분석](VIDEO_ANALYSIS.md) · [결과 검토](RESULTS_REVIEW.md) · [입출차 연동](VEHICLE_INTEGRATION.md)
 
 > 아래 명령은 모두 `D:\finalProjectB\back\apcms_ai`에서 실행합니다.
@@ -139,6 +145,25 @@ Git 포함 대상은 실행 소스·Java 도우미 소스·Gradle 초기화 스�
 사진·좌표·로컬 프로필·키·시험 결과·매니페스트·클래스패스·컴파일 산출물은 제외합니다.
 
 ## 배포 전제
+
+
+### 2026-10-26 배포 담당 인계: 코드로 확인한 조건과 미확인 항목
+
+| 항목 | 현재 코드·검증 근거 | 배포 때 확인할 일 |
+|---|---|---|
+| 이미지 범위 | ai_vision/Dockerfile은 ai_vision.app:app을 실행하는 Vision 전용 이미지. 통합 main:app과 다름 | 문의·추천을 포함한 통합 서버 이미지로 간주하지 말고 서비스 범위를 확정 |
+| Python 설치 | 로컬 ai_vision/requirements.txt는 상위 통합 requirements와 runtime을 함께 참조. Docker는 runtime 사용 | 통합 개발 환경과 Vision 전용 운영 환경의 설치 명령을 구분. 검증된 Python3.12/Linux amd64 기반 사용 |
+| 모델·OCR 캐시 | Docker의 모델 위치는 VISION_MODEL_DIR=/app/ai_vision/models. 비root UID10001 사용 | 모델과 OCR 캐시를 별도 제공하고 읽기 권한 확인. Git 소스만 받았다고 모델까지 있다고 가정하지 않음 |
+| 결과 저장 | VISION_RESULT_DIR=/var/lib/vision/results | UID10001의 쓰기 권한·보존 범위 설정. 비밀값을 결과/로그에 남기지 않음 |
+| API 상태·프로세스 | Docker HEALTHCHECK는 /ready, uvicorn workers=1 | 컨테이너 내부 포트8000과 서비스 주소 확인. worker/Pod 증가가 중복 억제 상태를 공유하지 않으므로 임의 확장 금지 |
+| Boot 주소·키 | .env.example의 PARKING_AI_BASE_URL/VISION_BOOT_CONTEXT_URL은 로컬81의 /alpharking/admin. 송신 기본 false | 컨테이너의 localhost는 Boot가 아니므로 실제 서비스 주소로 주입. AI API 키는 Secret 등 별도 주입하고 승인된 시험 때만 송신 허용 |
+| 현장 카메라 | 현재 시연은 Windows PowerShell 진입점·로컬 장치·SPACE/Q GUI | AWS 이미지 실행만으로 현장 카메라가 연결되지 않음. 현장 처리 유지/영상 전달 방식은 배포 담당과 확정 |
+| A→B 신원 전달 | 현재 한 대 시연의 로컬 파일·프로세스 상태 기반 | 별도 Pod가 동일 파일을 자동 공유하지 않음. 두 처리를 어디서 실행할지와 공유 파일 접근 범위를 먼저 확정. 다중차량 분산 신원 시스템은 미구현 |
+| Oracle | Boot 매퍼가 PARKING_USAGE.LINK_VERSION을 참조. 개발21c 적용 기록 있음 | AWS11g에 컬럼·비음수 제약·연결 변경 트리거가 실제 적용됐는지 DBA/배포 담당 확인. 이 점검에서 DDL 실행 안 함 |
+| 관리자 인증 | Redis 실행 후 초기 로그인·입출차/빈 판정 조회 성공. 이후 인증 만료 확인 | 로그인 담당이 자동 갱신 문제 확인. 해결 후 지속 조회 확인. AI 코드에서 인증 우회하지 않음 |
+
+위 표는 설정 변경·클러스터 적용 지시가 아닌 인계 조건입니다. Kubernetes 구성은 팀장님 담당이며, AWS 인스턴스는 실제 배포 검증이 필요할 때 요청합니다. Vision 전용 이미지의 과거 AWS 인식 성공과 현재 전체 시스템 배포 성공을 구분합니다.
+
 
 배포 방식은 Kubernetes입니다. 현재 한 대 시연은 Windows 현장의 카메라와 로컬 신원 파일을 사용합니다.
 Pod 재시작·복제 시 현재 파일/메모리 상태를 그대로 공유할 수 있다고 가정하지 않습니다.
@@ -1927,3 +1952,118 @@ AI handoff 흐름은 요청에 ID를 보존하고 응답의 이용 ID도 다시 
 이것은 연결되지 않은 차량의 새 위치 재판정이며, 이미 연결된 차량의 이전 구획 해제·재연결 기능이 아닙니다. 실제 예약 조건은 Boot에서 다시 검증합니다. 실카메라/공용 DB의 구획 이동 시험은 아직 수행하지 않았으며, 현재 고정 A-01 시연으로는 확인할 수 없습니다. 시험에는 별도 두 구획 설정과 사전 범위 안내가 필요합니다.
 
 입차 신원 전달 후보는 생성 시점부터 요청에 expected_parking_usage_id를 포함합니다. 이용 ID는 양의 Java Long 범위 정수만 허용합니다. 잘못된 자리 판정 이후의 새 위치 후보는 이전 요청보다 관찰 시각이 나중일 때만 허용하며, 서로 다른 시간대 표기도 실제 시각으로 비교합니다. 같은 시각·과거 후보는 전송하지 않습니다. 허용된 재판정 기록의 correction_of_event_id에는 이전 요청 ID를 남깁니다. 모의 후보·전송·표시 및 시간/신원 경계 검사를 포함해 공식 933개가 통과했습니다(40.736초). 실제 카메라·HTTP·공용 DB는 사용하지 않았습니다.
+
+## 주차 서버 자동 실행 연결 (2026-10-27, 실제 카메라 검증 전)
+
+통합 `main:app`에 주차 실행 수명주기를 연결했습니다. 기본은 비활성이며 `PARKING_RUNTIME_ENABLED=true`와 `PARKING_RUNTIME_CONFIG`를 명시해야 A/B 로컬 카메라 프로세스를 시작합니다. 문의·추천·화재의 기존 수명주기를 보존하며, 활성화 전 설정·화재 장치 중복을 검사합니다. 실제 운영 설정은 아직 만들거나 활성화하지 않았습니다.
+
+설정 JSON의 필수 항목은 아래와 같습니다. 경로는 설정 파일 기준 상대경로 또는 절대경로입니다. 키는 파일에 넣지 않고 `AI_OCCUPANCY_API_KEY` 또는 기존 `PARKING_AI_API_KEY` 환경변수로 제공합니다.
+
+```json
+{
+  "delivery_enabled": false,
+  "gate_camera": 1,
+  "parking_camera": 0,
+  "gate_id": "GATE_A",
+  "parking_id": "PARKING_B",
+  "down_direction": "ENTRY",
+  "gate_config": "gate.json",
+  "spaces_config": "spaces.json",
+  "reference": "reference.png",
+  "allowed_codes": ["1F-A01", "1F-A02"],
+  "boot_context_url": "http://127.0.0.1:81/alpharking/admin",
+  "output_dir": "runtime_results"
+}
+```
+
+이는 형식 예시이며 새 도면 좌표·실제 DB 구획 검증을 대체하지 않습니다. 임시 999F 시험 구획은 거부하며 Java 시험 데이터 생성/삭제 도구를 호출하지 않습니다. 현재는 정수 장치 번호를 사용하는 같은 호스트의 카메라 2대와 차량 한 대 신원 전달 범위입니다. RTSP 입력·다중차량·재시작 신원 복원·클러스터 분산 실행은 아직 지원하지 않습니다.
+
+`GET /vision/parking/runtime`은 DISABLED/STARTING/RUNNING/STOPPING/STOPPED/FAILED 및 프로세스 상태를 반환합니다. RUNNING은 두 루프의 프레임 처리가 확인됐다는 뜻이며 인식 정확도·DB 연결 성공까지 보증하지 않습니다. 이 상태는 기존 /health와 구분합니다. 서버 종료 시 종료 신호·자원 정리 후 프로세스를 회수하며, 25초 내 정상 종료하지 못하면 강제 종료·검토 필요 상태로 남깁니다. 시작 후 180초 내 처리 시작 실패 또는 90초간 프레임 처리 중단 시 두 작업을 중단합니다. 불명확 전송·기존 기록 한도 도달도 자동 재시작하지 않습니다.
+
+GUI·SPACE 입력은 운영 자동 실행에서 사용하지 않습니다. 기존 `run_parking_demo.ps1`의 수동 시연·300초 제한은 그대로입니다. 일반 서버의 uvicorn worker는 1개를 사용하고, 같은 호스트의 주차 런타임은 로컬47631 포트 바인딩으로 중복 실행을 막습니다. 이는 Pod 간 전역 잠금이 아닙니다. 현재 화재 기본 장치0과 B장치0이 겹치므로 동시 실행 전 장치 배정/영상 공유 구조를 확정해야 하며, 임의로 화재 감시를 끄거나 설정을 변경하지 않습니다.
+
+### 기존 도면 실행 준비와 읽기 전용 검사
+
+2026-10-27 사용자 지시로 기존4칸 도면을 유지합니다. 로컬 준비 파일은 `results/parking_runtime/local/runtime.local.json`이며 기존 correction 좌표·빈 기준의 검증된 사본입니다. 실제 구도와 DB 예약은 별도 확인해야 합니다. 새 도면의 C04 예약은 준비하지 않았습니다.
+
+`apcms_ai` 폴더에서 다음 명령은 자동 시작하지 않고 설정만 검사합니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m ai_vision.parking.parking_runtime_config --config ai_vision/results/parking_runtime/local/runtime.local.json
+```
+
+PRECHECK_OK도 실제 촬영·예약 검증 성공이 아닙니다. 현재는 다른 작업의 화재0/B0 설정 충돌 때문에 PRECHECK_BLOCKED이며 화재 설정을 이 작업에서 임의 변경하지 않습니다. 운영 활성화 환경변수는 아직 설정하지 않았습니다.
+
+### 서버 자동 실행의 관찰 전용 모드
+
+2026-10-27 주차만 검증할 수 있도록 `delivery_enabled`를 구분했습니다. 생략 또는 false이면 A/B 관찰만 수행하며, 키가 있어도 입출차·점유·구획 연결 HTTP를 보내지 않습니다. 이 모드의 B는 독립 OCR 관찰이며 A의 실제 입차 이용 신원과 연결하거나 예약을 확인하지 않습니다. true를 명시한 설정만 기존 실제 전송/입차 신원 전달을 사용하고 키를 요구합니다. 두 모드 모두 `PARKING_RUNTIME_ENABLED` 기본 false는 유지합니다.
+
+현재 촬영한 기준과 좌표는 `results/parking_runtime/calibrated_20261027_105910/runtime.local.json`에 별도로 준비했습니다. 기존 도면 설정과 원본 시험 결과는 덮어쓰지 않았습니다. `ai_vision.app:app`에도 같은 주차 실행 관리가 연결됐으며 이 전용 진입점은 화재 라우터를 포함하지 않습니다. 화재 코드/설정/실행은 다른 담당 영역으로 유지합니다.
+
+```powershell
+# 검사만 수행: 카메라·서버·DB 실행 없음. --parking-only는 화재 없는 전용 진입점용입니다.
+.\.venv\Scripts\python.exe -m ai_vision.parking.parking_runtime_config --parking-only --config ai_vision/results/parking_runtime/calibrated_20261027_105910/runtime.local.json
+```
+
+전용 진입점에는 화재 라우터가 없으므로 해당 앱 내부의 화재 자동 시작 설정 충돌은 검사하지 않습니다. 외부에서 실행 중인 다른 카메라 프로그램까지 장치가 비어 있다고 보장하는 것은 아닙니다. 통합 main:app의 기존 화재 장치 중복 검사는 계속 유지합니다. 실제 자동 기동/관찰/종료는 아직 카메라 준비 확인 후 검증해야 하며 이번 사전검사 성공을 실카메라 자동 시작 성공으로 표기하지 않습니다.
+
+### 실제 자동 시작·종료 확인 (2026-10-27)
+
+주차 전용8002 서버의 관찰 모드에서 A1/B0 자동 시작→두 작업 RUNNING→30초 관찰→서버 종료→프로세스/카메라 정상 해제를 확인했습니다. A392/B135프레임, HTTP0, 두 종료코드0, success=true입니다. 실행은 calibrated_20261027_105910/runs/b06c35cb886c412fa6c434db846092db, 결과 autostart_observe_result.json입니다. 관찰만 했으므로 이번 실행에서 차량 통과·입차 신원 연결·예약·DB 반영을 검증한 것은 아닙니다.
+
+설정의 선택 `preview`는 기본false입니다. true이면 서버 실행 중 창을 표시하되 운영 모드에서는 SPACE 없이 시작합니다. 수동 시연의 SPACE/Q 방식은 유지합니다. 실제 운영 서버에서는 GUI가 없는 경우 preview=false를 사용합니다. 이 시험은 화재를 포함하지 않았으며 main:app의 화재/주차 동시 장치 공유 문제는 다른 담당과 협의할 별도 항목입니다.
+
+### 주차 작업 종료 범위·상태 기록 보완
+
+종료 신호 후 A/B 전체에 최대25초의 정상 정리 시간을 공유합니다. 진행 중 점유 HTTP의 연결3초/읽기15초와 OCR 정리를 고려한 값입니다. 그 뒤에도 살아 있는 소유 작업만 강제 정리합니다. Windows는 해당 주차 PID의 하위 트리(`/PID ... /T /F`), Linux는 작업 시작 때 분리한 전용 그룹만 대상으로 하며 전체 Python/콘솔에 Ctrl+C를 보내지 않습니다. 트리 정리가 불확실하거나 작업이 남으면 검토 필요 실패로 남깁니다. 비정상적인 외부 강제 종료 이후의 자동 복구를 구현한 것은 아닙니다.
+
+각 실행 폴더의 `runtime_state.json`에는 시작·실행·종료/실패 상태를 저장합니다. 주소·키·차량번호는 저장하지 않으며 상태 기록에 실패하면 감시를 정상으로 표시하지 않습니다. 이 파일은 진단용이며 입차 신원·미확정 전송을 자동 복원하거나 DB 데이터를 자동 정리하지 않습니다. 이번 검증은 가짜 작업·모의 종료 명령으로 진행했으며 실제 카메라·화재·서버·DB를 실행하거나 강제 종료하지 않았습니다.
+
+### 서버 자동 시작과 실제 전송을 합친 전용 시험
+
+기존 `run_parking_demo.ps1`의 선택 `-ServerTrial`은 화재 없는 8002번 주차 시험 서버를 사용합니다. 운영 설정의 임시구획 차단을 해제하지 않고 신뢰된 시험 앱 안에서만 기존 시연 runner·임시 매핑을 ParkingRuntime에 연결합니다. 현장 확인·승인 없이 실행하지 않습니다. 이전 SPACE 시연 방식은 기본으로 유지됩니다.
+
+```powershell
+# 읽기 전용 사전검사: 카메라/HTTP/DB 없음
+& 'D:\finalProjectB\back\apcms_ai\ai_vision\run_parking_demo.ps1' -ServerTrial -ProfileDir 'D:\finalProjectB\back\apcms_ai\ai_vision\results\parking_demo\current_20261027' -CheckOnly
+```
+
+실제 선택 실행은 같은 명령의 -CheckOnly를 제거하지만, 사용자 준비와 DB 범위 안내 후에만 수행합니다. A 첫 프레임·B 빈자리 확인 뒤 임시 시험행을 생성하고, SPACE 없이 입차→다른자리→예약자리→출차 안내를 따릅니다. DONE 후5초에 서버와 두 작업이 자동 종료되며 Q 입력은 필요 없습니다. 종료 뒤 기존 소유권 기반 정리를 수행합니다. DB 준비/조회와 정리는 같은 잠금으로 직렬화해 취소 시 준비보다 정리가 앞서지 않게 했습니다.
+
+외부 요약은 기존 e2e_manual 폴더의 http_e2e_result.json에, 실제 작업·매니페스트·사진·상태기록은 그 안의 UUID 실행 폴더에 보관합니다. 서버 자동 완료·정상 종료와 기존 업무흐름 조건을 모두 통과해야 success=true입니다. 이 선택 실행의300초 시험 제한과 운영의 연속 실행을 구분합니다. 이번 구현 시점에는 모의 검사만 통과했으며 실제 서버+HTTP 단일실행 검증은 아직입니다.
+
+### 서버+실제전송 단일 실행 결과 (2026-10-27)
+
+`-ServerTrial`의 current_20261027/e2e_manual_8e180300에서 원본success=true/18조건통과를 확인했습니다. SPACE 없이 서버기동→A/B준비→빈자리확인→시험기록생성→입차97→A-02다른자리/DB미연결→A-01정상/동일97연결→출차97→DONE후서버자동종료→시험18행정리/잔여0/기존이용4보존까지 한 실행입니다. B신원EMPTY,두작업종료0/0,runtimeSTOPPED이며 강제종료는 없었습니다. 전용시험8002·임시구획 범위의 성공이며 화재포함main:app·실제업무구획·장기운영·재시작복원·다중차량의 성공을 뜻하지 않습니다. 이전 카메라열기실패 회차253e88c5는 DB기록생성없음으로 종료했고 결과를 보존합니다.
+
+## 화재 담당 전달 명세: 주차 원본 프레임 v1
+
+이 절은 주차 송신 측 계약입니다. 화재 소스는 수정하지 않습니다. 동일 호스트 또는 같은 로컬 파일시스템을 공유한 컨테이너에서 사용하며 네트워크 영상 전송 규약이 아닙니다.
+
+- 설정: 주차 운영 JSON에 `frame_export_dir`(선택 경로), `frame_export_fps`(선택, 기본2, 0초과10이하)를 지정합니다. 경로 생략 시 전달하지 않습니다. 외부 폴더 대신 실행별 output 하위 경로 사용을 권장합니다.
+- 전달 위치는 `<frame_export_dir>/<run_id>/gate.frame` / `parking.frame`입니다. run_id는 주차 실행 폴더 이름이며 소비자는 지정한 현재 실행 폴더만 읽습니다. 원본 uint8 H×W×3 BGR, 크기 변경·JPEG 압축·표시 문구 없음.
+- 파일: ASCII `APCMSF1\n` 8바이트 + big-endian uint32 JSON 길이 + UTF-8 JSON + C 순서 BGR 바이트. 임시 파일 쓰기 후 os.replace로 교체합니다.
+- 메타데이터: version=1, role, camera_id(설정된 논리 ID), run_id(실행 폴더 ID), sequence(전달 표본 순번), captured_monotonic(동일 호스트 단조 시각), published_at_utc, shape, dtype=uint8, color=BGR, status=FRAME/CLOSED.
+- 상한 FPS는 카메라 FPS가 아닙니다. 주차 분석 루프가 읽은 원본만 전달하므로 실제 전달률은 분석 속도에 제한됩니다. 큐는 최신1장, 소비가 느려도 누적하지 않습니다.
+- 소비자는 `ai_vision.parking.frame_exchange.read_latest(path, max_age=3)`를 폴링합니다. 반환 None은 파일없음/종료/유효기간초과이며 감지 증거로 쓰지 않습니다. 손상·규격 불일치는 ValueError, 접근 오류는 OSError로 처리합니다. `(run_id, sequence)`가 같은 프레임은 다시 분석하지 않습니다.
+- 새 실행은 run_id가 바뀝니다. 소비자는 A/B 상태를 분리하고 이전 실행 상태를 새 프레임에 이월하지 않습니다. 정상 종료는 CLOSED, 강제 종료는 마지막 촬영 시각의 max_age 초과로 감지합니다. 화재 상태의 종료/유예 정책은 화재 담당이 구현합니다.
+- 송신 오류는 주차 감지를 중단시키지 않고 경고 기록으로 남깁니다. 소비자는 입력 만료를 별도로 표시해야 합니다. 공유 폴더는 신뢰된 프로세스만 읽고 쓰도록 권한을 제한하며 보존/삭제는 실행 결과 정책을 따릅니다.
+
+화재 담당 구현: read_latest에서 얻은 `(metadata, frame)`을 기존 화재 상태 누적·증거·전송 흐름에 주입하는 모드, 카메라별 상태 분리, 새 실행/중복/만료/종료 처리. 공유 모드에서는 VideoCapture와 장치 재연결을 사용하지 않아야 합니다. 현재 통합 앱의 같은 카메라 중복 차단은 유지하며, 화재 공유 입력 연동 후에만 별도 변경합니다.
+
+화재 소비자 사용 예시(소비자 프로세스에서 실행):
+
+```python
+from ai_vision.parking.frame_exchange import read_latest
+
+# 운영자가 지정한 현재 run_id 폴더. 두 카메라는 각각 호출합니다.
+sample = read_latest("/shared/frames/<run_id>/gate.frame", max_age=3)
+if sample is not None:
+    metadata, bgr_frame = sample
+    token = (metadata["run_id"], metadata["sequence"])
+    # token 중복 확인 후 기존 화재 파이프라인에 입력합니다.
+    # 화재 이벤트 상태/증거 저장/전송은 화재 담당 구현 범위입니다.
+```
+
+주차 운영 JSON 추가 예시: `"frame_export_dir": "shared_frames", "frame_export_fps": 2`.
+컨테이너 간 사용 시 같은 호스트의 로컬 볼륨을 송신 측 쓰기/소비 측 읽기로 연결합니다. 네트워크 파일시스템 및 서로 다른 호스트 간 monotonic 시계 비교는 지원 범위가 아닙니다. 현재 수동 시연 및 전용 ServerTrial은 이 전달 설정을 활성화하지 않으며, 일반 주차 runtime 경로에만 연결했습니다.

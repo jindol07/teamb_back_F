@@ -6,6 +6,7 @@ param(
     [ValidateSet('profile','msmf','dshow')]
     [string]$CameraBackend = 'profile',
     [switch]$VerifyHandoffPlate,
+    [switch]$ServerTrial,
     [switch]$Prepare,
     [switch]$CheckOnly
 )
@@ -16,12 +17,12 @@ $baseDir = [System.IO.Path]::GetFullPath($ProfileDir)
 $toolsDir = Join-Path $PSScriptRoot 'parking\demo_tools'
 # 기본 환경을 보존하면서 별도로 검증한 Python 환경도 선택할 수 있습니다.
 if ([string]::IsNullOrWhiteSpace($PythonExe)) {
-    $PythonExe = Join-Path $aiRoot '.venv312\Scripts\python.exe'
+    $PythonExe = Join-Path $aiRoot '.venv\Scripts\python.exe'
 }
 $pythonExe = [System.IO.Path]::GetFullPath($PythonExe)
 $helperDir = Join-Path $baseDir '.demo_helper'
 $classpathFile = Join-Path $helperDir 'classpath.txt'
-$required = @($pythonExe, (Join-Path $toolsDir 'controller.py'), (Join-Path $toolsDir 'gate_runner.py'),
+$required = @($pythonExe, (Join-Path $toolsDir 'server_trial.py'), (Join-Path $toolsDir 'controller.py'), (Join-Path $toolsDir 'gate_runner.py'),
     (Join-Path $toolsDir 'parking_runner.py'), (Join-Path $toolsDir 'CameraE2EFixture.java'),
     (Join-Path $toolsDir 'classpath.init.gradle'), (Join-Path $baseDir 'demo.local.json'))
 foreach ($file in $required) {
@@ -102,7 +103,8 @@ try {
     New-Item -ItemType Directory -Path $runDir | Out-Null
     $env:PARKING_DEMO_RUN_DIR = $runDir
     Push-Location $repoDir
-    try { & $pythonExe -m ai_vision.parking.demo_tools.controller; $exitCode = $LASTEXITCODE }
+    $entryModule = if ($ServerTrial) { 'ai_vision.parking.demo_tools.server_trial' } else { 'ai_vision.parking.demo_tools.controller' }
+    try { & $pythonExe -m $entryModule; $exitCode = $LASTEXITCODE }
     finally { Pop-Location }
     Write-Host "RESULT DIRECTORY: $runDir"
     $resultFile = Join-Path $runDir 'http_e2e_result.json'

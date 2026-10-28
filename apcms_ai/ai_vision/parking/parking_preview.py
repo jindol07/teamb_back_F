@@ -138,6 +138,9 @@ class ParkingPreview:
             status = statuses.get(row['status'], row['status']) if self._font is not None else row['status']
             if decision in decisions:
                 status = decisions[decision] if self._font is not None else decision
+            if (row['status'] == 'LOCAL_MATCH' and decision is None
+                    and row.get('reservation_check_status') == 'NOT_REQUESTED'):
+                status = '차량·구획 인식 완료 / 예약 미검증' if self._font is not None else 'LOCAL MATCH / RESERVATION NOT CHECKED'
             label = f"ID {row['track_id']} | {row['space_id'] or '-'} | {status}"
             if row['plate_number']:
                 label += ' | ' + row['plate_number']
