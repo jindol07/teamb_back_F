@@ -107,13 +107,24 @@ public class AuthController {
     // 회원가입
     @Transactional(rollbackFor = Exception.class)
     @PostMapping("/signup")
-    public ResponseEntity<SignupResponse> OfficeSignup(@RequestBody SignupRequest req) {
+    public ResponseEntity<?> OfficeSignup(@RequestBody SignupRequest req) {
     	System.out.println(123123);
     	System.out.println(req.getFloor_no());
     	
         if (req == null) {
             return ResponseEntity.badRequest().body(new SignupResponse("xxx"));
         }
+        
+        boolean duplicated = userRepository.existsDuplicateOffice(
+    	    req.getCompany_id(),
+    	    req.getFloor_no(),
+    	    req.getOffice_number()
+    	);
+
+    	if (duplicated) {
+    	    return ResponseEntity.badRequest()
+    	        .body("해당 회사에 이미 등록된 층수와 호수입니다.");
+    	}
                 
         try {
         	LocalDateTime currentDate = LocalDateTime.now();
@@ -146,7 +157,6 @@ public class AuthController {
 	        
 	        System.out.println(111111111);
 	        System.out.println(req.getVehicle_list());
-	        System.out.println(111111111);
 	        
 	        for (SignupVehicle v : req.getVehicle_list()) {
 	        	SignupVehicle vehicle = SignupVehicle.builder()
@@ -195,9 +205,16 @@ public class AuthController {
     @GetMapping("/check-email")
     public ResponseEntity<Boolean> checkEmail(@RequestParam("email") String email) {
         boolean duplicated = !userRepository.findByEmailIgnoreCase(email).isEmpty();
-
         return ResponseEntity.ok(duplicated);
     }
+    
+    @GetMapping("/check-business")
+    public ResponseEntity<Boolean> checkBusiness(
+            @RequestParam("business_number") String business_number) {
+    	boolean duplicated = companyRepository.existsDuplicateBusinessNumber(business_number.trim());
+        return ResponseEntity.ok(duplicated);
+    }
+    
 
     /** refresh 토큰을 Redis에서 삭제해 재발급을 막는다. */
     @PostMapping("/logout")
