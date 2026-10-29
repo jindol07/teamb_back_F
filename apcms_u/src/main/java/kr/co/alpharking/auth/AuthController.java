@@ -60,29 +60,26 @@ public class AuthController {
 	// 네이버 로그인 (회원가입 없이 기존 회원만 로그인)
 	@Autowired
 	private NaverOAuthService naverOAuthService;
-	
+
 	@PostMapping("/login")
 	public ResponseEntity<?> authenticateUser(@RequestBody AuthRequest authRequest) {
-	    try {
-	        Authentication authentication = authenticationManager.authenticate(
-	                new UsernamePasswordAuthenticationToken(
-	                		authRequest.getUsername(), authRequest.getPassword()));
+		try {
+			Authentication authentication = authenticationManager.authenticate(
+					new UsernamePasswordAuthenticationToken(authRequest.getUsername(), authRequest.getPassword()));
 
-	        SecurityContextHolder.getContext()
-	        	.setAuthentication(authentication);
+			SecurityContextHolder.getContext().setAuthentication(authentication);
 
-	        return ResponseEntity.ok(authTokenService.issue(authentication));
-	    } catch (AuthenticationException e) {
-	        log.warn("로그인 실패: {}", authRequest.getUsername());
-	        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
-	                .body(Map.of("message", "아이디 또는 비밀번호가 올바르지 않습니다."));
-	    }
+			return ResponseEntity.ok(authTokenService.issue(authentication));
+		} catch (AuthenticationException e) {
+			log.warn("로그인 실패: {}", authRequest.getUsername());
+			return ResponseEntity.status(HttpStatus.UNAUTHORIZED).body(Map.of("message", "아이디 또는 비밀번호가 올바르지 않습니다."));
+		}
 	}
-	
+
 	@PostMapping("/refresh")
 	public ResponseEntity<AuthResponse> refresh(@RequestBody(required = false) RefreshRequest request) {
-	    String refreshToken = request == null ? null : request.refreshToken();
-	    return ResponseEntity.ok(authTokenService.refresh(refreshToken));
+		String refreshToken = request == null ? null : request.refreshToken();
+		return ResponseEntity.ok(authTokenService.refresh(refreshToken));
 	}
 
 	// 사용자 로그아웃 처리
@@ -96,181 +93,151 @@ public class AuthController {
 	}
 
 	// 사용자 정보
-    @GetMapping("/office")
-    public ResponseEntity<?> getOfficeInfo(@AuthenticationPrincipal Office office) {
-        if (office == null) {
-            return ResponseEntity.status(401).body("로그인이 필요합니다.");
-        }
-        return ResponseEntity.ok(office);
-    }
-    
-    // 회원가입
-    @Transactional(rollbackFor = Exception.class)
-    @PostMapping("/signup")
-    public ResponseEntity<?> OfficeSignup(@RequestBody SignupRequest req) {
-    	System.out.println(123123);
-    	System.out.println(req.getFloor_no());
-    	
-        if (req == null) {
-            return ResponseEntity.badRequest().body(new SignupResponse("xxx"));
-        }
-        
-        boolean duplicated = userRepository.existsDuplicateOffice(
-    	    req.getCompany_id(),
-    	    req.getFloor_no(),
-    	    req.getOffice_number()
-    	);
+	@GetMapping("/office")
+	public ResponseEntity<?> getOfficeInfo(@AuthenticationPrincipal Office office) {
+		if (office == null) {
+			return ResponseEntity.status(401).body("로그인이 필요합니다.");
+		}
+		return ResponseEntity.ok(office);
+	}
 
-    	if (duplicated) {
-    	    return ResponseEntity.badRequest()
-    	        .body("해당 회사에 이미 등록된 층수와 호수입니다.");
-    	}
-                
-        try {
-        	LocalDateTime currentDate = LocalDateTime.now();
-        	
-            Company company = companyRepository.save(
-        		Company.builder()
-	        		.company_name(req.getCompany_company_name())
-	        		.business_number(req.getCompany_business_number())
-	        		.company_addr(req.getCompany_company_addr())
-	        		.status_code("ACTIVE")
-		            .created_at(currentDate)
-		            .updated_at(currentDate)
-	        		.build()
-    		);
-	        
-	        Office office =  userRepository.save(
-        		Office.builder()
-		            .username(req.getUsername())
-		            .password(passwordEncoder.encode(req.getPassword()))
-		            .email(req.getEmail().trim())
-		            .phone(req.getPhone().trim())
-		            .company_id(company.getCompany_id())
-		            .floor_no(req.getFloor_no())
-		            .office_number(req.getOffice_number().trim())
-		            .status_code("ACTIVE")
-		            .created_at(currentDate)
-		            .updated_at(currentDate)
-		            .build()
-	        );
-	        
-	        System.out.println(111111111);
-	        System.out.println(req.getVehicle_list());
-	        
-	        for (SignupVehicle v : req.getVehicle_list()) {
-	        	SignupVehicle vehicle = SignupVehicle.builder()
-		        		.office_id(office.getOffice_id())
-		        		.vehicle_number(v.getVehicle_number())
-		        		.vehicle_model(null)
-		        		.owner_name(v.getOwner_name())
-		        		.vehicle_type_code(v.getVehicle_type_code())
-		        		.registration_type_code("INITIAL")
-		        		.registration_status_code("APPROVED")
-		        		.registered_at(currentDate)
-		        		.rejected_reason(null)
-		        		.created_at(currentDate)
-		        		.updated_at(currentDate)
-		        		.deleted_at(null)
-		        		.build();
-	        	
-	        	vehicleRepository.save(vehicle);
-	        	System.out.println(vehicle);
-	        }
-	        
-        	
+	// 회원가입
+	@Transactional(rollbackFor = Exception.class)
+	@PostMapping("/signup")
+	public ResponseEntity<?> OfficeSignup(@RequestBody SignupRequest req) {
+		System.out.println(123123);
+		System.out.println(req.getFloor_no());
+
+		if (req == null) {
+			return ResponseEntity.badRequest().body(new SignupResponse("xxx"));
+		}
+
+		boolean duplicated = userRepository.existsDuplicateOffice(req.getCompany_id(), req.getFloor_no(),
+				req.getOffice_number());
+
+		if (duplicated) {
+			return ResponseEntity.badRequest().body("해당 회사에 이미 등록된 층수와 호수입니다.");
+		}
+
+		try {
+			LocalDateTime currentDate = LocalDateTime.now();
+
+			Company company = companyRepository.save(Company.builder().company_name(req.getCompany_company_name())
+					.business_number(req.getCompany_business_number()).company_addr(req.getCompany_company_addr())
+					.status_code("ACTIVE").created_at(currentDate).updated_at(currentDate).build());
+
+			Office office = userRepository.save(Office.builder().username(req.getUsername())
+					.password(passwordEncoder.encode(req.getPassword())).email(req.getEmail().trim())
+					.phone(req.getPhone().trim()).company_id(company.getCompany_id()).floor_no(req.getFloor_no())
+					.office_number(req.getOffice_number().trim()).status_code("ACTIVE").created_at(currentDate)
+					.updated_at(currentDate).build());
+
+			System.out.println(111111111);
+			System.out.println(req.getVehicle_list());
+
+			for (SignupVehicle v : req.getVehicle_list()) {
+				SignupVehicle vehicle = SignupVehicle.builder().office_id(office.getOffice_id())
+						.vehicle_number(v.getVehicle_number()).vehicle_model(null).owner_name(v.getOwner_name())
+						.vehicle_type_code(v.getVehicle_type_code()).registration_type_code("INITIAL")
+						.registration_status_code("APPROVED").registered_at(currentDate).rejected_reason(null)
+						.created_at(currentDate).updated_at(currentDate).deleted_at(null).build();
+
+				vehicleRepository.save(vehicle);
+				System.out.println(vehicle);
+			}
+
 //        	userRepository.saveAndFlush(office);
-        	System.out.println(office);
+			System.out.println(office);
 //        	companyRepository.saveAndFlush(company);
-        	System.out.println(office);
-            return ResponseEntity.status(HttpStatus.CREATED)
-                    .body(new SignupResponse(
-                            "회원가입이 완료되었습니다."
-                    ));
-        } catch (DataIntegrityViolationException e) {
-        	e.printStackTrace();
-        }
-        
-        return ResponseEntity.ok(new SignupResponse("정상적으로 가입 되었습니다."));
-    }
-    
-    // 아이디 중복 체크
-    @GetMapping("/check-username")
-    public ResponseEntity<Boolean> checkLoginId(@RequestParam("username") String username) {
-    	boolean duplicated = userRepository.findByUsername(username).isPresent();
-    	System.out.println(duplicated);
+			System.out.println(office);
+			return ResponseEntity.status(HttpStatus.CREATED).body(new SignupResponse("회원가입이 완료되었습니다."));
+		} catch (DataIntegrityViolationException e) {
+			e.printStackTrace();
+		}
+
+		return ResponseEntity.ok(new SignupResponse("정상적으로 가입 되었습니다."));
+	}
+
+	// 아이디 중복 체크
+	@GetMapping("/check-username")
+	public ResponseEntity<Boolean> checkLoginId(@RequestParam("username") String username) {
+		boolean duplicated = userRepository.findByUsername(username).isPresent();
+		System.out.println(duplicated);
 		return ResponseEntity.ok(duplicated);
-    }
-    
-    @GetMapping("/check-email")
-    public ResponseEntity<Boolean> checkEmail(@RequestParam("email") String email) {
-        boolean duplicated = !userRepository.findByEmailIgnoreCase(email).isEmpty();
-        return ResponseEntity.ok(duplicated);
-    }
-    
-    @GetMapping("/check-business")
-    public ResponseEntity<Boolean> checkBusiness(
-            @RequestParam("business_number") String business_number) {
-    	boolean duplicated = companyRepository.existsDuplicateBusinessNumber(business_number.trim());
-        return ResponseEntity.ok(duplicated);
-    }
-    
+	}
 
-    /** refresh 토큰을 Redis에서 삭제해 재발급을 막는다. */
-    @PostMapping("/logout")
-    public ResponseEntity<Void> logout(@RequestBody(required = false) RefreshRequest request) {
-        authTokenService.logout(request == null ? null : request.refreshToken());
-        SecurityContextHolder.clearContext();
-        return ResponseEntity.noContent().build();
-    }
+	@GetMapping("/check-email")
+	public ResponseEntity<Boolean> checkEmail(@RequestParam("email") String email) {
+		boolean duplicated = !userRepository.findByEmailIgnoreCase(email).isEmpty();
+		return ResponseEntity.ok(duplicated);
+	}
 
-    // ------------------------------------------------------------------
-    // 네이버 로그인 (회원가입 없이 기존 회원만 로그인)
-    // ------------------------------------------------------------------
+	@GetMapping("/check-business")
+	public ResponseEntity<Boolean> checkBusiness(@RequestParam("business_number") String business_number) {
+		boolean duplicated = companyRepository.existsDuplicateBusinessNumber(business_number.trim());
+		return ResponseEntity.ok(duplicated);
+	}
+	
+	@GetMapping("/check-vehicle")
+	public ResponseEntity<Boolean> checkVehicle(@RequestParam("vehicle_number") String vehicle_number) {
+	    boolean duplicated = vehicleRepository.countDuplicateVehicleNumber(vehicle_number.trim()) > 0;
+	    return ResponseEntity.ok(duplicated);
+	}
 
-    /** 네이버 authorize URL을 반환한다. state는 서버(Redis)에 5분간 보관된다. */
-    @GetMapping("/naver/authorize")
-    public ResponseEntity<?> naverAuthorize() {
-        try {
-            return ResponseEntity.ok(
-                    new NaverAuthorizeResponse(naverOAuthService.createAuthorizeUrl()));
-        } catch (ResponseStatusException e) {
-            return naverError(e);
-        }
-    }
+	/** refresh 토큰을 Redis에서 삭제해 재발급을 막는다. */
+	@PostMapping("/logout")
+	public ResponseEntity<Void> logout(@RequestBody(required = false) RefreshRequest request) {
+		authTokenService.logout(request == null ? null : request.refreshToken());
+		SecurityContextHolder.clearContext();
+		return ResponseEntity.noContent().build();
+	}
 
-    /** 콜백의 code/state를 검증하고 기존 회원에게 우리 서비스 토큰을 발급한다. */
-    @PostMapping("/naver/login")
-    public ResponseEntity<?> naverLogin(@RequestBody(required = false) NaverLoginRequest request) {
-        if (request == null) {
-            return ResponseEntity.badRequest().body(Map.of("message", "요청 본문이 없습니다."));
-        }
+	// ------------------------------------------------------------------
+	// 네이버 로그인 (회원가입 없이 기존 회원만 로그인)
+	// ------------------------------------------------------------------
 
-        try {
-            return ResponseEntity.ok(naverOAuthService.login(request.code(), request.state()));
-        } catch (ResponseStatusException e) {
-            return naverError(e);
-        }
-    }
+	/** 네이버 authorize URL을 반환한다. state는 서버(Redis)에 5분간 보관된다. */
+	@GetMapping("/naver/authorize")
+	public ResponseEntity<?> naverAuthorize() {
+		try {
+			return ResponseEntity.ok(new NaverAuthorizeResponse(naverOAuthService.createAuthorizeUrl()));
+		} catch (ResponseStatusException e) {
+			return naverError(e);
+		}
+	}
 
-    /**
-     * 네이버 로그인 실패 사유를 로그인 화면에서 그대로 보여주기 위한 응답.
-     * 기존 /login, /refresh, /logout 응답 형식은 건드리지 않는다.
-     */
-    private ResponseEntity<Map<String, Object>> naverError(ResponseStatusException e) {
-        String message = e.getReason() == null ? "네이버 로그인에 실패했습니다." : e.getReason();
-        return ResponseEntity.status(e.getStatusCode()).body(Map.of("message", message));
-    }
+	/** 콜백의 code/state를 검증하고 기존 회원에게 우리 서비스 토큰을 발급한다. */
+	@PostMapping("/naver/login")
+	public ResponseEntity<?> naverLogin(@RequestBody(required = false) NaverLoginRequest request) {
+		if (request == null) {
+			return ResponseEntity.badRequest().body(Map.of("message", "요청 본문이 없습니다."));
+		}
 
-    /** /naver/login 요청 본문. */
-    public record NaverLoginRequest(String code, String state) {
-    }
+		try {
+			return ResponseEntity.ok(naverOAuthService.login(request.code(), request.state()));
+		} catch (ResponseStatusException e) {
+			return naverError(e);
+		}
+	}
 
-    /** /naver/authorize 응답. SNAKE_CASE 설정으로 authorize_url 로 내려간다. */
-    public record NaverAuthorizeResponse(String authorizeUrl) {
-    }
+	/**
+	 * 네이버 로그인 실패 사유를 로그인 화면에서 그대로 보여주기 위한 응답. 기존 /login, /refresh, /logout 응답 형식은
+	 * 건드리지 않는다.
+	 */
+	private ResponseEntity<Map<String, Object>> naverError(ResponseStatusException e) {
+		String message = e.getReason() == null ? "네이버 로그인에 실패했습니다." : e.getReason();
+		return ResponseEntity.status(e.getStatusCode()).body(Map.of("message", message));
+	}
 
-    /** /refresh, /logout 요청 본문. SNAKE_CASE 전략으로 refresh_token 과 매핑된다. */
-    public record RefreshRequest(String refreshToken) {
-    }
+	/** /naver/login 요청 본문. */
+	public record NaverLoginRequest(String code, String state) {
+	}
+
+	/** /naver/authorize 응답. SNAKE_CASE 설정으로 authorize_url 로 내려간다. */
+	public record NaverAuthorizeResponse(String authorizeUrl) {
+	}
+
+	/** /refresh, /logout 요청 본문. SNAKE_CASE 전략으로 refresh_token 과 매핑된다. */
+	public record RefreshRequest(String refreshToken) {
+	}
 }
