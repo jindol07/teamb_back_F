@@ -8,6 +8,7 @@ import org.springframework.stereotype.Repository;
 /** 1. Oracle 기존 테이블만 사용하는 안전사고/알림 DAO (Oracle 11g 호환). */
 @Repository
 public class FireSafetyAdminInteractionDao {
+    // 1. 감지 시각과 같은 한국 시간으로 저장합니다. DB 서버의 UTC 설정에 의존하지 않습니다.
     private final JdbcTemplate jdbc;
 
     public FireSafetyAdminInteractionDao(JdbcTemplate jdbc) {
@@ -69,7 +70,7 @@ public class FireSafetyAdminInteractionDao {
     public int markOwnNotificationRead(long notificationId, long adminId) {
         return jdbc.update("""
                 UPDATE NOTIFICATION
-                   SET READ_YN = 'Y', READ_AT = SYSDATE
+                   SET READ_YN = 'Y', READ_AT = CAST(SYSTIMESTAMP AT TIME ZONE 'Asia/Seoul' AS DATE)
                  WHERE NOTIFICATION_ID = ?
                    AND ADMIN_ID = ?
                    AND NOTIFICATION_TYPE_CODE = 'SAFETY_INCIDENT'

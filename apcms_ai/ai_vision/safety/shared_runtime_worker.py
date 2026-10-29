@@ -5,9 +5,9 @@ import threading
 
 def run_shared_worker(role, camera_id, shared_dir, output_dir, show, stop_event, delivery=None):
     from ai_vision.parking.parking_process_scope import isolate_worker
+    isolate_worker()
     from ai_vision.safety.live_fire_smoke import LiveConfig, run_live
     from ai_vision.safety.shared_alert_loop import process_alerts
-    isolate_worker()
     output=Path(output_dir)
     alert_stop=threading.Event();errors=[]
     def publish(frame,detections,meta):

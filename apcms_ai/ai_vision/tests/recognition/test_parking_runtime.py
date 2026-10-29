@@ -20,6 +20,97 @@ def _fake_camera_worker(role, config, run_dir, stop_event, heartbeat):
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_normal_workers_forward_live_http_handoff_and_release_without_fixture(self):
+        from ai_vision.parking.parking_runtime_worker import _run_worker
+        config=dict(delivery_enabled=True,enable_space_release_http=True,preview=True,
+                    gate_camera=1,parking_camera=0,gate_id='GATE_A',parking_id='PARKING_B',
+                    down_direction='ENTRY',gate_config='gate.json',reference='empty.png',
+                    spaces_config='spaces.json',allowed_codes=['3F-A01','3F-A02','3F-A03','3F-A04'],
+                    boot_context_url='https://example.test/admin-api')
+        with patch.dict('os.environ',{'SAFETY_SHARED_AUTOSTART':'true'}), \
+             patch('ai_vision.parking.parking_event_sender._configured_api_key',return_value='private-key'), \
+             patch('ai_vision.recognition.run_live_gate.main') as gate, \
+             patch('ai_vision.parking.run_parking_camera.run_camera',return_value={'status':'STOPPED'}) as parking:
+            for role in ('gate','parking'):
+                _run_worker(role,config,'run',threading.Event(),SimpleNamespace(value=0),None)
+            args=gate.call_args.args[0]
+            self.assertIn('--enable-http',args);self.assertIn('--single-vehicle-handoff',args)
+            self.assertEqual(args[args.index('--camera-index')+1],'1')
+            kwargs=parking.call_args.kwargs
+            self.assertTrue(kwargs['enable_http'] and kwargs['enable_space_http'] and kwargs['enable_space_release_http'])
+            self.assertEqual(kwargs['camera_index'],0)
+            self.assertEqual(kwargs['handoff_path'],Path('run/gate/single_vehicle_handoff.json'))
+            self.assertEqual(kwargs['allowed_codes'],config['allowed_codes'])
+
+    def test_live_server_rejects_disabled_delivery_before_existing_lifespan(self):
+        from contextlib import asynccontextmanager
+        events=[]
+        @asynccontextmanager
+        async def original(app):
+            events.append('started')
+            yield
+        app=FastAPI(lifespan=original)
+        with patch.dict('os.environ',{'VISION_REQUIRE_DEPLOYED_DELIVERY':'true'}), \
+             patch('ai_vision.safety.shared_monitor_preflight.check_deployed_monitor',side_effect=ValueError('전송 비활성')):
+            install_parking_runtime(app)
+            with self.assertRaisesRegex(ValueError,'전송 비활성'):
+                with TestClient(app):pass
+        self.assertEqual(events,[])
+
+    def test_live_server_exposes_parking_and_shared_delivery_status(self):
+        runtime=ParkingRuntime();runtime.start=Mock();runtime.stop=Mock();runtime.load_config=Mock(return_value=None)
+        runtime.delivery_enabled=True;runtime.space_release_enabled=True
+        runtime.configured_cameras={'gate':1,'parking':0}
+        with patch.dict('os.environ',{'VISION_REQUIRE_DEPLOYED_DELIVERY':'true'}), \
+             patch('ai_vision.safety.shared_monitor_preflight.check_deployed_monitor',return_value={'gate_camera':1,'parking_camera':0}), \
+             patch('ai_vision.safety.shared_runtime.SharedSafetyRuntime') as shared:
+            shared.return_value.snapshot=lambda:{'delivery':'TEST_HTTP_ENABLED','send_role':'both'}
+            app=FastAPI();install_parking_runtime(app,runtime=runtime)
+            with TestClient(app) as client:
+                status=client.get('/vision/parking/runtime').json()
+                self.assertEqual(status['delivery'],'HTTP_ENABLED')
+                self.assertTrue(status['space_release_enabled'])
+                self.assertEqual(status['camera_indices'],{'gate':1,'parking':0})
+                fire=client.get('/vision/safety/shared-runtime').json()
+                self.assertEqual(fire['send_role'],'both')
+        runtime.start.assert_called_once();runtime.stop.assert_called_once()
+
+    def test_shutdown_with_nonzero_child_exit_is_failed(self):
+        runtime=ParkingRuntime();runtime.state='RUNNING'
+        child=Mock(exitcode=1);child.is_alive.return_value=False
+        runtime.processes=[child]
+        runtime.stop()
+        self.assertEqual(runtime.state,'FAILED')
+        self.assertEqual(runtime.reason,'CHILD_EXITED')
+
+    def test_profile_mapping_is_scoped_and_restored_on_error(self):
+        from ai_vision.parking.parking_event_sender import scoped_space_mapping, convert_space_code
+        before=convert_space_code('A-01')
+        with self.assertRaises(RuntimeError):
+            with scoped_space_mapping({'A-01':'3F-A01'}):
+                self.assertEqual(convert_space_code('A-01'),'3F-A01')
+                raise RuntimeError('시험 중단')
+        self.assertEqual(convert_space_code('A-01'),before)
+
+    def test_invalid_or_duplicate_profile_mapping_is_rejected(self):
+        from ai_vision.parking.parking_event_sender import scoped_space_mapping
+        for mapping in ([], {'A-01':'A01'}, {'A-01':'3F-A01','A-02':'3F-A01'}):
+            with self.subTest(mapping=mapping), self.assertRaises(ValueError):
+                with scoped_space_mapping(mapping):pass
+
+    def test_worker_uses_selected_floor_without_changing_default_mapping(self):
+        from ai_vision.parking.parking_runtime_worker import run_worker
+        from ai_vision.parking.parking_event_sender import convert_space_code
+        config=dict(parking_camera=0,parking_id='PARK',reference='empty.png',spaces_config='spaces.json',
+                    allowed_codes=['3F-A01'],boot_context_url='http://localhost:81',space_code_map={'A-01':'3F-A01'})
+        before=convert_space_code('A-01')
+        def observed(*args,**kwargs):
+            self.assertEqual(convert_space_code('A-01'),'3F-A01')
+            return {'status':'STOPPED'}
+        with patch('ai_vision.parking.run_parking_camera.run_camera',side_effect=observed):
+            run_worker('parking',config,'run',threading.Event(),SimpleNamespace(value=0))
+        self.assertEqual(convert_space_code('A-01'),before)
+
     def setUp(self):
         # 단위 검사는 현재 테스트 프로세스의 세션을 바꾸지 않습니다.
         isolation=patch("ai_vision.parking.parking_process_scope.isolate_worker")
@@ -162,6 +253,11 @@ class RuntimeTests(unittest.TestCase):
         self.assertTrue(kw["runtime_mode"])
         self.assertEqual(kw["handoff_path"],Path("run/gate/single_vehicle_handoff.json"))
         self.assertNotIn("enable_space_release_http",kw)
+        config['enable_space_release_http']=True
+        with patch.dict('os.environ',{'AI_OCCUPANCY_API_KEY':'test-key'},clear=True),patch('ai_vision.parking.run_parking_camera.run_camera',return_value={'status':'STOPPED'}) as moving:
+            run_worker('parking',config,'run',threading.Event(),SimpleNamespace(value=0))
+        self.assertTrue(moving.call_args.kwargs['enable_space_release_http'])
+        self.assertEqual(moving.call_args.kwargs['handoff_path'],Path('run/gate/single_vehicle_handoff.json'))
 
     def test_valid_config_checks_assets_without_http_or_camera(self):
         import json

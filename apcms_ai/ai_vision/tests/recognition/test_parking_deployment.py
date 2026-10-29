@@ -709,14 +709,20 @@ class ParkingCameraTests(ParkingSceneFixture, unittest.TestCase):
     def test_missing_link_version_stops_camera_runner_before_release(self):
         self._camera_assignment_journey(missing_version=True)
 
-    def _camera_assignment_journey(self, reject=False, delayed_release=False, withdraw=False, return_again=False, missing_version=False):
+    def test_handoff_and_versioned_release_share_same_usage_across_spaces(self):
+        self._camera_assignment_journey(handoff=True)
+
+    def _camera_assignment_journey(self, reject=False, delayed_release=False, withdraw=False, return_again=False, missing_version=False, handoff=False):
         import itertools
         from ai_vision.parking import run_parking_camera as camera
         from ai_vision.recognition.vehicle_delivery_flow import SpaceMatchDeliveryFlow
         root, reference, config = self.inputs()
         counter = {'frame': -1}
         a = {'track_id': 1, 'space_id': 'A-01', 'plate_number': '91소6408'}
+        if handoff:a.update(identity_basis='SINGLE_VEHICLE_ENTRY_HANDOFF',parking_usage_id=70)
         b = a | {'space_id': 'A-02'}
+        current_a={key:a[key] for key in ('track_id','space_id','plate_number')}
+        current_b={key:b[key] for key in ('track_id','space_id','plate_number')}
         processor = Mock()
         processor.process.return_value = {'events': [], 'changes': [], 'sampled': False}
         processor.statistics.return_value = {}
@@ -736,7 +742,7 @@ class ParkingCameraTests(ParkingSceneFixture, unittest.TestCase):
             index = counter['frame']
             if withdraw and index >= 16 and not (return_again and index >= 22):
                 return []
-            return [a] if index < 5 else [b] if index >= 12 else []
+            return [current_a] if index < 5 else [current_b] if index >= 12 else []
         observer.current_matches.side_effect = current
         client, release = Mock(enabled=True), Mock(enabled=True)
         sent = []
@@ -772,6 +778,8 @@ class ParkingCameraTests(ParkingSceneFixture, unittest.TestCase):
         capture.read.side_effect = read
         worker = Mock(pending=0, blocked=False, future=None)
         worker.poll.return_value = True
+        handoff_reader=Mock(status='ACTIVE',last_exit=None)
+        handoff_reader.snapshot.return_value={'status':'ACTIVE','retained_identity':{'parking_usage_id':70}}
         with patch.object(camera, 'ParkingOccupancyProcessor', return_value=processor), \
                 patch.object(camera, 'ParkingDeliveryWorker', return_value=worker), \
                 patch.object(camera, 'LatestFrameCapture', return_value=None), \
@@ -780,11 +788,16 @@ class ParkingCameraTests(ParkingSceneFixture, unittest.TestCase):
                 patch.object(camera.time, 'monotonic', side_effect=itertools.count(0, .1)), \
                 patch('ai_vision.parking.vehicle_space_tracker.VehicleSpaceObserver', return_value=observer), \
                 patch('ai_vision.recognition.vehicle_http.SpaceMatchHTTPClient', return_value=client), \
-                patch('ai_vision.recognition.vehicle_http.SpaceReleaseHTTPClient', return_value=release):
+                patch('ai_vision.recognition.vehicle_http.SpaceReleaseHTTPClient', return_value=release), \
+                patch('ai_vision.recognition.single_vehicle_handoff.SingleVehicleHandoffReader',return_value=handoff_reader):
             report = camera.run_camera(reference, config, root / 'release_journey', seconds=20, preview=False,
                 track_vehicles=True, enable_http=True, allowed_codes=['1F-A01', '1F-A02'],
                 enable_space_http=True, enable_space_release_http=True, camera_id='PARKING_1',
-                environment={'PARKING_AI_API_KEY': 'KEY'})
+                environment={'PARKING_AI_API_KEY': 'KEY'},handoff_path=root/'handoff.json' if handoff else None)
+        if handoff:
+            for row in report['vehicle_space']['deliveries']:
+                payload=row['payload']
+                self.assertEqual(payload.get('expected_parking_usage_id',payload.get('parking_usage_id')),70)
         if reject or missing_version:
             self.assertEqual(report['status'], 'DELIVERY_STOPPED')
             self.assertEqual(sent, ['VEHICLE_SPACE_MATCH'])
@@ -980,6 +993,11 @@ class ParkingCameraTests(ParkingSceneFixture, unittest.TestCase):
             row=original.copy()
             apply_parking_decisions([row],[record|{'status':'HELD','receipt':record['receipt']|{'state':'HELD','parking_decision':decision}}])
             self.assertEqual(row['parking_decision'],decision)
+        for state in ('APPLIED','UNCHANGED'):
+            for decision in ('WRONG_SPACE','NO_VALID_RESERVATION'):
+                row=original.copy()
+                apply_parking_decisions([row],[record|{'status':state,'receipt':record['receipt']|{'state':state,'parking_decision':decision}}])
+                self.assertEqual(row['parking_decision'],decision)
 
     def test_preview_never_reuses_previous_entry_or_mismatched_response(self):
         from ai_vision.parking.run_parking_camera import apply_parking_decisions
@@ -1918,6 +1936,25 @@ class DemoSessionRecoveryTests(unittest.TestCase):
         self.assertTrue(result['success']);self.assertEqual(result['incomplete_reasons'],[])
         self.assertIn('usage_id=9',self.manifest.read_text())
         self.assertEqual(self.db.call_args_list, [unittest.mock.call('inspect'),unittest.mock.call('cleanup')])
+
+    def test_explicit_retention_preserves_records_and_blocks_reuse(self):
+        from ai_vision.parking.demo_session import finalize_trial, fixture_pending
+        self.fixture();self.journal();self.parking()
+        result=finalize_trial(self.root,self.report,children_stopped=True,fixture_prepared=True,
+                              db=self.db,retain_test_records=True)
+        self.assertTrue(result['success'])
+        self.assertEqual(result['cleanup'],'RETAINED_FOR_REVIEW')
+        self.assertEqual(self.db.call_args_list,[unittest.mock.call('inspect')])
+        self.assertTrue(fixture_pending(self.manifest))
+
+    def test_retention_inspection_failure_does_not_claim_success_or_delete(self):
+        from ai_vision.parking.demo_session import finalize_trial
+        self.fixture();self.journal();self.parking()
+        self.db.side_effect=RuntimeError('조회 실패')
+        result=finalize_trial(self.root,self.report,children_stopped=True,fixture_prepared=True,
+                              db=self.db,retain_test_records=True)
+        self.assertFalse(result['success'])
+        self.assertEqual(self.db.call_args_list,[unittest.mock.call('inspect')])
 
     def repeat_fixture(self):
         self.fixture();self.journal();self.parking()

@@ -32,6 +32,8 @@ class ParkingRuntime:
         self.stop_lock = threading.RLock()
         self.run_dir = None
         self.journal_failed = False
+        self.configured_cameras = None
+        self.space_release_enabled = False
 
     def load_config(self):
         # 시험 도구만 신뢰된 Python 호출로 실행 대상을 주입합니다. 운영 JSON 우회 옵션은 없습니다.
@@ -44,6 +46,8 @@ class ParkingRuntime:
         if config is None:
             return
         self.delivery_enabled = config.get("delivery_enabled", False)
+        self.configured_cameras = {role:config.get(role+'_camera') for role in ('gate','parking')}
+        self.space_release_enabled = config.get('enable_space_release_http',False)
         self.state = "STARTING"
         try:
             # 1. 같은 호스트의 중복 uvicorn worker/서버가 카메라를 열지 못하게 합니다.
@@ -98,6 +102,7 @@ class ParkingRuntime:
                 "delivery": "HTTP_ENABLED" if self.delivery_enabled else "OBSERVE_ONLY",
                 "identity_mode": "GATE_HANDOFF" if self.delivery_enabled else "INDEPENDENT_OBSERVATION",
                 "scope": "SINGLE_VEHICLE_LOCAL_CAMERAS", "state_record_failed": self.journal_failed, "inference_ready_verified": self.state == "RUNNING",
+                "camera_indices": self.configured_cameras, "space_release_enabled": self.space_release_enabled,
                 "processes": [{"role": p.name, "alive": p.is_alive(), "exit_code": p.exitcode} for p in self.processes]}
 
     def _save_state(self):
@@ -136,6 +141,8 @@ class ParkingRuntime:
                 tree_confirmed = terminate_worker_tree(child) and tree_confirmed
         if forced:
             self.state, self.reason = "FAILED", "FORCED_STOP_REQUIRES_REVIEW"
+        elif any(type(child.exitcode) is int and child.exitcode != 0 for child in self.processes):
+            self.state, self.reason = "FAILED", self.reason or "CHILD_EXITED"
         elif self.state != "FAILED" and self.state != "DISABLED":
             self.state = "STOPPED"
         if forced and not tree_confirmed:
@@ -161,6 +168,15 @@ def install_parking_runtime(app, *, check_safety=True, runtime=None):
     async def lifespan(application):
         # 2. 기존 문의·추천·화재의 수명주기를 교체하지 않고 감쌉니다.
         # 장치 충돌은 다른 감시 기능이 시작되기 전에 검사합니다.
+        require_delivery=os.environ.get('VISION_REQUIRE_DEPLOYED_DELIVERY','false').lower()
+        if require_delivery not in ('true','false'):
+            raise ValueError('VISION_REQUIRE_DEPLOYED_DELIVERY는 true/false입니다.')
+        if require_delivery=='true':
+            from ai_vision.safety.shared_monitor_preflight import check_deployed_monitor
+            report=check_deployed_monitor(os.environ)
+            print('[배포 연동] 주차·구획 해제·화재 A/B 송신 설정 확인 / '
+                  'A='+str(report['gate_camera'])+' B='+str(report['parking_camera'])+
+                  ' / 화재 시험 기록 / 실제 전송 성공은 개별 ACK로 확인',flush=True)
         runtime.load_config()
         shared_safety.prepare()
         async with previous_lifespan(application) as state:

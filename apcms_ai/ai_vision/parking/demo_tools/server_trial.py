@@ -40,6 +40,9 @@ def trial_worker(role, config, run_dir, stop_event, heartbeat):
 
 def create_trial_app():
     # 주차 전용 시험 앱입니다. 문의·추천·화재를 포함한 운영 main:app을 대체하지 않습니다.
+    # 일반 서버의 실제 송신 요구를 이전 주차 전용 시험에 상속하지 않습니다.
+    os.environ['VISION_REQUIRE_DEPLOYED_DELIVERY']='false'
+    os.environ['SAFETY_SHARED_AUTOSTART']='false'
     app=FastAPI(title="APCMS Parking Server Trial")
     runtime=ParkingRuntime(check_safety=False,config_loader=load_trial_config,worker_target=trial_worker)
     install_parking_runtime(app,runtime=runtime)

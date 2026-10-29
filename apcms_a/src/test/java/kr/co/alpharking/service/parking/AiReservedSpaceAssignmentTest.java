@@ -50,6 +50,7 @@ class AiReservedSpaceAssignmentTest {
         assertNotNull(result.conflictReason());
         assertNull(result.usage());
         verify(dao, never()).assignReservedSpace(any(), any(), any(), any(), any());
+        verify(dao, never()).assignObservedSpace(any(), any(), any(), any());
         assertNull(current.getParkingSpaceId());
         assertNull(current.getParkingReservationId());
     }
@@ -67,16 +68,40 @@ class AiReservedSpaceAssignmentTest {
         verify(dao, never()).assignSpace(any(), any());
     }
 
-    @Test void noValidReservationIsHeld() {
+    private void prepareObservedReadback() {
+        var saved = new ParkingUsageRow();
+        saved.setParkingUsageId(70L);
+        saved.setVehicleNumber("91소6408");
+        saved.setParkingSpaceId(16L);
+        when(dao.findById(70L)).thenReturn(saved);
+        when(dao.assignObservedSpace(70L, 16L, "91소6408", at)).thenReturn(1);
+    }
+    private void assertObserved(String decision) {
+        prepareObservedReadback();
+        var result = assign();
+        assertNull(result.conflictReason());
+        assertEquals(decision, result.parkingDecision());
+        assertEquals(16L, result.usage().getParkingSpaceId());
+        assertEquals("91소6408", result.usage().getVehicleNumber());
+        assertNull(result.usage().getParkingReservationId());
+        verify(dao, never()).assignReservedSpace(any(), any(), any(), any(), any());
+    }
+    @Test void noValidReservationLinksObservedSpace() {
         when(dao.lockReservationCandidates("91소6408", 16L, at)).thenReturn(List.of());
-        assertHeld();
+        assertObserved("NO_VALID_RESERVATION");
     }
     @Test void duplicateReservationsAreHeld() {
         when(dao.lockReservationCandidates("91소6408", 16L, at)).thenReturn(List.of(reservation, reservation));
         assertHeld();
     }
-    @Test void anotherVehicleReservationIsHeld() { reservation.setVehicleNumber("30고5957"); assertHeld(); }
-    @Test void anotherSpaceReservationIsHeld() { reservation.setParkingSpaceId(17L); assertHeld(); }
+    @Test void anotherVehicleReservationDoesNotHideActualVehicle() {
+        reservation.setVehicleNumber("30고5957"); assertObserved("NO_VALID_RESERVATION");
+        assertEquals("30고5957", reservation.getVehicleNumber());
+    }
+    @Test void anotherSpaceReservationStillLinksActualSpace() {
+        reservation.setParkingSpaceId(17L); assertObserved("WRONG_SPACE");
+        assertEquals(17L, reservation.getParkingSpaceId());
+    }
     @Test void canceledReservationIsHeld() { reservation.setStatusCode("CANCELED"); assertHeld(); }
     @Test void missingReservationIdIsHeld() { reservation.setParkingReservationId(null); assertHeld(); }
     @Test void emptySpaceIsHeld() { when(dao.lockSpaceStatus(16L)).thenReturn("AVAILABLE"); assertHeld(); }
@@ -106,11 +131,34 @@ class AiReservedSpaceAssignmentTest {
         assertEquals(91L, current.getParkingReservationId());
         verify(dao, never()).assignReservedSpace(any(), any(), any(), any(), any());
     }
-    @Test void sameSpaceStillRequiresReservation() {
+    @Test void sameObservedSpaceWithoutReservationIsUnchanged() {
         current.setParkingSpaceId(16L);
         when(dao.lockReservationCandidates("91소6408", 16L, at)).thenReturn(List.of());
-        assertNotNull(assign().conflictReason());
+        prepareObservedReadback();
+        assertTrue(assign().unchanged());
         verify(dao, never()).assignReservedSpace(any(), any(), any(), any(), any());
+    }
+    @Test void noReservationMustNotClearExistingReservationLink() {
+        current.setParkingReservationId(90L);
+        when(dao.lockReservationCandidates("91소6408", 16L, at)).thenReturn(List.of());
+        var result = assign();
+        assertNotNull(result.conflictReason());
+        assertNull(result.usage());
+        verify(dao, never()).assignObservedSpace(any(), any(), any(), any());
+        verify(dao, never()).assignReservedSpace(any(), any(), any(), any(), any());
+        assertEquals(90L, current.getParkingReservationId());
+    }
+    @Test void observedUpdateConflictIsHeld() {
+        when(dao.lockReservationCandidates("91소6408", 16L, at)).thenReturn(List.of());
+        when(dao.assignObservedSpace(70L, 16L, "91소6408", at)).thenReturn(0);
+        assertNotNull(assign().conflictReason());
+        verify(dao, never()).findById(any());
+    }
+    @Test void observedReadbackFailureThrowsForRollback() {
+        when(dao.lockReservationCandidates("91소6408", 16L, at)).thenReturn(List.of());
+        prepareObservedReadback();
+        when(dao.findById(70L)).thenReturn(null);
+        assertThrows(IllegalStateException.class, this::assign);
     }
     @Test void sameSpaceWithoutReservationIsLinked() {
         current.setParkingSpaceId(16L);

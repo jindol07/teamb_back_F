@@ -15,7 +15,8 @@ import kr.co.alpharking.dto.parking.AiVehicleEventRequest;
 class AiVehicleReservationContractTest {
     private final ParkingUsageDao dao = mock(ParkingUsageDao.class);
     private final ParkingUsageService usage = mock(ParkingUsageService.class);
-    private final AiVehicleEventService service = new AiVehicleEventService(dao, usage, mock(AiParkingDecisionService.class));
+    private final org.springframework.context.ApplicationEventPublisher events = mock(org.springframework.context.ApplicationEventPublisher.class);
+    private final AiVehicleEventService service = new AiVehicleEventService(dao, usage, mock(AiParkingDecisionService.class), events);
 
     private AiVehicleEventRequest request(String type, String direction, String space) {
         return new AiVehicleEventRequest(UUID.randomUUID().toString(), type,
@@ -59,6 +60,7 @@ class AiVehicleReservationContractTest {
         var result = service.receive(request("VEHICLE_SPACE_MATCH", null, "1F-A01"), "VEHICLE_SPACE_MATCH");
         assertEquals("PROCESSED", result.outcome());
         assertEquals("MATCHED", result.parkingDecision());
+        verify(events).publishEvent(any(kr.co.alpharking.websocket.parking.ParkingSpaceChangedEvent.class));
         verify(usage).assignReservedForAi(70L, 16L, "91소6408", Timestamp.valueOf("2026-10-22 12:00:00"));
         verify(usage, never()).assignForAi(any(), any());
     }
@@ -67,11 +69,13 @@ class AiVehicleReservationContractTest {
         var result = service.receive(request("VEHICLE_SPACE_MATCH", null, "1F-A01"), "VEHICLE_SPACE_MATCH");
         assertEquals("PENDING", result.outcome());
         assertEquals("예약 불일치", result.detail());
+        verifyNoInteractions(events);
     }
     @Test void unchangedIsReturnedOnlyAfterReservationServiceValidation() {
         prepare(true, null);
         assertEquals("UNCHANGED", service.receive(request("VEHICLE_SPACE_MATCH", null, "1F-A01"), "VEHICLE_SPACE_MATCH").outcome());
         verify(usage).assignReservedForAi(eq(70L), eq(16L), eq("91소6408"), any());
+        verifyNoInteractions(events);
     }
     @Test void noActiveUsageDoesNotAssign() {
         when(dao.findUniqueOpenUsageByPlate("91소6408")).thenReturn(null);
@@ -119,6 +123,10 @@ class AiVehicleReservationContractTest {
         other.setParkingReservationId(91L); other.setParkingSpaceId(16L);
         other.setVehicleNumber("12가3456"); other.setStatusCode("CONFIRMED");
         when(mockDao.lockReservationCandidates("91소6408",16L,at)).thenReturn(java.util.List.of(own,other));
+        when(mockDao.assignObservedSpace(70L,16L,"91소6408",at)).thenReturn(1);
+        var observed = new kr.co.alpharking.dto.parking.ParkingUsageRow();
+        observed.setParkingUsageId(70L); observed.setVehicleNumber("91소6408"); observed.setParkingSpaceId(16L);
+        when(mockDao.findById(70L)).thenReturn(observed);
         assertEquals("WRONG_SPACE",real.assignReservedForAi(70L,16L,"91소6408",at).parkingDecision());
         when(mockDao.lockReservationCandidates("91소6408",16L,at)).thenReturn(java.util.List.of(other));
         assertEquals("NO_VALID_RESERVATION",real.assignReservedForAi(70L,16L,"91소6408",at).parkingDecision());
@@ -142,6 +150,32 @@ class AiVehicleReservationContractTest {
             new XMLMapperBuilder(stream, config, "mapper/parking-usage.xml", config.getSqlFragments()).parse();
         }
         return config;
+    }
+
+    @Test void observedConnectionReportsSuccessWithoutClaimingReservationMatch() {
+        for (String decision : java.util.List.of("NO_VALID_RESERVATION", "WRONG_SPACE")) {
+            clearInvocations(events);
+            prepare(false, null);
+            when(usage.assignReservedForAi(eq(70L), eq(16L), eq("91소6408"), any()))
+                .thenReturn(new ParkingUsageService.ReservedAssignmentResult(null, null, false, decision));
+            var result = service.receive(request("VEHICLE_SPACE_MATCH", null, "1F-A01"), "VEHICLE_SPACE_MATCH");
+            assertEquals("PROCESSED", result.outcome());
+            assertEquals(decision, result.parkingDecision());
+            assertTrue(result.detail().contains("실제 주차 위치 연결 완료"));
+            verify(events).publishEvent(any(kr.co.alpharking.websocket.parking.ParkingSpaceChangedEvent.class));
+        }
+    }
+
+    @Test void observedSqlGuardsExistingLinksAndActiveUsageWithoutChangingReservations() throws Exception {
+        var bound = mapper().getMappedStatement(ParkingUsageDao.class.getName() + ".assignObservedSpace")
+            .getBoundSql(Map.of("usageId",70L,"spaceId",16L,"number","91소6408","eventTime",Timestamp.valueOf("2026-10-22 12:00:00")));
+        String sql = bound.getSql().replaceAll("\\s+", " ").toUpperCase();
+        assertTrue(sql.contains("SET PARKING_SPACE_ID = ?"));
+        assertTrue(sql.contains("U.PARKING_RESERVATION_ID IS NULL"));
+        assertTrue(sql.contains("U.VEHICLE_NUMBER = ? AND U.ENTRY_AT <= ?"));
+        assertTrue(sql.contains("NOT EXISTS"));
+        assertFalse(sql.contains("PARKING_RESERVATION_ID ="));
+        assertFalse(sql.contains("UPDATE PARKING_RESERVATION"));
     }
 
     @Test void reservationQueryUsesBothVehicleAndSpaceAndLocksRows() throws Exception {

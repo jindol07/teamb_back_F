@@ -94,7 +94,7 @@ def _assess_response(payload, status_code, response_body, transport_error, now, 
             if parking_decision is None:
                 parking_decision = 'UNDETERMINED'  # 구형 서버 응답을 오주차로 추측하지 않습니다.
             elif (parking_decision not in ('MATCHED', 'WRONG_SPACE', 'NO_VALID_RESERVATION', 'UNDETERMINED')
-                  or (outcome != 'PENDING' and parking_decision != 'MATCHED')
+                  or (outcome != 'PENDING' and parking_decision == 'UNDETERMINED')
                   or (outcome == 'PENDING' and parking_decision == 'MATCHED')):
                 raise ValueError('주차 판정과 처리 결과가 일치하지 않습니다.')
             result['parking_decision'] = parking_decision
