@@ -14,6 +14,19 @@ public interface UserRepository extends JpaRepository<Office, Long>{
 	Optional<Office> findByUsername(String username);
 	
 	boolean existsByUsername(String username);
+	
+	@Query("""
+	    SELECT CASE WHEN COUNT(o) > 0 THEN true ELSE false END
+	    FROM Office o
+	    WHERE o.company_id = :companyId
+	      AND o.floor_no = :floorNo
+	      AND o.office_number = :officeNumber
+	""")
+	boolean existsDuplicateOffice(
+	    @Param("companyId") Long companyId,
+	    @Param("floorNo") Long floorNo,
+	    @Param("officeNumber") String officeNumber
+	);
 
 	// ------------------------------------------------------------------
 	// 네이버 로그인 연동용 (기존 카카오 방식과 동일하게 컬럼으로 관리)
