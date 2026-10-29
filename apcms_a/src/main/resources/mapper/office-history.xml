@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN" "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="kr.co.alpharking.dao.officehistory.OfficeHistoryDao">
+    <!-- 당시 스냅샷을 그대로 조회한다. 현재 office와 조인해 과거 정보를 덮어쓰지 않는다. -->
+    <select id="findAll" resultType="OfficeHistoryRow">
+        SELECT office_history_id AS officeHistoryId,
+               office_id AS officeId,
+               company_id AS companyId,
+               floor_no AS floorNo,
+               office_number AS officeNumber,
+               login_id AS loginId,
+               email,
+               phone,
+               status_code AS statusCode,
+               TO_CHAR(created_at, 'YYYY-MM-DD HH24:MI:SS') AS createdAt,
+               TO_CHAR(updated_at, 'YYYY-MM-DD HH24:MI:SS') AS updatedAt,
+               TO_CHAR(withdrawn_at, 'YYYY-MM-DD HH24:MI:SS') AS withdrawnAt,
+               changed_by_admin_id AS changedByAdminId,
+               actor_type_code AS actorTypeCode,
+               actor_id AS actorId,
+               change_type_code AS changeTypeCode,
+               change_reason AS changeReason,
+               TO_CHAR(valid_from, 'YYYY-MM-DD HH24:MI:SS') AS validFrom,
+               TO_CHAR(valid_to, 'YYYY-MM-DD HH24:MI:SS') AS validTo
+        FROM office_history
+        ORDER BY valid_from DESC, office_history_id DESC
+    </select>
+</mapper>
