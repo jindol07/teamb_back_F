@@ -45,3 +45,6 @@ public class AiOccupancyController {
         return service.receive(request);
     }
 }
+
+
+//시연용
